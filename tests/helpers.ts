@@ -1,3 +1,6 @@
+import { mkdtempSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Actor, EventBody, StoredEvent } from "../src/domain/types.ts";
 import { project, type State } from "../src/state/projection.ts";
 
@@ -34,4 +37,17 @@ export function stored(bodies: EventBody[], actor: Actor = USER): StoredEvent[] 
 
 export function stateOf(...bodies: EventBody[]): State {
   return project(stored(bodies));
+}
+
+export function tempRepo(): string {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "agt-repo-")));
+  const git = (...args: string[]) => {
+    const r = Bun.spawnSync(["git", "-C", dir, ...args], { stderr: "pipe" });
+    if (r.exitCode !== 0) throw new Error(r.stderr.toString());
+  };
+  git("init", "-q", "-b", "main");
+  git("config", "user.email", "test@example.com");
+  git("config", "user.name", "Test");
+  git("commit", "-q", "--allow-empty", "-m", "init");
+  return dir;
 }
