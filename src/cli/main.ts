@@ -202,6 +202,7 @@ async function daemon(sub: string | undefined, root: string, env: Env): Promise<
       }
       await request(p.socket, { op: "shutdown" });
       for (let i = 0; i < 50 && (await isAlive(p.socket)); i++) await Bun.sleep(100);
+      if (await isAlive(p.socket)) throw new Error("daemon did not stop");
       console.log("daemon stopped");
       return 0;
     }
