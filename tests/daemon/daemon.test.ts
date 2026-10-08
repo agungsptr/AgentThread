@@ -1,0 +1,95 @@
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { request } from "../../src/daemon/client.ts";
+import { startDaemon, type Daemon } from "../../src/daemon/server.ts";
+import type { Actor, StoredEvent } from "../../src/domain/types.ts";
+import { initProject } from "../../src/project/init.ts";
+import { paths } from "../../src/project/paths.ts";
+import { tempRepo } from "../helpers.ts";
+
+let root: string;
+let daemon: Daemon;
+
+beforeEach(async () => {
+  root = tempRepo();
+  initProject(root, "demo");
+  daemon = await startDaemon(root);
+});
+
+afterEach(async () => {
+  await daemon.stop();
+});
+
+const sock = () => paths(root).socket;
+const cmd = (command: object, actor: Actor = { role: "user" }) => request(sock(), { op: "command", command, actor });
+const COORD: Actor = { role: "coordinator", thread: "001", session: "c1" };
+
+const HANDOFF = (risks: string) =>
+  ["Goal status", "Work done", "Decisions", "Next steps"].map((s) => `## ${s}\n${s} text`).join("\n") + `\n## Risks\n${risks}`;
+
+test("ping returns the pid", async () => {
+  expect(await request(sock(), { op: "ping" })).toEqual({ ok: true, result: { pid: process.pid } });
+});
+
+test("thread.new creates the worktree and renders markdown", async () => {
+  const r = await cmd({ cmd: "thread.new", title: "Fix race", type: "bug" });
+  expect(r).toEqual({ ok: true, result: { thread: "001", worktree: join(root, ".worktrees", "001-fix-race") } });
+  expect(existsSync(join(root, ".worktrees", "001-fix-race", ".git"))).toBe(true);
+  expect(readFileSync(join(root, ".agentthread/threads/001-fix-race/sub.thread.md"), "utf8")).toContain("title: Fix race");
+  expect(readFileSync(paths(root).mainThread, "utf8")).toContain("| 001 | Fix race | bug | open |");
+});
+
+test("invalid commands return validation errors without writing events", async () => {
+  const r = await cmd({ cmd: "thread.new", title: "", type: "nope" });
+  expect(r.ok).toBe(false);
+  const events = await request(sock(), { op: "events.since", seq: 0 });
+  expect((events.ok && (events.result as StoredEvent[]).length) || 0).toBe(1);
+});
+
+test("concurrent overlapping claims: exactly one succeeds", async () => {
+  await cmd({ cmd: "thread.new", title: "X", type: "bug" });
+  await cmd({ cmd: "ticket.add", thread: "001", title: "A", scope: ["src/a"] }, COORD);
+  await cmd({ cmd: "ticket.add", thread: "001", title: "B", scope: ["src/a/b.ts"] }, COORD);
+  const results = await Promise.all([
+    cmd({ cmd: "ticket.claim", thread: "001", ticket: "T1" }, { role: "worker", thread: "001", session: "w1" }),
+    cmd({ cmd: "ticket.claim", thread: "001", ticket: "T2" }, { role: "worker", thread: "001", session: "w2" }),
+  ]);
+  expect(results.filter((r) => r.ok)).toHaveLength(1);
+  const failed = results.find((r) => !r.ok);
+  expect(failed && !failed.ok && failed.error).toMatch(/overlaps in-progress ticket/);
+});
+
+test("state survives a restart and ids keep counting", async () => {
+  await cmd({ cmd: "thread.new", title: "First", type: "feature" });
+  await daemon.stop();
+  daemon = await startDaemon(root);
+  expect(await cmd({ cmd: "thread.new", title: "Second", type: "feature" })).toMatchObject({
+    ok: true,
+    result: { thread: "002" },
+  });
+});
+
+test("refuses a second daemon and recovers from a stale socket", async () => {
+  await expect(startDaemon(root)).rejects.toThrow("daemon already running");
+  await daemon.stop();
+  writeFileSync(sock(), "stale");
+  daemon = await startDaemon(root);
+  expect((await request(sock(), { op: "ping" })).ok).toBe(true);
+});
+
+test("large payloads round-trip", async () => {
+  await cmd({ cmd: "thread.new", title: "X", type: "bug" });
+  const big = "é".repeat(200_000);
+  expect(await cmd({ cmd: "handoff", thread: "001", content: HANDOFF(big) }, COORD)).toEqual({ ok: true, result: null });
+  expect(readFileSync(join(root, ".agentthread/threads/001-x/sub.thread.md"), "utf8")).toContain(big);
+});
+
+test("a failing effect rejects the command and writes no event", async () => {
+  await cmd({ cmd: "thread.new", title: "X", type: "bug" });
+  Bun.spawnSync(["git", "-C", root, "branch", "thread/002-y"]);
+  const r = await cmd({ cmd: "thread.new", title: "Y", type: "bug" });
+  expect(r.ok).toBe(false);
+  const events = await request(sock(), { op: "events.since", seq: 0 });
+  expect(events.ok && (events.result as StoredEvent[]).map((e) => e.type)).toEqual(["project.initialized", "thread.created"]);
+});
