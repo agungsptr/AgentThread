@@ -80,6 +80,18 @@ describe("thread binding", () => {
 });
 
 describe("tickets", () => {
+  test("worker ticket commands require a session", () => {
+    const s = withTickets();
+    const sessionless: Actor = { role: "worker", thread: "001" };
+    expect(errorOf(run(s, { cmd: "ticket.claim", thread: "001", ticket: "T1" }, sessionless))).toBe(
+      "worker commands require AGT_SESSION",
+    );
+    exec(s, { cmd: "ticket.claim", thread: "001", ticket: "T1" }, worker("w1"));
+    expect(errorOf(run(s, { cmd: "ticket.done", thread: "001", ticket: "T1" }, sessionless))).toBe(
+      "worker commands require AGT_SESSION",
+    );
+  });
+
   test("ticket ids are sequential", () => {
     const s = withTickets();
     expect(s.threads.get("001")!.tickets.map((k) => k.id)).toEqual(["T1", "T2", "T3"]);

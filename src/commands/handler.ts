@@ -68,10 +68,11 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: { root: string })
     }
     case "ticket.claim": {
       const k = workerTicket(t, cmd.ticket, actor);
+      const session = workerSession(actor);
       transitionTicket(k, "in_progress");
       const clash = t.tickets.find((o) => o.id !== k.id && o.status === "in_progress" && scopesOverlap(o.scope, k.scope));
       if (clash) reject(`scope of ${k.id} overlaps in-progress ticket ${clash.id}`);
-      return { events: [{ type: "ticket.claimed", thread: t.id, payload: { ticket: k.id, assignee: actor.session ?? actor.role } }] };
+      return { events: [{ type: "ticket.claimed", thread: t.id, payload: { ticket: k.id, assignee: session } }] };
     }
     case "ticket.done": {
       const k = assignedTicket(t, cmd.ticket, actor);
@@ -160,14 +161,19 @@ function findTicket(t: Thread, id: string): Ticket {
   return t.tickets.find((k) => k.id === id) ?? reject(`unknown ticket ${id} in thread ${t.id}`);
 }
 
+function workerSession(actor: Actor): string {
+  return actor.session ?? reject("worker commands require AGT_SESSION");
+}
+
 function workerTicket(t: Thread, id: string, actor: Actor): Ticket {
+  workerSession(actor);
   if (actor.ticket && actor.ticket !== id) reject(`worker is bound to ticket ${actor.ticket}`);
   return findTicket(t, id);
 }
 
 function assignedTicket(t: Thread, id: string, actor: Actor): Ticket {
   const k = workerTicket(t, id, actor);
-  if (k.assignee && actor.session && k.assignee !== actor.session) reject(`ticket ${k.id} is assigned to ${k.assignee}`);
+  if (k.assignee && k.assignee !== actor.session) reject(`ticket ${k.id} is assigned to ${k.assignee}`);
   return k;
 }
 
