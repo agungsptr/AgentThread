@@ -1,8 +1,15 @@
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 export function findRoot(start: string, env: Record<string, string | undefined> = process.env): string {
-  if (env.AGT_ROOT) return resolve(env.AGT_ROOT);
+  if (env.AGT_ROOT) {
+    const r = resolve(env.AGT_ROOT);
+    try {
+      return realpathSync(r);
+    } catch {
+      return r;
+    }
+  }
   let dir = resolve(start);
   while (true) {
     if (existsSync(join(dir, ".agentthread", "state.db"))) return dir;

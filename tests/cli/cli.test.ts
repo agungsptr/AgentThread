@@ -26,6 +26,12 @@ afterEach(() => {
   agt(["daemon", "stop"]);
 });
 
+test("ticket block without --reason is a usage error", () => {
+  const r = agt(["ticket", "block", "001/001"]);
+  expect(r.code).toBe(2);
+  expect(r.err).toContain("--reason");
+});
+
 test("daemon lifecycle", () => {
   expect(agt(["daemon", "status"]).code).toBe(1);
   expect(agt(["daemon", "start"])).toMatchObject({ code: 0, out: "daemon started" });

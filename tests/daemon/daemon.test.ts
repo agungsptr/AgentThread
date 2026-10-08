@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { request } from "../../src/daemon/client.ts";
 import { startDaemon, type Daemon } from "../../src/daemon/server.ts";
@@ -92,4 +92,34 @@ test("a failing effect rejects the command and writes no event", async () => {
   expect(r.ok).toBe(false);
   const events = await request(sock(), { op: "events.since", seq: 0 });
   expect(events.ok && (events.result as StoredEvent[]).map((e) => e.type)).toEqual(["project.initialized", "thread.created"]);
+});
+
+test("a second daemon on the same project is refused even without its socket", async () => {
+  rmSync(sock(), { force: true });
+  const saved = process.env.TMPDIR;
+  process.env.TMPDIR = join(root, "other-tmp");
+  try {
+    await expect(startDaemon(root)).rejects.toThrow("daemon already running");
+  } finally {
+    if (saved === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = saved;
+  }
+});
+
+test("socket path does not depend on TMPDIR", () => {
+  const saved = process.env.TMPDIR;
+  const before = paths(root).socket;
+  process.env.TMPDIR = "/somewhere/else";
+  try {
+    expect(paths(root).socket).toBe(before);
+  } finally {
+    if (saved === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = saved;
+  }
+});
+
+test("commands are rejected once shutdown is requested", async () => {
+  await request(sock(), { op: "shutdown" });
+  const r = await cmd({ cmd: "thread.new", title: "Late", type: "bug" }).catch((e: Error) => ({ ok: false, error: e.message }));
+  expect(r.ok).toBe(false);
 });

@@ -13,9 +13,23 @@ interface Row {
 export class EventStore {
   private readonly db: Database;
 
-  constructor(path: string) {
+  constructor(path: string, options: { exclusive?: boolean } = {}) {
     this.db = new Database(path, { create: true });
-    this.db.exec("PRAGMA journal_mode = WAL;");
+    if (options.exclusive) {
+      // The daemon holds the database exclusively for its lifetime, so a second daemon cannot start on the same project.
+      try {
+        this.db.exec("PRAGMA journal_mode = WAL;");
+        this.db.exec("PRAGMA locking_mode = EXCLUSIVE;");
+        this.db.exec("BEGIN EXCLUSIVE");
+        this.db.exec("COMMIT");
+      } catch (e) {
+        this.db.close();
+        if (/locked|busy/i.test(e instanceof Error ? e.message : String(e))) throw new Error("daemon already running");
+        throw e;
+      }
+    } else {
+      this.db.exec("PRAGMA journal_mode = WAL;");
+    }
     this.db.exec(`CREATE TABLE IF NOT EXISTS events (
       seq INTEGER PRIMARY KEY AUTOINCREMENT,
       ts TEXT NOT NULL,
@@ -31,20 +45,34 @@ export class EventStore {
     const insert = this.db.prepare(
       "INSERT INTO events (ts, type, thread, actor, payload) VALUES (?, ?, ?, ?, ?) RETURNING seq",
     );
-    const tx = this.db.transaction((items: EventBody[]) =>
-      items.map((body) => {
-        const row = insert.get(ts, body.type, body.thread ?? null, JSON.stringify(actor), JSON.stringify(body.payload)) as {
-          seq: number;
-        };
-        return { ...body, seq: row.seq, ts, actor } as StoredEvent;
-      }),
-    );
-    return tx(bodies);
+    // Manual transaction: db.transaction() leaves internal statements unfinalized, which keeps the connection (and its lock) alive after close().
+    try {
+      this.db.exec("BEGIN");
+      try {
+        const stored = bodies.map((body) => {
+          const row = insert.get(ts, body.type, body.thread ?? null, JSON.stringify(actor), JSON.stringify(body.payload)) as {
+            seq: number;
+          };
+          return { ...body, seq: row.seq, ts, actor } as StoredEvent;
+        });
+        this.db.exec("COMMIT");
+        return stored;
+      } catch (e) {
+        this.db.exec("ROLLBACK");
+        throw e;
+      }
+    } finally {
+      insert.finalize();
+    }
   }
 
   since(seq: number): StoredEvent[] {
-    const rows = this.db.query("SELECT * FROM events WHERE seq > ? ORDER BY seq").all(seq) as Row[];
-    return rows.map(toEvent);
+    const stmt = this.db.prepare("SELECT * FROM events WHERE seq > ? ORDER BY seq");
+    try {
+      return (stmt.all(seq) as Row[]).map(toEvent);
+    } finally {
+      stmt.finalize();
+    }
   }
 
   all(): StoredEvent[] {

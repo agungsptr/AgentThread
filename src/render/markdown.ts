@@ -3,7 +3,11 @@ import type { State, Thread } from "../state/projection.ts";
 
 const oneLine = (s: string) => s.replace(/\r?\n+/g, " ").trim();
 const cell = (s: string) => oneLine(s).replace(/\|/g, "\\|");
-const clampHeadings = (s: string) => s.replace(/^#{1,2}(?= )/gm, "###");
+const clampHeadings = (s: string) => {
+  const clamped = s.replace(/^ {0,3}#{1,2}(?=[ \t]|$)/gm, "###");
+  const fences = clamped.split("\n").filter((l) => /^ {0,3}(```|~~~)/.test(l)).length;
+  return fences % 2 ? `${clamped}\n\`\`\`` : clamped;
+};
 const orNone = (lines: string[], none: string) => (lines.length ? lines : [none]);
 
 export function renderMain(state: State): string {

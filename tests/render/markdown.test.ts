@@ -66,3 +66,20 @@ test("goal headings are clamped so they cannot inject sections", () => {
   expect(md).toContain("### Injected");
   expect(md.match(/^## /gm)).toHaveLength(4);
 });
+
+test("CommonMark h1/h2 forms (indented, tab, bare) are clamped", () => {
+  const s = stateOf(INIT, threadCreated("001", { goal: "Do it\n   ## Indented\n##\ttab\n##" }));
+  const md = renderSub(s.threads.get("001")!);
+  expect(md.match(/^## /gm)).toHaveLength(4);
+  expect(md).toContain("### Indented");
+  expect(md).toContain("###\ttab");
+  expect(md).toMatch(/^###$/m);
+});
+
+test("an unclosed code fence in the goal cannot swallow later sections", () => {
+  const s = stateOf(INIT, threadCreated("001", { goal: "Do it\n```js\ncode" }));
+  const md = renderSub(s.threads.get("001")!);
+  expect(md.split("\n").filter((l) => /^```/.test(l)).length % 2).toBe(0);
+  expect(md.match(/^## /gm)).toHaveLength(4);
+  expect(md.indexOf("```", md.indexOf("code"))).toBeLessThan(md.indexOf("## Acceptance criteria"));
+});

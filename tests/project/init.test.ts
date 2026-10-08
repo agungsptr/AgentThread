@@ -42,6 +42,7 @@ test("findRoot walks up from a worktree subdirectory", () => {
 
 test("findRoot honors AGT_ROOT and fails outside a project", () => {
   expect(findRoot("/", { AGT_ROOT: "/some/root" })).toBe("/some/root");
+  expect(findRoot("/", { AGT_ROOT: tmpdir() })).toBe(realpathSync(tmpdir()));
   expect(() => findRoot(realpathSync(tmpdir()), {})).toThrow("not inside an AgentThread project");
 });
 

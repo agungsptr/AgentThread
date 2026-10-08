@@ -159,7 +159,9 @@ async function ticket(sub: string | undefined, args: string[], root: string, env
     }
     case "block": {
       const { values, positionals } = parse(args, { reason: { type: "string" } });
-      return send(root, env, { cmd: "ticket.block", ...parseTicketRef(positionals[0]), reason: values.reason ?? "" });
+      const reason = values.reason;
+      if (!reason) throw new UsageError("ticket block needs <thread>/<ticket> --reason <text>");
+      return send(root, env, { cmd: "ticket.block", ...parseTicketRef(positionals[0]), reason });
     }
     default:
       throw new UsageError(`unknown ticket subcommand '${sub ?? ""}'`);

@@ -17,3 +17,7 @@ test("socket path is stable per root and distinct across roots", () => {
   expect(paths("/a").socket).toBe(paths("/a").socket);
   expect(paths("/a").socket).not.toBe(paths("/b").socket);
 });
+
+test("socket lives under /tmp/agt-<uid>, independent of TMPDIR", () => {
+  expect(paths("/a").socket.startsWith(`/tmp/agt-${process.getuid!()}/`)).toBe(true);
+});
