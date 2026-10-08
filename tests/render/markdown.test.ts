@@ -48,3 +48,21 @@ test("log has one line per entry", () => {
   expect(md).toContain("[user] T1 claimed by w1");
   expect(md.split("\n").filter((l) => l.startsWith("- "))).toHaveLength(5);
 });
+
+test("top-level handoff headings are clamped below the section level", () => {
+  const s = stateOf(
+    INIT,
+    threadCreated("001"),
+    { type: "handoff.submitted", thread: "001", payload: { content: "# Summary\nok", generated: false } },
+  );
+  const md = renderSub(s.threads.get("001")!);
+  expect(md).toContain("### Summary");
+  expect(md.match(/^## /gm)).toHaveLength(4);
+});
+
+test("goal headings are clamped so they cannot inject sections", () => {
+  const s = stateOf(INIT, threadCreated("001", { goal: "Do it\n## Injected" }));
+  const md = renderSub(s.threads.get("001")!);
+  expect(md).toContain("### Injected");
+  expect(md.match(/^## /gm)).toHaveLength(4);
+});
