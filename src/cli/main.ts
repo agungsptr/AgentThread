@@ -3,6 +3,7 @@ import { closeSync, openSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { stringify } from "yaml";
+import { decodeJob, runSpawnJob } from "../agents/spawn-job.ts";
 import { isAlive, request } from "../daemon/client.ts";
 import { startDaemon } from "../daemon/server.ts";
 import { loadConfig } from "../config/config.ts";
@@ -70,6 +71,27 @@ export function parseTicketRef(ref: string | undefined): { thread: string; ticke
 async function run(argv: string[], env: Env, cwd: string): Promise<number> {
   const [group, sub, ...rest] = argv;
   switch (group) {
+    case "__spawn": {
+      const job = decodeJob(sub ?? "");
+      const herdr = new HerdrCli({
+        bin: job.herdrBin,
+        env: { ...process.env, ...(job.herdrSocket ? { HERDR_SOCKET_PATH: job.herdrSocket } : {}) },
+        timeoutMs: 90_000,
+      });
+      const socket = paths(job.root).socket;
+      await runSpawnJob(job, {
+        herdr,
+        report: async (command) => {
+          try {
+            const res = await request(socket, { op: "command", command, actor: { role: "user" } });
+            if (!res.ok) console.error(`agt __spawn: ${res.error}`);
+          } catch (e) {
+            console.error(`agt __spawn: cannot report to daemon: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        },
+      });
+      return 0;
+    }
     case "init": {
       const { values } = parse(argv.slice(1), { name: { type: "string" } });
       initProject(resolve(env.AGT_ROOT ?? cwd), values.name as string | undefined);

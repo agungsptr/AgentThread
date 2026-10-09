@@ -32,7 +32,7 @@ beforeEach(async () => {
   fake = fakeHerdrState();
   process.env.FAKE_HERDR_STATE = fake.file;
   logged = [];
-  daemon = await startDaemon(root, { log: (m) => logged.push(m) });
+  daemon = await startDaemon(root, { log: (m) => logged.push(m), launch: () => {} });
 });
 
 afterEach(async () => {
@@ -63,7 +63,7 @@ test("thread.new opens a tab in the worktree and records it", async () => {
     "--env", `AGT_ROOT=${root}`, "--env", "AGT_THREAD=001", "--env", "AGT_ROLE=coordinator",
   ]);
   expect(frontmatter("001-fix-race")).toMatchObject({ tab: "w1:t1" });
-  expect(await events()).toEqual(["project.initialized", "layout.registered", "thread.created", "thread.tab_opened"]);
+  expect(await events()).toEqual(["project.initialized", "layout.registered", "thread.created", "thread.tab_opened", "session.created"]);
 });
 
 test("done closes the tab", async () => {
@@ -72,13 +72,13 @@ test("done closes the tab", async () => {
   for (const status of ["in_progress", "review", "done"]) await cmd({ cmd: "thread.status", thread: "001", status });
   expect(fake.read().tabs).toEqual([]);
   expect(frontmatter("001-x")).toMatchObject({ status: "done", tab: null });
-  expect((await events()).at(-1)).toBe("thread.tab_closed");
+  expect(await events()).toContain("thread.tab_closed");
 });
 
 test("close_tab_on_done: false keeps the tab", async () => {
   await daemon.stop();
   writeFileSync(join(root, ".agentthread", "config.yaml"), "herdr:\n  close_tab_on_done: false\n");
-  daemon = await startDaemon(root, { log: (m) => logged.push(m) });
+  daemon = await startDaemon(root, { log: (m) => logged.push(m), launch: () => {} });
   await register();
   await cmd({ cmd: "thread.new", title: "X", type: "bug" });
   for (const status of ["in_progress", "review", "done"]) await cmd({ cmd: "thread.status", thread: "001", status });
@@ -115,7 +115,7 @@ test("an invalid config stops the daemon from starting", async () => {
   writeFileSync(join(root, ".agentthread", "config.yaml"), "workers:\n  max_workers: 0\n");
   await expect(startDaemon(root)).rejects.toThrow(/invalid config .*workers\.max_workers/);
   writeFileSync(join(root, ".agentthread", "config.yaml"), "");
-  daemon = await startDaemon(root, { log: (m) => logged.push(m) });
+  daemon = await startDaemon(root, { log: (m) => logged.push(m), launch: () => {} });
 });
 
 test("a herdr error other than not-found neither closes nor records the close", async () => {
@@ -125,7 +125,7 @@ test("a herdr error other than not-found neither closes nor records the close", 
   for (const status of ["in_progress", "review", "done"]) expect(await cmd({ cmd: "thread.status", thread: "001", status })).toMatchObject({ ok: true });
   expect(fake.read().tabs).toContain("w1:t1");
   expect(frontmatter("001-x")).toMatchObject({ status: "done", tab: "w1:t1" });
-  expect((await events()).at(-1)).toBe("thread.status_changed");
+  expect(await events()).not.toContain("thread.tab_closed");
   expect(logged.join("\n")).toMatch(/herdr\.tab\.close for thread 001 failed/);
 });
 
