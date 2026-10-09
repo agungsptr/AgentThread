@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Actor, EventBody, StoredEvent } from "../src/domain/types.ts";
@@ -55,4 +55,20 @@ export function tempRepo(): string {
 /** A temp dir to use as XDG_CONFIG_HOME so tests never read the developer's real user config. */
 export function isolatedConfigHome(): string {
   return realpathSync(mkdtempSync(join(tmpdir(), "agt-xdg-")));
+}
+
+export const FAKE_HERDR = join(import.meta.dir, "fixtures", "fake-herdr.ts");
+
+export interface FakeHerdrState {
+  next: number;
+  tabs: string[];
+  panes: string[];
+  calls: string[][];
+}
+
+/** A state file for tests/fixtures/fake-herdr.ts; pass `file` as FAKE_HERDR_STATE. */
+export function fakeHerdrState(seed: Partial<FakeHerdrState> = {}): { file: string; read(): FakeHerdrState } {
+  const file = join(realpathSync(mkdtempSync(join(tmpdir(), "agt-herdr-"))), "herdr.json");
+  writeFileSync(file, JSON.stringify({ next: 0, tabs: [], panes: [], calls: [], ...seed }));
+  return { file, read: () => JSON.parse(readFileSync(file, "utf8")) as FakeHerdrState };
 }
