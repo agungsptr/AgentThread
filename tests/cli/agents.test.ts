@@ -69,11 +69,43 @@ test("thread new --max-workers, worker spawn and tell", () => {
 
 test("agt event always exits 0, reading the session from hook stdin", () => {
   // daemon not running yet
-  expect(agt(["event", "idle"], {}, "{}")).toMatchObject({ code: 0 });
+  const down = agt(["event", "idle"], {}, JSON.stringify({ session_id: "00000000-0000-4000-8000-000000000000" }));
+  expect(down.code).toBe(0);
+  expect(down.err).toStartWith("agt event:");
+  expect(down.err.toLowerCase()).toContain("daemon");
   agt(["daemon", "start"]);
   const bad = agt(["event", "idle"], {}, "not json");
   expect(bad.code).toBe(0);
   expect(bad.err).toStartWith("agt event:");
   expect(agt(["event", "idle"], {}, JSON.stringify({ session_id: "00000000-0000-4000-8000-000000000000" }))).toMatchObject({ code: 0 });
   expect(agt(["event", "bogus"]).code).toBe(0);
+});
+
+test("agt event does not hang when stdin is never closed", async () => {
+  const proc = Bun.spawn([process.execPath, BIN, "event", "idle"], {
+    cwd: root,
+    env: { PATH: process.env.PATH ?? "", HOME: "/nonexistent", XDG_CONFIG_HOME: xdg, AGT_ROOT: root, AGT_SESSION: "00000000-0000-4000-8000-000000000000" },
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  try {
+    const code = await Promise.race([proc.exited, Bun.sleep(5_000).then(() => "timeout" as const)]);
+    expect(code).toBe(0);
+  } finally {
+    proc.kill();
+  }
+});
+
+test("a missing Claude binary ends the main session and fails", () => {
+  const r = agt(["start"], { AGT_CLAUDE_BIN: "/nonexistent/claude" });
+  expect(r.code).toBe(1);
+  expect(r.err).toContain("cannot start Claude Code");
+  const tell = agt(["tell", "main", "x"]);
+  expect(tell.code).toBe(1);
+  expect(tell.err).toContain("no live main manager session");
+});
+
+test("agt start returns Claude's exit code", () => {
+  expect(agt(["start"], { FAKE_CLAUDE_EXIT: "3" }).code).toBe(3);
 });

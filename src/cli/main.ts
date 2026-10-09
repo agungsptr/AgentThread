@@ -294,24 +294,36 @@ async function start(root: string, env: Env, argv: string[]): Promise<number> {
   const session = randomUUID();
   await commandOrThrow(socket, { cmd: "session.open_main", session, pane: managerPane });
   console.log(`main manager session ${session}`);
-  const proc = Bun.spawn([env.AGT_CLAUDE_BIN ?? "claude", ...claudeArgs({ session, role: "main", systemPrompt: systemPrompt({ root, role: "main" }), config })], {
-    stdio: ["inherit", "inherit", "inherit"],
-    env: { ...env, ...agentEnv({ root, role: "main", session }) },
-  });
-  const code = await proc.exited;
+  const bin = env.AGT_CLAUDE_BIN ?? "claude";
+  let code: number;
+  try {
+    const proc = Bun.spawn([bin, ...claudeArgs({ session, role: "main", systemPrompt: systemPrompt({ root, role: "main" }), config })], {
+      stdio: ["inherit", "inherit", "inherit"],
+      env: { ...env, ...agentEnv({ root, role: "main", session }) },
+    });
+    code = await proc.exited;
+  } catch (e) {
+    await endMainSession(socket, session);
+    throw new Error(`cannot start Claude Code (${bin}): ${e instanceof Error ? e.message : String(e)}`);
+  }
+  await endMainSession(socket, session);
+  return code;
+}
+
+async function endMainSession(socket: string, session: string): Promise<void> {
   try {
     await request(socket, { op: "command", command: { cmd: "session.signal", session, signal: "ended" }, actor: { role: "user" } }, 3_000);
   } catch {
     // the SessionEnd hook normally reports this already
   }
-  return code;
 }
 
 /** Runs inside Claude Code hooks: it must never fail or hang the agent, so every problem is reported and swallowed. */
 async function hookEvent(signal: string | undefined, env: Env, cwd: string): Promise<number> {
   try {
     if (!signal || !(SESSION_SIGNALS as readonly string[]).includes(signal)) throw new Error(`unknown signal '${signal ?? ""}'`);
-    const input = process.stdin.isTTY ? "" : (await Bun.stdin.text()).trim();
+    // A hook runner may leave stdin open; never wait on it for long.
+    const input = process.stdin.isTTY ? "" : ((await Promise.race([Bun.stdin.text(), Bun.sleep(1_500).then(() => "")])) as string).trim();
     let session = env.AGT_SESSION;
     if (input) {
       const parsed = JSON.parse(input) as { session_id?: unknown };
