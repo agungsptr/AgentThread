@@ -9,6 +9,7 @@ type Env = Record<string, string | undefined>;
 
 const duration = z.string().regex(/^\d+[smhd]$/, "duration must look like 30s, 5m, 24h or 2d");
 const agent = z.enum(AGENT_KINDS);
+export const PERMISSION_MODES = ["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"] as const;
 
 export const ConfigSchema = z
   .object({
@@ -18,6 +19,14 @@ export const ConfigSchema = z
         main_manager: agent.default("claude-code"),
         default_coordinator: agent.default("claude-code"),
         default_worker: agent.default("claude-code"),
+        claude: z
+          .object({
+            permission_mode: z.enum(PERMISSION_MODES).default("acceptEdits"),
+            extra_allowed_tools: z.array(z.string().trim().min(1)).default([]),
+            model: z.string().trim().min(1).optional(),
+          })
+          .strict()
+          .default({}),
       })
       .strict()
       .default({}),

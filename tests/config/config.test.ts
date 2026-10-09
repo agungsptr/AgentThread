@@ -27,7 +27,12 @@ test("an empty HOME still gives an absolute user path", () => {
 test("defaults match the spec", () => {
   expect(DEFAULT_CONFIG).toEqual({
     language: "en",
-    agents: { main_manager: "claude-code", default_coordinator: "claude-code", default_worker: "claude-code" },
+    agents: {
+      main_manager: "claude-code",
+      default_coordinator: "claude-code",
+      default_worker: "claude-code",
+      claude: { permission_mode: "acceptEdits", extra_allowed_tools: [] },
+    },
     workers: { max_workers: 3 },
     session: {
       rotation: { on_precompact: true, context_threshold: 0.7, idle_timeout: "24h" },
@@ -86,4 +91,17 @@ test("non-mapping and unparseable files are rejected", () => {
 
 test("deepMerge replaces arrays and scalars, merges objects", () => {
   expect(deepMerge({ a: { b: 1, c: [1] }, d: 1 }, { a: { c: [2] }, d: 2 })).toEqual({ a: { b: 1, c: [2] }, d: 2 });
+});
+
+test("claude section: permission mode, extra tools, model", () => {
+  const { root, env } = setup({
+    project: "agents:\n  claude:\n    permission_mode: bypassPermissions\n    extra_allowed_tools: ['Bash(bun test*)']\n    model: opus\n",
+  });
+  expect(loadConfig(root, env).agents.claude).toEqual({
+    permission_mode: "bypassPermissions",
+    extra_allowed_tools: ["Bash(bun test*)"],
+    model: "opus",
+  });
+  const bad = setup({ project: "agents:\n  claude:\n    permission_mode: yolo\n" });
+  expect(() => loadConfig(bad.root, bad.env)).toThrow(/agents\.claude\.permission_mode/);
 });
