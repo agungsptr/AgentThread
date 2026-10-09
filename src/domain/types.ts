@@ -4,6 +4,11 @@ export type Role = (typeof ROLES)[number];
 export const AGENT_KINDS = ["claude-code", "opencode"] as const;
 export type AgentKind = (typeof AGENT_KINDS)[number];
 
+export type SessionRole = "main" | "coordinator" | "worker";
+
+export const SESSION_SIGNALS = ["started", "active", "idle", "compacting", "ended"] as const;
+export type SessionSignal = (typeof SESSION_SIGNALS)[number];
+
 export const THREAD_TYPES = ["feature", "bug", "chore"] as const;
 export type ThreadType = (typeof THREAD_TYPES)[number];
 
@@ -47,6 +52,7 @@ export type EventBody =
         branch: string;
         worktree: string;
         status: ThreadStatus;
+        maxWorkers?: number;
       };
     }
   | { type: "thread.status_changed"; thread: string; payload: { from: ThreadStatus; to: ThreadStatus; reason?: string } }
@@ -57,7 +63,22 @@ export type EventBody =
   | { type: "ticket.reopened"; thread: string; payload: { ticket: string } }
   | { type: "log.appended"; thread: string; payload: { message: string } }
   | { type: "decision.recorded"; thread: string; payload: { message: string } }
-  | { type: "handoff.submitted"; thread: string; payload: { content: string; generated: boolean } };
+  | { type: "handoff.submitted"; thread: string; payload: { content: string; generated: boolean } }
+  | {
+      type: "session.created";
+      thread?: string;
+      payload: { session: string; role: SessionRole; agent: AgentKind; name: string; ticket?: string };
+    }
+  | { type: "session.attached"; thread?: string; payload: { session: string; pane: string } }
+  | {
+      type: "session.started" | "session.active" | "agent.idle" | "session.compacting" | "session.ended";
+      thread?: string;
+      payload: { session: string };
+    }
+  | { type: "session.failed"; thread?: string; payload: { session: string; reason: string } }
+  | { type: "worker.queued"; thread: string; payload: { ticket: string } }
+  | { type: "notice.queued"; thread?: string; payload: { session: string; text: string } }
+  | { type: "notice.delivered"; thread?: string; payload: { session: string; count: number } };
 
 export type EventType = EventBody["type"];
 

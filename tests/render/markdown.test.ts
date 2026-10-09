@@ -93,3 +93,21 @@ test("sub thread frontmatter carries the herdr tab", () => {
   expect(parse(renderSub(withTab).split("---\n")[1]!)).toMatchObject({ tab: "w7:t3" });
   expect(parse(renderSub(stateOf(INIT, threadCreated("002")).threads.get("002")!).split("---\n")[1]!)).toMatchObject({ tab: null });
 });
+
+test("sessions and worker capacity are rendered", () => {
+  const S = "33333333-3333-4333-8333-333333333333";
+  const s = stateOf(
+    INIT,
+    threadCreated("001", { maxWorkers: 2 }),
+    { type: "session.created", thread: "001", payload: { session: S, role: "coordinator", agent: "claude-code", name: "c" } },
+    { type: "session.attached", thread: "001", payload: { session: S, pane: "w1:p2" } },
+    { type: "agent.idle", thread: "001", payload: { session: S } },
+  );
+  const t = s.threads.get("001")!;
+  const fm = parse(renderSub(t, [...s.sessions.values()]).split("---\n")[1]!);
+  expect(fm).toMatchObject({
+    max_workers: 2,
+    sessions: [{ id: S, role: "coordinator", agent: "claude-code", status: "idle", pane: "w1:p2" }],
+  });
+  expect(renderMain(s)).toContain("| idle | 0/2 |");
+});

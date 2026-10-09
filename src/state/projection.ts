@@ -1,4 +1,22 @@
-import type { Actor, Layout, StoredEvent, ThreadStatus, ThreadType, TicketStatus } from "../domain/types.ts";
+import type { Actor, AgentKind, Layout, SessionRole, StoredEvent, ThreadStatus, ThreadType, TicketStatus } from "../domain/types.ts";
+
+export type SessionStatus = "starting" | "active" | "idle" | "ended" | "failed";
+
+export interface Session {
+  id: string;
+  role: SessionRole;
+  agent: AgentKind;
+  name: string;
+  thread?: string;
+  ticket?: string;
+  pane?: string;
+  status: SessionStatus;
+  notices: string[];
+}
+
+export function isLive(s: Session): boolean {
+  return s.status !== "ended" && s.status !== "failed";
+}
 
 export interface Ticket {
   id: string;
@@ -27,6 +45,8 @@ export interface Thread {
   dependsOn: string[];
   branch: string;
   worktree: string;
+  maxWorkers?: number;
+  workerQueue: string[];
   tickets: Ticket[];
   decisions: Entry[];
   log: Entry[];
@@ -37,11 +57,12 @@ export interface State {
   layout?: Layout;
   project?: { name: string };
   threads: Map<string, Thread>;
+  sessions: Map<string, Session>;
   lastSeq: number;
 }
 
 export function emptyState(): State {
-  return { threads: new Map(), lastSeq: 0 };
+  return { threads: new Map(), sessions: new Map(), lastSeq: 0 };
 }
 
 export function project(events: StoredEvent[]): State {
@@ -63,6 +84,8 @@ export function applyEvent(state: State, ev: StoredEvent): void {
     return;
   }
 
+  if (applySessionEvent(state, ev)) return;
+
   if (ev.type === "thread.created") {
     const p = ev.payload;
     const thread: Thread = {
@@ -76,6 +99,8 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       dependsOn: p.dependsOn,
       branch: p.branch,
       worktree: p.worktree,
+      maxWorkers: p.maxWorkers,
+      workerQueue: [],
       tickets: [],
       decisions: [],
       log: [],
@@ -85,7 +110,7 @@ export function applyEvent(state: State, ev: StoredEvent): void {
     return;
   }
 
-  const t = state.threads.get(ev.thread);
+  const t = ev.thread ? state.threads.get(ev.thread) : undefined;
   if (!t) throw new Error(`event ${ev.seq} references unknown thread ${ev.thread}`);
   const ticket = (id: string) => {
     const found = t.tickets.find((k) => k.id === id);
@@ -140,6 +165,10 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       note(t, ev, `${k.id} reopened`);
       break;
     }
+    case "worker.queued":
+      t.workerQueue.push(ev.payload.ticket);
+      note(t, ev, `${ev.payload.ticket} queued for a worker`);
+      break;
     case "log.appended":
       note(t, ev, ev.payload.message);
       break;
@@ -156,4 +185,75 @@ export function applyEvent(state: State, ev: StoredEvent): void {
 
 function note(thread: Thread, ev: StoredEvent, message: string): void {
   thread.log.push({ ts: ev.ts, actor: ev.actor, message });
+}
+
+const short = (id: string) => id.slice(0, 8);
+
+function sessionOf(state: State, seq: number, id: string): Session {
+  const s = state.sessions.get(id);
+  if (!s) throw new Error(`event ${seq} references unknown session ${id}`);
+  return s;
+}
+
+function threadNote(state: State, ev: StoredEvent, message: string): void {
+  const t = ev.thread ? state.threads.get(ev.thread) : undefined;
+  if (t) note(t, ev, message);
+}
+
+/** Applies session and notice events; returns false for every other event type. */
+function applySessionEvent(state: State, ev: StoredEvent): boolean {
+  switch (ev.type) {
+    case "session.created": {
+      const p = ev.payload;
+      state.sessions.set(p.session, {
+        id: p.session,
+        role: p.role,
+        agent: p.agent,
+        name: p.name,
+        thread: ev.thread,
+        ...(p.ticket ? { ticket: p.ticket } : {}),
+        status: "starting",
+        notices: [],
+      });
+      const t = ev.thread ? state.threads.get(ev.thread) : undefined;
+      if (t && p.ticket) t.workerQueue = t.workerQueue.filter((k) => k !== p.ticket);
+      threadNote(state, ev, `${p.role} session ${short(p.session)} created${p.ticket ? ` for ${p.ticket}` : ""}`);
+      return true;
+    }
+    case "session.attached":
+      sessionOf(state, ev.seq, ev.payload.session).pane = ev.payload.pane;
+      threadNote(state, ev, `session ${short(ev.payload.session)} attached to pane ${ev.payload.pane}`);
+      return true;
+    case "session.started":
+    case "session.active": {
+      const s = sessionOf(state, ev.seq, ev.payload.session);
+      if (isLive(s)) s.status = "active";
+      return true;
+    }
+    case "agent.idle": {
+      const s = sessionOf(state, ev.seq, ev.payload.session);
+      if (isLive(s)) s.status = "idle";
+      return true;
+    }
+    case "session.compacting":
+      sessionOf(state, ev.seq, ev.payload.session);
+      threadNote(state, ev, `session ${short(ev.payload.session)} is compacting`);
+      return true;
+    case "session.ended":
+      sessionOf(state, ev.seq, ev.payload.session).status = "ended";
+      threadNote(state, ev, `session ${short(ev.payload.session)} ended`);
+      return true;
+    case "session.failed":
+      sessionOf(state, ev.seq, ev.payload.session).status = "failed";
+      threadNote(state, ev, `session ${short(ev.payload.session)} failed: ${ev.payload.reason}`);
+      return true;
+    case "notice.queued":
+      sessionOf(state, ev.seq, ev.payload.session).notices.push(ev.payload.text);
+      return true;
+    case "notice.delivered":
+      sessionOf(state, ev.seq, ev.payload.session).notices.splice(0, ev.payload.count);
+      return true;
+    default:
+      return false;
+  }
 }
