@@ -5,7 +5,8 @@ import { stringify } from "yaml";
 import { isAlive, request } from "../daemon/client.ts";
 import { startDaemon } from "../daemon/server.ts";
 import { loadConfig } from "../config/config.ts";
-import { ROLES, type Actor, type StoredEvent } from "../domain/types.ts";
+import { ROLES, type Actor, type Layout, type StoredEvent } from "../domain/types.ts";
+import { HerdrCli, shellQuote } from "../herdr/bridge.ts";
 import { initProject } from "../project/init.ts";
 import { paths } from "../project/paths.ts";
 import { findRoot } from "../project/root.ts";
@@ -15,6 +16,7 @@ type Env = Record<string, string | undefined>;
 const USAGE = `usage: agt <command>
 
   init [--name <name>]
+  start                      set up the Herdr layout (run inside a Herdr pane)
   daemon start|stop|status
   config
   thread new <title...> --type feature|bug|chore [--goal <text>] [--criteria <text>]... [--depends <id>]...
@@ -78,6 +80,8 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
     case "config":
       console.log(stringify(loadConfig(findRoot(cwd, env), env)).trimEnd());
       return 0;
+    case "start":
+      return start(findRoot(cwd, env), env);
     case "thread":
       return thread(sub, rest, findRoot(cwd, env), env);
     case "ticket":
@@ -174,6 +178,65 @@ async function ticket(sub: string | undefined, args: string[], root: string, env
   }
 }
 
+async function ensureDaemon(root: string, env: Env): Promise<"started" | "running"> {
+  const p = paths(root);
+  if (await isAlive(p.socket)) return "running";
+  const spawned = Bun.spawnSync(
+    ["/bin/sh", "-c", 'nohup "$0" "$1" daemon run >>"$2" 2>&1 &', process.execPath, Bun.main, p.daemonLog],
+    { env: { ...env, AGT_ROOT: root } },
+  );
+  if (spawned.exitCode !== 0) throw new Error("failed to launch daemon");
+  for (let i = 0; i < 50; i++) {
+    if (await isAlive(p.socket)) return "started";
+    await Bun.sleep(100);
+  }
+  throw new Error(`daemon failed to start; see ${p.daemonLog}`);
+}
+
+async function start(root: string, env: Env): Promise<number> {
+  const workspace = env.HERDR_WORKSPACE_ID;
+  const mainTab = env.HERDR_TAB_ID;
+  const managerPane = env.HERDR_PANE_ID;
+  if (env.HERDR_ENV !== "1" || !workspace || !mainTab || !managerPane) throw new Error("agt start must run inside a Herdr pane");
+  const config = loadConfig(root, env);
+  await ensureDaemon(root, env);
+  const socket = paths(root).socket;
+  const herdr = new HerdrCli({ bin: env.HERDR_BIN_PATH ?? "herdr", env });
+
+  const current = await request(socket, { op: "layout.get" });
+  if (!current.ok) throw new Error(current.error);
+  const layout = current.result as Layout | null;
+  if (layout && herdr.tabExists(layout.mainTab)) {
+    console.log(`layout already set up (main tab ${layout.mainTab})`);
+  } else {
+    herdr.renameTab(mainTab, config.herdr.main_tab_label);
+    herdr.renamePane(managerPane, "main manager");
+    const loggerPane = herdr.splitPane({ pane: managerPane, direction: "right", cwd: root, env: { AGT_ROOT: root } });
+    herdr.renamePane(loggerPane, "logger");
+    herdr.runInPane(loggerPane, `${shellQuote(process.execPath)} ${shellQuote(Bun.main)} logs -f`);
+    await commandOrThrow(socket, env, {
+      cmd: "layout.register",
+      workspace,
+      mainTab,
+      managerPane,
+      loggerPane,
+      herdrBin: herdr.bin,
+      herdrSocket: env.HERDR_SOCKET_PATH,
+    });
+    console.log(`main tab ${mainTab}: main manager ${managerPane}, logger ${loggerPane}`);
+  }
+
+  const reconciled = (await commandOrThrow(socket, env, { cmd: "layout.reconcile" })) as { threads: number };
+  console.log(`subthread tabs reconciled (${reconciled.threads} open threads)`);
+  return 0;
+}
+
+async function commandOrThrow(socket: string, env: Env, command: object): Promise<unknown> {
+  const res = await request(socket, { op: "command", command, actor: actorFromEnv(env) });
+  if (!res.ok) throw new Error(res.error);
+  return res.result;
+}
+
 async function daemon(sub: string | undefined, root: string, env: Env): Promise<number> {
   const p = paths(root);
   switch (sub) {
@@ -185,23 +248,8 @@ async function daemon(sub: string | undefined, root: string, env: Env): Promise<
       return 0;
     }
     case "start": {
-      if (await isAlive(p.socket)) {
-        console.log("daemon already running");
-        return 0;
-      }
-      const spawned = Bun.spawnSync(
-        ["/bin/sh", "-c", 'nohup "$0" "$1" daemon run >>"$2" 2>&1 &', process.execPath, Bun.main, p.daemonLog],
-        { env: { ...env, AGT_ROOT: root } },
-      );
-      if (spawned.exitCode !== 0) throw new Error("failed to launch daemon");
-      for (let i = 0; i < 50; i++) {
-        if (await isAlive(p.socket)) {
-          console.log("daemon started");
-          return 0;
-        }
-        await Bun.sleep(100);
-      }
-      throw new Error(`daemon failed to start; see ${p.daemonLog}`);
+      console.log((await ensureDaemon(root, env)) === "running" ? "daemon already running" : "daemon started");
+      return 0;
     }
     case "stop": {
       if (!(await isAlive(p.socket))) {
