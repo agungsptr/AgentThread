@@ -20,6 +20,10 @@ function setup(files: { user?: string; project?: string } = {}) {
   return { root, env, p };
 }
 
+test("an empty HOME still gives an absolute user path", () => {
+  expect(configPaths("/repo", { HOME: "" }).user.startsWith("/")).toBe(true);
+});
+
 test("defaults match the spec", () => {
   expect(DEFAULT_CONFIG).toEqual({
     language: "en",

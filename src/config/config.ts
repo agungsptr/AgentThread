@@ -58,7 +58,7 @@ export type Config = z.infer<typeof ConfigSchema>;
 export const DEFAULT_CONFIG: Config = ConfigSchema.parse({});
 
 export function configPaths(root: string, env: Env = process.env): { user: string; project: string } {
-  const base = env.XDG_CONFIG_HOME || join(env.HOME ?? homedir(), ".config");
+  const base = env.XDG_CONFIG_HOME || join(env.HOME || homedir(), ".config");
   return { user: join(base, "agentthread", "config.yaml"), project: join(root, ".agentthread", "config.yaml") };
 }
 

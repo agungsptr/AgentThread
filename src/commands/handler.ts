@@ -66,8 +66,12 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
   }
   if (cmd.cmd === "layout.reconcile") {
     if (!state.layout) reject("no Herdr layout registered; run `agt start`");
-    const open = [...state.threads.values()].filter((t) => t.status !== "done");
-    return { events: [], effects: open.map(tabEnsure), result: { threads: open.length } };
+    const all = [...state.threads.values()];
+    const open = all.filter((t) => t.status !== "done");
+    const closes: Effect[] = (ctx.config ?? DEFAULT_CONFIG).herdr.close_tab_on_done
+      ? all.flatMap((t) => (t.status === "done" && t.tab ? [{ kind: "herdr.tab.close" as const, thread: t.id, tab: t.tab }] : []))
+      : [];
+    return { events: [], effects: [...open.map(tabEnsure), ...closes], result: { threads: open.length } };
   }
 
   const t = state.threads.get(cmd.thread) ?? reject(`unknown thread ${cmd.thread}`);

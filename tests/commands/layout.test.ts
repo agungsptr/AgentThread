@@ -90,6 +90,23 @@ describe("layout.reconcile", () => {
     ]);
   });
 
+  test("closes tabs of done threads that still have one, when configured", () => {
+    const bodies: EventBody[] = [
+      INIT,
+      REGISTERED,
+      threadCreated("001"),
+      threadCreated("002", { status: "done" }),
+      { type: "thread.tab_opened", thread: "002", payload: { tab: "w7:t4", rootPane: "w7:p6" } },
+    ];
+    const r = run(bodies, { cmd: "layout.reconcile" });
+    expect(r.ok && r.result).toEqual({ threads: 1 });
+    expect(r.ok && r.effects.map((e) => e.kind)).toEqual(["herdr.tab.ensure", "herdr.tab.close"]);
+    expect(r.ok && r.effects[1]).toEqual({ kind: "herdr.tab.close", thread: "002", tab: "w7:t4" });
+    const config = { ...DEFAULT_CONFIG, herdr: { ...DEFAULT_CONFIG.herdr, close_tab_on_done: false } };
+    const off = run(bodies, { cmd: "layout.reconcile" }, USER, config);
+    expect(off.ok && off.effects.map((e) => e.kind)).toEqual(["herdr.tab.ensure"]);
+  });
+
   test("rejects without a layout", () => {
     const r = run([INIT], { cmd: "layout.reconcile" });
     expect(r.ok ? "accepted" : r.error).toBe("no Herdr layout registered; run `agt start`");

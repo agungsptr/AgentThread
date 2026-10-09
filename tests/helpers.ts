@@ -65,11 +65,13 @@ export interface FakeHerdrState {
   panes: string[];
   calls: string[][];
   fail?: string[];
+  hang?: string[];
+  envs: (string | null)[];
 }
 
 /** A state file for tests/fixtures/fake-herdr.ts; pass `file` as FAKE_HERDR_STATE. */
 export function fakeHerdrState(seed: Partial<FakeHerdrState> = {}): { file: string; read(): FakeHerdrState } {
   const file = join(realpathSync(mkdtempSync(join(tmpdir(), "agt-herdr-"))), "herdr.json");
-  writeFileSync(file, JSON.stringify({ next: 0, tabs: [], panes: [], calls: [], ...seed }));
+  writeFileSync(file, JSON.stringify({ next: 0, tabs: [], panes: [], calls: [], envs: [], ...seed }));
   return { file, read: () => JSON.parse(readFileSync(file, "utf8")) as FakeHerdrState };
 }

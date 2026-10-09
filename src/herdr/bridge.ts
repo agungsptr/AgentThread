@@ -1,10 +1,31 @@
 type Env = Record<string, string | undefined>;
 
-export type Runner = (bin: string, args: string[], env: Env) => { exitCode: number; stdout: string; stderr: string };
+export type RunResult = { exitCode: number; stdout: string; stderr: string; timedOut?: boolean };
+export type Runner = (bin: string, args: string[], env: Env, timeoutMs: number) => RunResult;
 
-export const spawnRunner: Runner = (bin, args, env) => {
-  const r = Bun.spawnSync([bin, ...args], { env, stdout: "pipe", stderr: "pipe" });
-  return { exitCode: r.exitCode ?? 1, stdout: r.stdout.toString(), stderr: r.stderr.toString() };
+export const DEFAULT_TIMEOUT_MS = 10_000;
+
+// Bun 1.1.34 ignores the `timeout` option of both Bun.spawnSync and node:child_process spawnSync (checked: a
+// 5s sleep with a 300ms timeout runs for 5s), so a shell watchdog kills the child instead.
+const WATCHDOG = `T=$1; shift
+"$@" &
+pid=$!
+( trap 'kill $s 2>/dev/null; exit 0' TERM; sleep "$T" & s=$!; wait $s; kill -9 $pid 2>/dev/null ) >/dev/null 2>&1 &
+wd=$!
+wait $pid
+rc=$?
+kill $wd 2>/dev/null
+exit $rc`;
+
+export const spawnRunner: Runner = (bin, args, env, timeoutMs) => {
+  const r = Bun.spawnSync(["/bin/sh", "-c", WATCHDOG, "herdr", String(timeoutMs / 1000), bin, ...args], {
+    env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const exitCode = r.exitCode ?? 1;
+  // 137 = killed by the watchdog's SIGKILL
+  return { exitCode, stdout: r.stdout.toString(), stderr: r.stderr.toString(), timedOut: exitCode === 137 };
 };
 
 export class HerdrError extends Error {
@@ -34,7 +55,7 @@ export function shellQuote(s: string): string {
 
 /** Drives Herdr through its CLI. Every call parses the JSON `result`, and herdr's JSON errors become HerdrError. */
 export class HerdrCli implements HerdrBridge {
-  constructor(private readonly opts: { bin: string; env?: Env; runner?: Runner }) {}
+  constructor(private readonly opts: { bin: string; env?: Env; runner?: Runner; timeoutMs?: number }) {}
 
   get bin(): string {
     return this.opts.bin;
@@ -79,7 +100,9 @@ export class HerdrCli implements HerdrBridge {
 
   private call(args: string[]): unknown {
     const what = `herdr ${args.slice(0, 2).join(" ")}`;
-    const r = (this.opts.runner ?? spawnRunner)(this.opts.bin, args, this.opts.env ?? process.env);
+    const timeoutMs = this.opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const r = (this.opts.runner ?? spawnRunner)(this.opts.bin, args, this.opts.env ?? process.env, timeoutMs);
+    if (r.timedOut) throw new HerdrError("timeout", `${what}: timed out after ${timeoutMs}ms`);
     if (r.exitCode !== 0) {
       let code = "herdr_failed";
       let message = r.stderr.trim() || `exited with ${r.exitCode}`;

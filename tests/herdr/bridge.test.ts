@@ -93,6 +93,27 @@ describe("HerdrCli against the fake herdr executable", () => {
   });
 });
 
+describe("herdr timeouts", () => {
+  test("a hung herdr is killed and reported as a timeout", () => {
+    const fake = fakeHerdrState({ hang: ["tab get"] });
+    const h = new HerdrCli({ bin: FAKE_HERDR, env: { ...process.env, FAKE_HERDR_STATE: fake.file }, timeoutMs: 300 });
+    const marker = `w1:hang-${crypto.randomUUID()}`;
+    const started = Date.now();
+    let caught: unknown;
+    try {
+      h.tabExists(marker);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(HerdrError);
+    expect((caught as HerdrError).code).toBe("timeout");
+    expect((caught as HerdrError).message).toBe("herdr tab get: timed out after 300ms");
+    expect(Date.now() - started).toBeLessThan(3_000);
+    const left = Bun.spawnSync(["pgrep", "-f", marker]);
+    expect(left.stdout.toString().trim()).toBe("");
+  });
+});
+
 describe("real herdr (opt-in: HERDR_ENV=1 AGT_HERDR_IT=1)", () => {
   const enabled = process.env.HERDR_ENV === "1" && process.env.AGT_HERDR_IT === "1" && !!process.env.HERDR_WORKSPACE_ID;
   test.skipIf(!enabled)("creates, finds and closes a tab", () => {

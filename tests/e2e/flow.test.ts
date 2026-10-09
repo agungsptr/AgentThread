@@ -1,15 +1,16 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tempRepo } from "../helpers.ts";
+import { isolatedConfigHome, tempRepo } from "../helpers.ts";
 
 const BIN = join(import.meta.dir, "../../bin/agt");
 let root: string;
+let xdg: string;
 
 function agt(args: string[], env: Record<string, string> = {}) {
   const r = Bun.spawnSync([process.execPath, BIN, ...args], {
     cwd: root,
-    env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", AGT_ROOT: root, ...env },
+    env: { PATH: process.env.PATH ?? "", HOME: "/nonexistent", XDG_CONFIG_HOME: xdg, AGT_ROOT: root, ...env },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -22,6 +23,7 @@ const coord = (thread: string) => ({ AGT_ROLE: "coordinator", AGT_THREAD: thread
 const worker = (thread: string, session: string) => ({ AGT_ROLE: "worker", AGT_THREAD: thread, AGT_SESSION: session });
 
 beforeAll(() => {
+  xdg = isolatedConfigHome();
   root = tempRepo();
   agt(["init", "--name", "shop"]);
   agt(["daemon", "start"]);

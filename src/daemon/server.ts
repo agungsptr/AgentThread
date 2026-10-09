@@ -57,7 +57,7 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
       writeAll(root, state);
     } catch (e) {
       // Events are already committed; failing here would make the client retry and duplicate the command.
-      console.error(`render failed after commit: ${e instanceof Error ? e.message : String(e)}`);
+      (opts.log ?? console.error)(`render failed after commit: ${e instanceof Error ? e.message : String(e)}`);
     }
     return { ok: true, result: decision.result };
   };

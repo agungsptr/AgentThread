@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { chmodSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { request } from "../../src/daemon/client.ts";
@@ -7,10 +7,20 @@ import type { Actor, StoredEvent } from "../../src/domain/types.ts";
 import { EventStore } from "../../src/store/event-store.ts";
 import { initProject } from "../../src/project/init.ts";
 import { paths } from "../../src/project/paths.ts";
-import { tempRepo } from "../helpers.ts";
+import { isolatedConfigHome, tempRepo } from "../helpers.ts";
 
 let root: string;
 let daemon: Daemon;
+const savedXdg = process.env.XDG_CONFIG_HOME;
+
+beforeAll(() => {
+  process.env.XDG_CONFIG_HOME = isolatedConfigHome();
+});
+
+afterAll(() => {
+  if (savedXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = savedXdg;
+});
 
 beforeEach(async () => {
   root = tempRepo();

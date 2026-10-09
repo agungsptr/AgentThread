@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { closeSync, openSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { stringify } from "yaml";
@@ -181,11 +182,19 @@ async function ticket(sub: string | undefined, args: string[], root: string, env
 async function ensureDaemon(root: string, env: Env): Promise<"started" | "running"> {
   const p = paths(root);
   if (await isAlive(p.socket)) return "running";
-  const spawned = Bun.spawnSync(
-    ["/bin/sh", "-c", 'nohup "$0" "$1" daemon run >>"$2" 2>&1 &', process.execPath, Bun.main, p.daemonLog],
-    { env: { ...env, AGT_ROOT: root } },
-  );
-  if (spawned.exitCode !== 0) throw new Error("failed to launch daemon");
+  // A new session (detached) keeps the daemon alive when the pane that started it goes away.
+  const logFd = openSync(p.daemonLog, "a");
+  try {
+    spawn(process.execPath, [Bun.main, "daemon", "run"], {
+      detached: true,
+      stdio: ["ignore", logFd, logFd],
+      env: { ...env, AGT_ROOT: root },
+    }).unref();
+  } catch {
+    throw new Error("failed to launch daemon");
+  } finally {
+    closeSync(logFd);
+  }
   for (let i = 0; i < 50; i++) {
     if (await isAlive(p.socket)) return "started";
     await Bun.sleep(100);
@@ -198,6 +207,9 @@ async function start(root: string, env: Env): Promise<number> {
   const mainTab = env.HERDR_TAB_ID;
   const managerPane = env.HERDR_PANE_ID;
   if (env.HERDR_ENV !== "1" || !workspace || !mainTab || !managerPane) throw new Error("agt start must run inside a Herdr pane");
+  if (env.AGT_THREAD || env.AGT_ROLE === "coordinator" || env.AGT_ROLE === "worker") {
+    throw new Error("agt start must run from the main tab, not a subthread pane");
+  }
   const config = loadConfig(root, env);
   await ensureDaemon(root, env);
   const socket = paths(root).socket;
@@ -214,7 +226,7 @@ async function start(root: string, env: Env): Promise<number> {
     const loggerPane = herdr.splitPane({ pane: managerPane, direction: "right", cwd: root, env: { AGT_ROOT: root } });
     herdr.renamePane(loggerPane, "logger");
     herdr.runInPane(loggerPane, `${shellQuote(process.execPath)} ${shellQuote(Bun.main)} logs -f`);
-    await commandOrThrow(socket, env, {
+    await commandOrThrow(socket, {
       cmd: "layout.register",
       workspace,
       mainTab,
@@ -226,13 +238,14 @@ async function start(root: string, env: Env): Promise<number> {
     console.log(`main tab ${mainTab}: main manager ${managerPane}, logger ${loggerPane}`);
   }
 
-  const reconciled = (await commandOrThrow(socket, env, { cmd: "layout.reconcile" })) as { threads: number };
+  const reconciled = (await commandOrThrow(socket, { cmd: "layout.reconcile" })) as { threads: number };
   console.log(`subthread tabs reconciled (${reconciled.threads} open threads)`);
   return 0;
 }
 
-async function commandOrThrow(socket: string, env: Env, command: object): Promise<unknown> {
-  const res = await request(socket, { op: "command", command, actor: actorFromEnv(env) });
+/** `agt start` is a human bootstrap command, so its commands always run as the user. */
+async function commandOrThrow(socket: string, command: object): Promise<unknown> {
+  const res = await request(socket, { op: "command", command, actor: { role: "user" } });
   if (!res.ok) throw new Error(res.error);
   return res.result;
 }

@@ -8,6 +8,8 @@ interface FakeState {
   panes: string[];
   calls: string[][];
   fail?: string[];
+  hang?: string[];
+  envs: (string | null)[];
 }
 
 const file = process.env.FAKE_HERDR_STATE;
@@ -16,10 +18,11 @@ if (!file) {
   process.exit(1);
 }
 const state: FakeState = existsSync(file)
-  ? { next: 0, tabs: [], panes: [], calls: [], ...JSON.parse(readFileSync(file, "utf8")) }
-  : { next: 0, tabs: [], panes: [], calls: [] };
+  ? { next: 0, tabs: [], panes: [], calls: [], envs: [], ...JSON.parse(readFileSync(file, "utf8")) }
+  : { next: 0, tabs: [], panes: [], calls: [], envs: [] };
 const args = process.argv.slice(2);
 state.calls.push(args);
+state.envs.push(process.env.HERDR_SOCKET_PATH ?? null);
 
 function ok(result: unknown): never {
   writeFileSync(file!, JSON.stringify(state));
@@ -35,6 +38,10 @@ function fail(code: string, message: string): never {
 
 const [group, sub, target] = args;
 
+if (state.hang?.includes(`${group} ${sub}`)) {
+  writeFileSync(file, JSON.stringify(state));
+  await Bun.sleep(1e9);
+}
 if (state.fail?.includes(`${group} ${sub}`)) fail("server_unavailable", "herdr server unavailable");
 
 if (group === "tab" && sub === "create") {

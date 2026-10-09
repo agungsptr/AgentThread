@@ -1,14 +1,15 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tempRepo } from "../helpers.ts";
+import { isolatedConfigHome, tempRepo } from "../helpers.ts";
 
 const BIN = join(import.meta.dir, "../../bin/agt");
 
 let root: string;
+let xdg: string;
 
 function agt(args: string[], opts: { env?: Record<string, string>; cwd?: string; root?: boolean } = {}) {
-  const env: Record<string, string> = { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", ...opts.env };
+  const env: Record<string, string> = { PATH: process.env.PATH ?? "", HOME: "/nonexistent", XDG_CONFIG_HOME: xdg, ...opts.env };
   if (opts.root !== false) env.AGT_ROOT = root;
   const r = Bun.spawnSync([process.execPath, BIN, ...args], { cwd: opts.cwd ?? root, env, stdout: "pipe", stderr: "pipe" });
   return { code: r.exitCode, out: r.stdout.toString().trim(), err: r.stderr.toString().trim() };
@@ -18,6 +19,7 @@ const COORD = { AGT_ROLE: "coordinator", AGT_THREAD: "001", AGT_SESSION: "c1" };
 const WORKER = { AGT_ROLE: "worker", AGT_THREAD: "001", AGT_SESSION: "w1" };
 
 beforeEach(() => {
+  xdg = isolatedConfigHome();
   root = tempRepo();
   expect(agt(["init", "--name", "demo"]).code).toBe(0);
 });
