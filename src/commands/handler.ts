@@ -1,18 +1,35 @@
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { DEFAULT_CONFIG, type Config } from "../config/config.ts";
 import { canTransitionThread, canTransitionTicket, scopesOverlap, slugify, validateHandoff } from "../domain/rules.ts";
 import { ROLES, type Actor, type EventBody, type Role, type ThreadStatus, type TicketStatus } from "../domain/types.ts";
-import type { State, Thread, Ticket } from "../state/projection.ts";
+import { agentName, liveSessions, spawnWorker, workerLimit } from "../orchestration/sessions.ts";
+import { isLive, type State, type Thread, type Ticket } from "../state/projection.ts";
 import type { Command, CommandName } from "./schema.ts";
 
 export type Effect =
   | { kind: "git.worktree.add"; branch: string; path: string }
   | { kind: "herdr.tab.ensure"; thread: string; label: string; cwd: string; tab?: string }
-  | { kind: "herdr.tab.close"; thread: string; tab: string };
+  | { kind: "herdr.tab.close"; thread: string; tab: string }
+  | {
+      kind: "agent.spawn";
+      session: string;
+      role: "coordinator" | "worker";
+      name: string;
+      thread: string;
+      ticket?: string;
+      cwd: string;
+      pane?: string;
+      splitFrom?: string;
+      direction?: "right" | "down";
+    }
+  | { kind: "notice.deliver"; session: string; thread?: string; pane: string; text: string; count: number }
+  | { kind: "pane.close"; pane: string };
 
 export interface HandlerContext {
   root: string;
   config?: Config;
+  newId?: () => string;
 }
 
 export type HandleResult =
@@ -38,7 +55,21 @@ const ALLOWED: Record<CommandName, readonly Role[]> = {
   handoff: ["main", "coordinator", "worker"],
   "layout.register": ["user"],
   "layout.reconcile": ["user"],
+  "worker.spawn": ["coordinator"],
+  tell: ROLES,
+  "session.signal": ROLES,
+  "session.attached": ["user"],
+  "session.failed": ["user"],
+  "session.open_main": ["user"],
 };
+
+const SIGNAL_EVENT = {
+  started: "session.started",
+  active: "session.active",
+  idle: "agent.idle",
+  compacting: "session.compacting",
+  ended: "session.ended",
+} as const;
 
 class Rejection extends Error {}
 
@@ -72,6 +103,40 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
       ? all.flatMap((t) => (t.status === "done" && t.tab ? [{ kind: "herdr.tab.close" as const, thread: t.id, tab: t.tab }] : []))
       : [];
     return { events: [], effects: [...open.map(tabEnsure), ...closes], result: { threads: open.length } };
+  }
+
+  if (cmd.cmd === "tell") {
+    const target =
+      cmd.target === "main" ? liveSessions(state, undefined, "main")[0] : liveSessions(state, cmd.target, "coordinator")[0];
+    if (!target) reject(cmd.target === "main" ? "no live main manager session" : `no live coordinator for thread ${cmd.target}`);
+    return {
+      events: [{ type: "notice.queued", thread: target.thread, payload: { session: target.id, text: `Message from ${actor.role}: ${cmd.message}` } }],
+    };
+  }
+  if (cmd.cmd === "session.signal") {
+    const s = state.sessions.get(cmd.session) ?? reject(`unknown session ${cmd.session}`);
+    if (actor.session && actor.session !== s.id) reject(`actor session ${actor.session} cannot signal ${s.id}`);
+    if (!isLive(s)) return { events: [] };
+    return { events: [{ type: SIGNAL_EVENT[cmd.signal], thread: s.thread, payload: { session: s.id } }] };
+  }
+  if (cmd.cmd === "session.attached" || cmd.cmd === "session.failed") {
+    const s = state.sessions.get(cmd.session) ?? reject(`unknown session ${cmd.session}`);
+    if (!isLive(s)) return { events: [] };
+    return cmd.cmd === "session.attached"
+      ? { events: [{ type: "session.attached", thread: s.thread, payload: { session: s.id, pane: cmd.pane } }] }
+      : { events: [{ type: "session.failed", thread: s.thread, payload: { session: s.id, reason: cmd.reason } }] };
+  }
+  if (cmd.cmd === "session.open_main") {
+    if (state.sessions.has(cmd.session)) reject(`session ${cmd.session} already exists`);
+    const stale: EventBody[] = liveSessions(state, undefined, "main").map((s) => ({ type: "session.ended", payload: { session: s.id } }));
+    return {
+      events: [
+        ...stale,
+        { type: "session.created", payload: { session: cmd.session, role: "main", agent: "claude-code", name: agentName(ctx.root, "main") } },
+        { type: "session.attached", payload: { session: cmd.session, pane: cmd.pane } },
+      ],
+      result: { session: cmd.session },
+    };
   }
 
   const t = state.threads.get(cmd.thread) ?? reject(`unknown thread ${cmd.thread}`);
@@ -113,6 +178,20 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
       transitionTicket(k, "open");
       return { events: [{ type: "ticket.reopened", thread: t.id, payload: { ticket: k.id } }] };
     }
+    case "worker.spawn": {
+      if (t.status === "done") reject(`thread ${t.id} is done`);
+      if (!t.rootPane) reject(`thread ${t.id} has no Herdr tab; run \`agt start\``);
+      const k = findTicket(t, cmd.ticket);
+      if (k.status !== "open") reject(`ticket ${k.id} is ${k.status}`);
+      const workers = liveSessions(state, t.id, "worker");
+      if (t.workerQueue.includes(k.id) || workers.some((s) => s.ticket === k.id)) reject(`ticket ${k.id} already has a worker`);
+      if (workers.length >= workerLimit(t, ctx.config ?? DEFAULT_CONFIG)) {
+        return { events: [{ type: "worker.queued", thread: t.id, payload: { ticket: k.id } }], result: { queued: true } };
+      }
+      const spawned = spawnWorker(state, t, k.id, { root: ctx.root, newId: ctx.newId ?? randomUUID });
+      const session = (spawned.events[0] as Extract<EventBody, { type: "session.created" }>).payload.session;
+      return { ...spawned, result: { session, queued: false } };
+    }
     case "log":
       return { events: [{ type: "log.appended", thread: t.id, payload: { message: cmd.message } }] };
     case "decide":
@@ -146,6 +225,7 @@ function newThread(state: State, cmd: Extract<Command, { cmd: "thread.new" }>, c
           goal: cmd.goal,
           criteria: cmd.criteria,
           dependsOn: cmd.dependsOn,
+          maxWorkers: cmd.maxWorkers,
           branch,
           worktree,
           status,

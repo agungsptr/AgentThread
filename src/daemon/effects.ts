@@ -34,6 +34,9 @@ export function createEffectRunner(opts: {
           return [];
         }
       }
+      default:
+        // agent.spawn, notice.deliver and pane.close are run by the session supervisor (a later task).
+        return [];
     }
   };
 }
