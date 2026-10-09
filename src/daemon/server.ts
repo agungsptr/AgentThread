@@ -1,11 +1,12 @@
 import { rmSync } from "node:fs";
-import { handle, type Effect } from "../commands/handler.ts";
+import { handle } from "../commands/handler.ts";
 import { ActorSchema, CommandSchema } from "../commands/schema.ts";
-import { addWorktree } from "../project/git.ts";
+import { loadConfig, type Config } from "../config/config.ts";
 import { paths } from "../project/paths.ts";
 import { writeAll } from "../render/write.ts";
 import { applyEvent, project } from "../state/projection.ts";
 import { EventStore } from "../store/event-store.ts";
+import { createEffectRunner } from "./effects.ts";
 import { LineReader, LineWriter } from "./framing.ts";
 import type { Request, Response } from "./protocol.ts";
 import { ensureSocketDir } from "./socket-dir.ts";
@@ -15,14 +16,16 @@ export interface Daemon {
   closed: Promise<void>;
 }
 
-export async function startDaemon(root: string): Promise<Daemon> {
+export async function startDaemon(root: string, opts: { log?: (message: string) => void } = {}): Promise<Daemon> {
   const p = paths(root);
   // Taking the exclusive store lock first makes "one daemon per project" a property of state.db, not of the socket path.
   const store = new EventStore(p.db, { exclusive: true });
   let state: ReturnType<typeof project>;
+  let config: Config;
   try {
     state = project(store.all());
     if (!state.project) throw new Error("project not initialized; run `agt init`");
+    config = loadConfig(root);
     ensureSocketDir(p.socketDir);
     rmSync(p.socket, { force: true });
     writeAll(root, state);
@@ -39,23 +42,17 @@ export async function startDaemon(root: string): Promise<Daemon> {
     return next;
   };
 
-  const runEffect = (effect: Effect) => {
-    switch (effect.kind) {
-      case "git.worktree.add":
-        addWorktree(root, effect.branch, effect.path);
-        break;
-    }
-  };
+  const runEffect = createEffectRunner({ root, layout: () => state.layout, log: opts.log });
 
   const runCommand = (raw: { command: unknown; actor: unknown }): Response => {
     const command = CommandSchema.safeParse(raw.command);
     if (!command.success) return { ok: false, error: `invalid command: ${command.error.issues.map((i) => i.message).join("; ")}` };
     const actor = ActorSchema.safeParse(raw.actor);
     if (!actor.success) return { ok: false, error: `invalid actor: ${actor.error.issues.map((i) => i.message).join("; ")}` };
-    const decision = handle(state, command.data, actor.data, { root });
+    const decision = handle(state, command.data, actor.data, { root, config });
     if (!decision.ok) return decision;
-    for (const effect of decision.effects) runEffect(effect);
-    for (const ev of store.append(decision.events, actor.data)) applyEvent(state, ev);
+    const effectEvents = decision.effects.flatMap(runEffect);
+    for (const ev of store.append([...decision.events, ...effectEvents], actor.data)) applyEvent(state, ev);
     try {
       writeAll(root, state);
     } catch (e) {
@@ -83,6 +80,8 @@ export async function startDaemon(root: string): Promise<Daemon> {
       case "command":
         if (shuttingDown) return { ok: false, error: "daemon is shutting down" };
         return enqueue(() => runCommand(req));
+      case "layout.get":
+        return { ok: true, result: state.layout ?? null };
       default:
         return { ok: false, error: "unknown op" };
     }
