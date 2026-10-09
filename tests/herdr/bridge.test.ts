@@ -132,3 +132,34 @@ test("shellQuote", () => {
   expect(shellQuote("/a b/it's")).toBe("'/a b/it'\\''s'");
   expect(shellQuote("plain")).toBe("'plain'");
 });
+
+describe("agent commands", () => {
+  test("argv for agent start / prompt and pane close", () => {
+    const calls: { args: string[]; timeout: number }[] = [];
+    const runner: Runner = (_bin, args, _env, timeoutMs) => {
+      calls.push({ args, timeout: timeoutMs });
+      return { exitCode: 0, stdout: '{"result":{"type":"ok"}}', stderr: "" };
+    };
+    const h = new HerdrCli({ bin: "herdr", runner });
+    h.agentStart({ name: "agt-ab12-c001", kind: "claude", pane: "w1:p2", args: ["--session-id", "s"] });
+    h.agentStart({ name: "n", kind: "claude", pane: "w1:p3", args: [], timeoutMs: 5000 });
+    h.agentPrompt("w1:p2", "Ticket T1 is done.");
+    h.closePane("w1:p3");
+    expect(calls).toEqual([
+      { args: ["agent", "start", "agt-ab12-c001", "--kind", "claude", "--pane", "w1:p2", "--timeout", "60000", "--", "--session-id", "s"], timeout: 70000 },
+      { args: ["agent", "start", "n", "--kind", "claude", "--pane", "w1:p3", "--timeout", "5000", "--"], timeout: 15000 },
+      { args: ["agent", "prompt", "w1:p2", "Ticket T1 is done."], timeout: 10000 },
+      { args: ["pane", "close", "w1:p3"], timeout: 10000 },
+    ]);
+  });
+
+  test("fake herdr: agent start needs a known pane; pane close removes it", () => {
+    const fake = fakeHerdrState({ panes: ["w1:p2"] });
+    const h = new HerdrCli({ bin: FAKE_HERDR, env: { ...process.env, FAKE_HERDR_STATE: fake.file } });
+    h.agentStart({ name: "a", kind: "claude", pane: "w1:p2", args: ["x"] });
+    expect(() => h.agentStart({ name: "b", kind: "claude", pane: "w1:p9", args: [] })).toThrow(/pane w1:p9 not found/);
+    h.closePane("w1:p2");
+    expect(fake.read().panes).toEqual([]);
+    expect(fake.read().agents).toEqual(["a"]);
+  });
+});

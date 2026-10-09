@@ -10,6 +10,7 @@ interface FakeState {
   fail?: string[];
   hang?: string[];
   envs: (string | null)[];
+  agents?: string[];
 }
 
 const file = process.env.FAKE_HERDR_STATE;
@@ -66,5 +67,16 @@ if (group === "pane" && sub === "split") {
   const pane = `w1:p${n}`;
   state.panes.push(pane);
   ok({ type: "pane_split", pane: { pane_id: pane } });
+}
+if (group === "agent" && sub === "start") {
+  const pane = args[args.indexOf("--pane") + 1] ?? "";
+  if (!state.panes.includes(pane)) fail("pane_not_found", `pane ${pane} not found`);
+  state.agents = [...(state.agents ?? []), target ?? ""];
+  ok({ type: "agent_started", agent: { name: target, pane_id: pane } });
+}
+if (group === "pane" && sub === "close") {
+  if (!state.panes.includes(target ?? "")) fail("pane_not_found", `pane ${target} not found`);
+  state.panes = state.panes.filter((p) => p !== target);
+  ok({ type: "ok" });
 }
 ok({ type: "ok" });

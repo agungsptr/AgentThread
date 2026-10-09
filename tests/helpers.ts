@@ -59,6 +59,21 @@ export function isolatedConfigHome(): string {
 
 export const FAKE_HERDR = join(import.meta.dir, "fixtures", "fake-herdr.ts");
 
+export const FAKE_CLAUDE = join(import.meta.dir, "fixtures", "fake-claude.ts");
+
+type Maybe<T> = T | undefined | false | null;
+
+/** Polls `fn` (sync or async) until it returns a truthy value. */
+export async function waitFor<T>(fn: () => Maybe<T> | Promise<Maybe<T>>, timeoutMs = 5000): Promise<T> {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    const v = await fn();
+    if (v) return v;
+    await Bun.sleep(50);
+  }
+  throw new Error("waitFor timed out");
+}
+
 export interface FakeHerdrState {
   next: number;
   tabs: string[];
@@ -67,6 +82,7 @@ export interface FakeHerdrState {
   fail?: string[];
   hang?: string[];
   envs: (string | null)[];
+  agents?: string[];
 }
 
 /** A state file for tests/fixtures/fake-herdr.ts; pass `file` as FAKE_HERDR_STATE. */

@@ -45,6 +45,9 @@ export interface HerdrBridge {
   splitPane(o: { pane: string; direction: "right" | "down"; cwd: string; env: Record<string, string> }): string;
   renamePane(paneId: string, label: string): void;
   runInPane(paneId: string, command: string): void;
+  agentStart(o: { name: string; kind: "claude" | "opencode"; pane: string; args: string[]; timeoutMs?: number }): void;
+  agentPrompt(target: string, text: string): void;
+  closePane(pane: string): void;
 }
 
 const envArgs = (env: Record<string, string>) => Object.entries(env).flatMap(([k, v]) => ["--env", `${k}=${v}`]);
@@ -98,9 +101,24 @@ export class HerdrCli implements HerdrBridge {
     this.call(["pane", "run", paneId, command]);
   }
 
-  private call(args: string[]): unknown {
+  agentStart(o: { name: string; kind: "claude" | "opencode"; pane: string; args: string[]; timeoutMs?: number }): void {
+    const herdrTimeout = o.timeoutMs ?? 60_000;
+    this.call(
+      ["agent", "start", o.name, "--kind", o.kind, "--pane", o.pane, "--timeout", String(herdrTimeout), "--", ...o.args],
+      herdrTimeout + 10_000,
+    );
+  }
+
+  agentPrompt(target: string, text: string): void {
+    this.call(["agent", "prompt", target, text]);
+  }
+
+  closePane(pane: string): void {
+    this.call(["pane", "close", pane]);
+  }
+
+  private call(args: string[], timeoutMs = this.opts.timeoutMs ?? DEFAULT_TIMEOUT_MS): unknown {
     const what = `herdr ${args.slice(0, 2).join(" ")}`;
-    const timeoutMs = this.opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const r = (this.opts.runner ?? spawnRunner)(this.opts.bin, args, this.opts.env ?? process.env, timeoutMs);
     if (r.timedOut) throw new HerdrError("timeout", `${what}: timed out after ${timeoutMs}ms`);
     if (r.exitCode !== 0) {
