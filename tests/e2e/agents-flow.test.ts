@@ -1,0 +1,82 @@
+import { afterAll, beforeAll, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { parse } from "yaml";
+import { initProject } from "../../src/project/init.ts";
+import { FAKE_CLAUDE, FAKE_HERDR, fakeHerdrState, isolatedConfigHome, tempRepo, waitFor } from "../helpers.ts";
+
+const BIN = join(import.meta.dir, "../../bin/agt");
+let root: string;
+let fake: ReturnType<typeof fakeHerdrState>;
+let xdg: string;
+
+function agt(args: string[], extra: Record<string, string> = {}, stdin?: string) {
+  const r = Bun.spawnSync([process.execPath, BIN, ...args], {
+    cwd: root,
+    env: {
+      PATH: process.env.PATH ?? "", HOME: "/nonexistent", XDG_CONFIG_HOME: xdg, AGT_ROOT: root, FAKE_HERDR_STATE: fake.file,
+      HERDR_ENV: "1", HERDR_WORKSPACE_ID: "w1", HERDR_TAB_ID: "w1:t0", HERDR_PANE_ID: "w1:p0", HERDR_BIN_PATH: FAKE_HERDR,
+      AGT_CLAUDE_BIN: FAKE_CLAUDE, ...extra,
+    },
+    stdin: stdin === undefined ? "ignore" : Buffer.from(stdin),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (r.exitCode !== 0) throw new Error(`agt ${args.join(" ")} failed: ${r.stderr.toString()}`);
+  return r.stdout.toString().trim();
+}
+
+type Fm = { sessions: { id: string; role: string; ticket?: string; status: string; pane?: string }[] };
+const fm = () => parse(readFileSync(join(root, ".agentthread/threads/001-login/sub.thread.md"), "utf8").split("---\n")[1]!) as Fm;
+const session = (role: string, ticket?: string) => fm().sessions.find((s) => s.role === role && (ticket === undefined || s.ticket === ticket));
+const spawned = (role: string, ticket?: string) => {
+  const s = session(role, ticket);
+  return s?.pane ? s : undefined;
+};
+const hook = (signal: string, id: string, env: Record<string, string> = {}) => agt(["event", signal], env, JSON.stringify({ session_id: id }));
+const coordEnv = { AGT_ROLE: "coordinator", AGT_THREAD: "001" };
+
+beforeAll(() => {
+  root = tempRepo();
+  initProject(root, "shop");
+  fake = fakeHerdrState({ tabs: ["w1:t0"], panes: ["w1:p0"] });
+  xdg = isolatedConfigHome();
+});
+
+afterAll(() => {
+  try {
+    agt(["daemon", "stop"]);
+  } catch {
+    // never started
+  }
+});
+
+test("coordinator spawns, workers queue and rotate, notices reach the idle coordinator", async () => {
+  agt(["start", "--no-manager"]);
+  agt(["thread", "new", "Login", "--type", "feature", "--max-workers", "1"]);
+
+  const c = await waitFor(() => spawned("coordinator"), 10_000);
+  expect(c.pane).toBe("w1:p2");
+  hook("started", c.id, coordEnv);
+  agt(["thread", "status", "001", "in_progress"], coordEnv);
+  agt(["ticket", "add", "001", "API", "--scope", "src/api"], coordEnv);
+  agt(["ticket", "add", "001", "UI", "--scope", "src/ui"], coordEnv);
+  agt(["worker", "spawn", "001", "--ticket", "T1"], coordEnv);
+  expect(agt(["worker", "spawn", "001", "--ticket", "T2"], coordEnv)).toBe('{"queued":true}');
+  hook("idle", c.id, coordEnv);
+
+  const w1 = await waitFor(() => spawned("worker", "T1"), 10_000);
+  const w1Env = { AGT_ROLE: "worker", AGT_THREAD: "001", AGT_SESSION: w1.id, AGT_TICKET: "T1" };
+  hook("started", w1.id, w1Env);
+  agt(["ticket", "claim", "001/T1"], w1Env);
+  agt(["ticket", "done", "001/T1", "--summary", "endpoint added"], w1Env);
+  hook("idle", w1.id, w1Env);
+
+  expect(fake.read().calls.some((x) => x.join(" ") === `pane close ${w1.pane}`)).toBe(true);
+  expect(fm().sessions.find((s) => s.id === w1.id)!.status).toBe("ended");
+  const w2 = await waitFor(() => spawned("worker", "T2"), 10_000);
+  expect(w2.pane).not.toBe(w1.pane);
+
+  const prompts = fake.read().calls.filter((x) => x[0] === "agent" && x[1] === "prompt" && x[2] === "w1:p2").map((x) => x[3]);
+  expect(prompts).toContain("Ticket T1 is done: endpoint added.");
+});
