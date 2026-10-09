@@ -53,7 +53,7 @@ afterAll(() => {
 });
 
 test("start → tabs per thread → manual close recovered → done closes tab", () => {
-  agt(["start"]);
+  agt(["start", "--no-manager"]);
   agt(["thread", "new", "OAuth login", "--type", "feature"]);
   agt(["thread", "new", "Fix session race", "--type", "bug", "--depends", "001"]);
   expect(tabOf("001-oauth-login")).toBe("w1:t2");
@@ -62,7 +62,7 @@ test("start → tabs per thread → manual close recovered → done closes tab",
   // The user closes 002's tab by hand; the next start reopens exactly that one.
   const s = fake.read();
   writeFileSync(fake.file, JSON.stringify({ ...s, tabs: s.tabs.filter((t) => t !== "w1:t3") }));
-  expect(agt(["start"]).split("\n")).toEqual([
+  expect(agt(["start", "--no-manager"]).split("\n")).toEqual([
     "layout already set up (main tab w1:t0)",
     "subthread tabs reconciled (2 open threads)",
   ]);

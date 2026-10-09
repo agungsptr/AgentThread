@@ -51,11 +51,11 @@ afterEach(() => {
 });
 
 test("refuses to run outside Herdr", () => {
-  expect(agt(["start"], {}, { herdr: false })).toMatchObject({ code: 1, err: "agt: agt start must run inside a Herdr pane" });
+  expect(agt(["start", "--no-manager"], {}, { herdr: false })).toMatchObject({ code: 1, err: "agt: agt start must run inside a Herdr pane" });
 });
 
 test("builds the main tab: rename, split a logger running agt logs -f, register, reconcile", () => {
-  const r = agt(["start"]);
+  const r = agt(["start", "--no-manager"]);
   expect(r.code).toBe(0);
   expect(r.out.split("\n")).toEqual([
     "main tab w1:t0: main manager w1:p0, logger w1:p1",
@@ -72,9 +72,9 @@ test("builds the main tab: rename, split a logger running agt logs -f, register,
 });
 
 test("a second start keeps the existing layout", () => {
-  agt(["start"]);
+  agt(["start", "--no-manager"]);
   const before = fake.read().calls.length;
-  const r = agt(["start"]);
+  const r = agt(["start", "--no-manager"]);
   expect(r.out.split("\n")[0]).toBe("layout already set up (main tab w1:t0)");
   const after = fake.read().calls.slice(before);
   expect(after).toEqual([["tab", "get", "w1:t0"]]);
@@ -83,30 +83,30 @@ test("a second start keeps the existing layout", () => {
 test("uses the configured main tab label", () => {
   mkdirSync(join(xdg, "agentthread"), { recursive: true });
   writeFileSync(join(xdg, "agentthread", "config.yaml"), "herdr:\n  main_tab_label: home\n");
-  agt(["start"]);
+  agt(["start", "--no-manager"]);
   expect(fake.read().calls[0]).toEqual(["tab", "rename", "w1:t0", "home"]);
 });
 
 test("subthreads created after start get their own tab", () => {
-  agt(["start"]);
+  agt(["start", "--no-manager"]);
   expect(JSON.parse(agt(["thread", "new", "Fix", "--type", "bug"]).out)).toMatchObject({ thread: "001" });
   expect(fake.read().tabs).toEqual(["w1:t0", "w1:t2"]);
 });
 
 test("refuses to run from a subthread pane and touches nothing in Herdr", () => {
-  const r = agt(["start"], { AGT_ROLE: "coordinator", AGT_THREAD: "001" });
+  const r = agt(["start", "--no-manager"], { AGT_ROLE: "coordinator", AGT_THREAD: "001" });
   expect(r).toMatchObject({ code: 1, err: "agt: agt start must run from the main tab, not a subthread pane" });
   expect(fake.read().calls).toEqual([]);
-  expect(agt(["start"], { AGT_ROLE: "worker" }).code).toBe(1);
+  expect(agt(["start", "--no-manager"], { AGT_ROLE: "worker" }).code).toBe(1);
   expect(fake.read().calls).toEqual([]);
 });
 
 test("runs from a pane whose AGT_ROLE is main", () => {
-  expect(agt(["start"], { AGT_ROLE: "main" }).code).toBe(0);
+  expect(agt(["start", "--no-manager"], { AGT_ROLE: "main" }).code).toBe(0);
 });
 
 test("the daemon's herdr calls carry HERDR_SOCKET_PATH", () => {
-  agt(["start"]);
+  agt(["start", "--no-manager"]);
   agt(["thread", "new", "Fix", "--type", "bug"]);
   const s = fake.read();
   const i = s.calls.findIndex((c) => c[0] === "tab" && c[1] === "create");
@@ -115,17 +115,17 @@ test("the daemon's herdr calls carry HERDR_SOCKET_PATH", () => {
 });
 
 test("rebuilds a stale layout after Herdr restarted with a new main tab", () => {
-  agt(["start"]);
+  agt(["start", "--no-manager"]);
   const stale = fake.read();
   writeFileSync(fake.file, JSON.stringify({ ...stale, tabs: ["w1:t9"], panes: ["w1:p9"], calls: [] }));
-  const r = agt(["start"], { HERDR_TAB_ID: "w1:t9", HERDR_PANE_ID: "w1:p9" });
+  const r = agt(["start", "--no-manager"], { HERDR_TAB_ID: "w1:t9", HERDR_PANE_ID: "w1:p9" });
   expect(r.code).toBe(0);
   const calls = fake.read().calls;
   expect(calls.filter((c) => c[0] === "tab" && c[1] === "rename")).toEqual([["tab", "rename", "w1:t9", "main"]]);
   expect(calls.filter((c) => c[0] === "pane" && c[1] === "split")).toHaveLength(1);
   expect(r.out.split("\n")[0]).toMatch(/^main tab w1:t9: main manager w1:p9, logger /);
   // the new layout is registered: a third start sees it and leaves Herdr alone
-  const again = agt(["start"], { HERDR_TAB_ID: "w1:t9", HERDR_PANE_ID: "w1:p9" });
+  const again = agt(["start", "--no-manager"], { HERDR_TAB_ID: "w1:t9", HERDR_PANE_ID: "w1:p9" });
   expect(again.out.split("\n")[0]).toBe("layout already set up (main tab w1:t9)");
 });
 

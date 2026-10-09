@@ -1,13 +1,16 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { closeSync, openSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { stringify } from "yaml";
+import { agentEnv, claudeArgs } from "../agents/claude.ts";
+import { systemPrompt } from "../agents/prompts.ts";
 import { decodeJob, runSpawnJob } from "../agents/spawn-job.ts";
 import { isAlive, request } from "../daemon/client.ts";
 import { startDaemon } from "../daemon/server.ts";
 import { loadConfig } from "../config/config.ts";
-import { ROLES, type Actor, type Layout, type StoredEvent } from "../domain/types.ts";
+import { ROLES, SESSION_SIGNALS, type Actor, type Layout, type StoredEvent } from "../domain/types.ts";
 import { HerdrCli, shellQuote } from "../herdr/bridge.ts";
 import { initProject } from "../project/init.ts";
 import { paths } from "../project/paths.ts";
@@ -18,10 +21,10 @@ type Env = Record<string, string | undefined>;
 const USAGE = `usage: agt <command>
 
   init [--name <name>]
-  start                      set up the Herdr layout (run inside a Herdr pane)
+  start [--no-manager]       set up the Herdr layout and run the main manager (inside a Herdr pane)
   daemon start|stop|status
   config
-  thread new <title...> --type feature|bug|chore [--goal <text>] [--criteria <text>]... [--depends <id>]...
+  thread new <title...> --type feature|bug|chore [--goal <text>] [--criteria <text>]... [--depends <id>]... [--max-workers <n>]
   thread status <id> <status> [--reason <text>]
   ticket add <thread> <title...> --scope <path> [--scope <path>]...
   ticket claim|reopen <thread>/<ticket>
@@ -30,6 +33,9 @@ const USAGE = `usage: agt <command>
   log <thread> <message...>
   decide <thread> <message...>
   handoff <thread> --file <path>
+  worker spawn <thread> --ticket <T>
+  tell <thread|main> <message...>
+  event started|active|idle|compacting|ended   (used by Claude Code hooks)
   logs [-f]`;
 
 class UsageError extends Error {}
@@ -104,7 +110,7 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
       console.log(stringify(loadConfig(findRoot(cwd, env), env)).trimEnd());
       return 0;
     case "start":
-      return start(findRoot(cwd, env), env);
+      return start(findRoot(cwd, env), env, argv.slice(1));
     case "thread":
       return thread(sub, rest, findRoot(cwd, env), env);
     case "ticket":
@@ -121,6 +127,19 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
       const content = readFileSync(resolve(cwd, values.file as string), "utf8");
       return send(findRoot(cwd, env), env, { cmd: "handoff", thread: positionals[0], content });
     }
+    case "worker": {
+      if (sub !== "spawn") throw new UsageError(`unknown worker subcommand '${sub ?? ""}'`);
+      const { values, positionals } = parse(rest, { ticket: { type: "string" } });
+      if (!positionals[0] || !values.ticket) throw new UsageError("worker spawn needs <thread> --ticket <T>");
+      return send(findRoot(cwd, env), env, { cmd: "worker.spawn", thread: positionals[0], ticket: values.ticket });
+    }
+    case "tell": {
+      const [target, ...words] = argv.slice(1);
+      if (!target || !words.length) throw new UsageError("tell needs <thread|main> <message>");
+      return send(findRoot(cwd, env), env, { cmd: "tell", target, message: words.join(" ") });
+    }
+    case "event":
+      return hookEvent(sub, env, cwd);
     case "logs": {
       const { values } = parse(argv.slice(1), { follow: { type: "boolean", short: "f" } });
       return logs(findRoot(cwd, env), Boolean(values.follow));
@@ -155,8 +174,14 @@ async function thread(sub: string | undefined, args: string[], root: string, env
       goal: { type: "string" },
       criteria: { type: "string", multiple: true },
       depends: { type: "string", multiple: true },
+      "max-workers": { type: "string" },
     });
     if (!positionals.length || !values.type) throw new UsageError("thread new needs <title> --type <type>");
+    let maxWorkers: number | undefined;
+    if (values["max-workers"] !== undefined) {
+      maxWorkers = Number(values["max-workers"]);
+      if (!Number.isInteger(maxWorkers)) throw new UsageError("--max-workers must be an integer");
+    }
     return send(root, env, {
       cmd: "thread.new",
       title: positionals.join(" "),
@@ -164,6 +189,7 @@ async function thread(sub: string | undefined, args: string[], root: string, env
       goal: values.goal ?? "",
       criteria: values.criteria ?? [],
       dependsOn: values.depends ?? [],
+      maxWorkers,
     });
   }
   if (sub === "status") {
@@ -224,7 +250,8 @@ async function ensureDaemon(root: string, env: Env): Promise<"started" | "runnin
   throw new Error(`daemon failed to start; see ${p.daemonLog}`);
 }
 
-async function start(root: string, env: Env): Promise<number> {
+async function start(root: string, env: Env, argv: string[]): Promise<number> {
+  const { values } = parse(argv, { "no-manager": { type: "boolean" } });
   const workspace = env.HERDR_WORKSPACE_ID;
   const mainTab = env.HERDR_TAB_ID;
   const managerPane = env.HERDR_PANE_ID;
@@ -262,6 +289,40 @@ async function start(root: string, env: Env): Promise<number> {
 
   const reconciled = (await commandOrThrow(socket, { cmd: "layout.reconcile" })) as { threads: number };
   console.log(`subthread tabs reconciled (${reconciled.threads} open threads)`);
+
+  if (values["no-manager"]) return 0;
+  const session = randomUUID();
+  await commandOrThrow(socket, { cmd: "session.open_main", session, pane: managerPane });
+  console.log(`main manager session ${session}`);
+  const proc = Bun.spawn([env.AGT_CLAUDE_BIN ?? "claude", ...claudeArgs({ session, role: "main", systemPrompt: systemPrompt({ root, role: "main" }), config })], {
+    stdio: ["inherit", "inherit", "inherit"],
+    env: { ...env, ...agentEnv({ root, role: "main", session }) },
+  });
+  const code = await proc.exited;
+  try {
+    await request(socket, { op: "command", command: { cmd: "session.signal", session, signal: "ended" }, actor: { role: "user" } }, 3_000);
+  } catch {
+    // the SessionEnd hook normally reports this already
+  }
+  return code;
+}
+
+/** Runs inside Claude Code hooks: it must never fail or hang the agent, so every problem is reported and swallowed. */
+async function hookEvent(signal: string | undefined, env: Env, cwd: string): Promise<number> {
+  try {
+    if (!signal || !(SESSION_SIGNALS as readonly string[]).includes(signal)) throw new Error(`unknown signal '${signal ?? ""}'`);
+    const input = process.stdin.isTTY ? "" : (await Bun.stdin.text()).trim();
+    let session = env.AGT_SESSION;
+    if (input) {
+      const parsed = JSON.parse(input) as { session_id?: unknown };
+      if (typeof parsed.session_id === "string") session = parsed.session_id;
+    }
+    if (!session) throw new Error("no session id (hook stdin session_id or AGT_SESSION)");
+    const res = await request(paths(findRoot(cwd, env)).socket, { op: "command", command: { cmd: "session.signal", session, signal }, actor: actorFromEnv(env) }, 3_000);
+    if (!res.ok) throw new Error(res.error);
+  } catch (e) {
+    console.error(`agt event: ${e instanceof Error ? e.message : String(e)}`);
+  }
   return 0;
 }
 
