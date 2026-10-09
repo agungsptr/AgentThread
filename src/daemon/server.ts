@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { rmSync } from "node:fs";
 import { handle, type Effect } from "../commands/handler.ts";
 import { ActorSchema, CommandSchema } from "../commands/schema.ts";
 import { addWorktree } from "../project/git.ts";
@@ -6,9 +6,9 @@ import { paths } from "../project/paths.ts";
 import { writeAll } from "../render/write.ts";
 import { applyEvent, project } from "../state/projection.ts";
 import { EventStore } from "../store/event-store.ts";
-import { isAlive } from "./client.ts";
 import { LineReader, LineWriter } from "./framing.ts";
 import type { Request, Response } from "./protocol.ts";
+import { ensureSocketDir } from "./socket-dir.ts";
 
 export interface Daemon {
   stop(): Promise<void>;
@@ -17,19 +17,19 @@ export interface Daemon {
 
 export async function startDaemon(root: string): Promise<Daemon> {
   const p = paths(root);
-  if (existsSync(p.socket)) {
-    if (await isAlive(p.socket)) throw new Error("daemon already running");
-    rmSync(p.socket, { force: true });
-  }
-
+  // Taking the exclusive store lock first makes "one daemon per project" a property of state.db, not of the socket path.
   const store = new EventStore(p.db, { exclusive: true });
-  const state = project(store.all());
-  if (!state.project) {
+  let state: ReturnType<typeof project>;
+  try {
+    state = project(store.all());
+    if (!state.project) throw new Error("project not initialized; run `agt init`");
+    ensureSocketDir(p.socketDir);
+    rmSync(p.socket, { force: true });
+    writeAll(root, state);
+  } catch (e) {
     store.close();
-    throw new Error("project not initialized; run `agt init`");
+    throw e;
   }
-  writeAll(root, state);
-  mkdirSync(p.socketDir, { recursive: true, mode: 0o700 });
 
   // Every command runs strictly one after another: this queue is what makes the daemon the single writer.
   let chain: Promise<unknown> = Promise.resolve();

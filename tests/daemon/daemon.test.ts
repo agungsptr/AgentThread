@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { request } from "../../src/daemon/client.ts";
 import { startDaemon, type Daemon } from "../../src/daemon/server.ts";
 import type { Actor, StoredEvent } from "../../src/domain/types.ts";
+import { EventStore } from "../../src/store/event-store.ts";
 import { initProject } from "../../src/project/init.ts";
 import { paths } from "../../src/project/paths.ts";
 import { tempRepo } from "../helpers.ts";
@@ -122,4 +123,25 @@ test("commands are rejected once shutdown is requested", async () => {
   await request(sock(), { op: "shutdown" });
   const r = await cmd({ cmd: "thread.new", title: "Late", type: "bug" }).catch((e: Error) => ({ ok: false, error: e.message }));
   expect(r.ok).toBe(false);
+});
+
+test("a refused start never touches the socket of the daemon that holds the lock", async () => {
+  await daemon.stop();
+  const holder = new EventStore(paths(root).db, { exclusive: true });
+  writeFileSync(sock(), "sentinel");
+  try {
+    await expect(startDaemon(root)).rejects.toThrow("daemon already running");
+    expect(readFileSync(sock(), "utf8")).toBe("sentinel");
+  } finally {
+    holder.close();
+    rmSync(sock(), { force: true });
+  }
+  daemon = await startDaemon(root);
+});
+
+test("socket directory is forced back to 0700", async () => {
+  await daemon.stop();
+  chmodSync(paths(root).socketDir, 0o755);
+  daemon = await startDaemon(root);
+  expect(statSync(paths(root).socketDir).mode & 0o777).toBe(0o700);
 });
