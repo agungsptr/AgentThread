@@ -1,10 +1,19 @@
 import { join } from "node:path";
+import { DEFAULT_CONFIG, type Config } from "../config/config.ts";
 import { canTransitionThread, canTransitionTicket, scopesOverlap, slugify, validateHandoff } from "../domain/rules.ts";
 import { ROLES, type Actor, type EventBody, type Role, type ThreadStatus, type TicketStatus } from "../domain/types.ts";
 import type { State, Thread, Ticket } from "../state/projection.ts";
 import type { Command, CommandName } from "./schema.ts";
 
-export type Effect = { kind: "git.worktree.add"; branch: string; path: string };
+export type Effect =
+  | { kind: "git.worktree.add"; branch: string; path: string }
+  | { kind: "herdr.tab.ensure"; thread: string; label: string; cwd: string; tab?: string }
+  | { kind: "herdr.tab.close"; thread: string; tab: string };
+
+export interface HandlerContext {
+  root: string;
+  config?: Config;
+}
 
 export type HandleResult =
   | { ok: true; events: EventBody[]; effects: Effect[]; result: unknown }
@@ -27,6 +36,8 @@ const ALLOWED: Record<CommandName, readonly Role[]> = {
   log: ROLES,
   decide: ["coordinator"],
   handoff: ["main", "coordinator", "worker"],
+  "layout.register": ["user"],
+  "layout.reconcile": ["user"],
 };
 
 class Rejection extends Error {}
@@ -35,7 +46,7 @@ function reject(message: string): never {
   throw new Rejection(message);
 }
 
-export function handle(state: State, cmd: Command, actor: Actor, ctx: { root: string }): HandleResult {
+export function handle(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): HandleResult {
   try {
     const d = decide(state, cmd, actor, ctx);
     return { ok: true, events: d.events, effects: d.effects ?? [], result: d.result ?? null };
@@ -45,10 +56,19 @@ export function handle(state: State, cmd: Command, actor: Actor, ctx: { root: st
   }
 }
 
-function decide(state: State, cmd: Command, actor: Actor, ctx: { root: string }): Decision {
+function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): Decision {
   if (!state.project) reject("project not initialized; run `agt init`");
   if (!ALLOWED[cmd.cmd].includes(actor.role)) reject(`role ${actor.role} may not run ${cmd.cmd}`);
   if (cmd.cmd === "thread.new") return newThread(state, cmd, ctx);
+  if (cmd.cmd === "layout.register") {
+    const { cmd: _cmd, ...layout } = cmd;
+    return { events: [{ type: "layout.registered", payload: layout }] };
+  }
+  if (cmd.cmd === "layout.reconcile") {
+    if (!state.layout) reject("no Herdr layout registered; run `agt start`");
+    const open = [...state.threads.values()].filter((t) => t.status !== "done");
+    return { events: [], effects: open.map(tabEnsure), result: { threads: open.length } };
+  }
 
   const t = state.threads.get(cmd.thread) ?? reject(`unknown thread ${cmd.thread}`);
   if ((actor.role === "coordinator" || actor.role === "worker") && actor.thread !== t.id) {
@@ -57,7 +77,7 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: { root: string })
 
   switch (cmd.cmd) {
     case "thread.status":
-      return threadStatus(state, t, cmd.status, cmd.reason);
+      return threadStatus(state, t, cmd.status, cmd.reason, ctx);
     case "ticket.add": {
       if (t.status === "done") reject(`thread ${t.id} is done`);
       const ticket = `T${t.tickets.length + 1}`;
@@ -101,7 +121,7 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: { root: string })
   }
 }
 
-function newThread(state: State, cmd: Extract<Command, { cmd: "thread.new" }>, ctx: { root: string }): Decision {
+function newThread(state: State, cmd: Extract<Command, { cmd: "thread.new" }>, ctx: HandlerContext): Decision {
   for (const dep of cmd.dependsOn) if (!state.threads.has(dep)) reject(`unknown dependency ${dep}`);
   const next = Math.max(0, ...[...state.threads.keys()].map(Number)) + 1;
   const id = String(next).padStart(3, "0");
@@ -128,12 +148,15 @@ function newThread(state: State, cmd: Extract<Command, { cmd: "thread.new" }>, c
         },
       },
     ],
-    effects: [{ kind: "git.worktree.add", branch, path: worktree }],
+    effects: [
+      { kind: "git.worktree.add", branch, path: worktree },
+      ...(state.layout ? [tabEnsure({ id, slug, worktree })] : []),
+    ],
     result: { thread: id, worktree },
   };
 }
 
-function threadStatus(state: State, t: Thread, to: ThreadStatus, reason: string | undefined): Decision {
+function threadStatus(state: State, t: Thread, to: ThreadStatus, reason: string | undefined, ctx: HandlerContext): Decision {
   if (!canTransitionThread(t.status, to)) reject(`thread ${t.id} cannot go ${t.status} → ${to}`);
   if ((to === "open" || to === "in_progress") && !depsDone(state, t.dependsOn)) {
     reject(`thread ${t.id} has unfinished dependencies: ${t.dependsOn.join(", ")}`);
@@ -150,7 +173,9 @@ function threadStatus(state: State, t: Thread, to: ThreadStatus, reason: string 
       }
     }
   }
-  return { events };
+  const config = ctx.config ?? DEFAULT_CONFIG;
+  const effects: Effect[] = to === "done" && t.tab && config.herdr.close_tab_on_done ? [{ kind: "herdr.tab.close", thread: t.id, tab: t.tab }] : [];
+  return { events, effects };
 }
 
 function depsDone(state: State, deps: string[], alsoDone?: string): boolean {
@@ -179,4 +204,8 @@ function assignedTicket(t: Thread, id: string, actor: Actor): Ticket {
 
 function transitionTicket(k: Ticket, to: TicketStatus): void {
   if (!canTransitionTicket(k.status, to)) reject(`ticket ${k.id} cannot go ${k.status} → ${to}`);
+}
+
+function tabEnsure(t: { id: string; slug: string; worktree: string; tab?: string }): Effect {
+  return { kind: "herdr.tab.ensure", thread: t.id, label: `${t.id}-${t.slug}`, cwd: t.worktree, ...(t.tab ? { tab: t.tab } : {}) };
 }

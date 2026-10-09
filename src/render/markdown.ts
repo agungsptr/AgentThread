@@ -42,6 +42,7 @@ export function renderSub(t: Thread): string {
     depends_on: t.dependsOn,
     branch: t.branch,
     worktree: t.worktree,
+    tab: t.tab ?? null,
     sessions: [],
   }).trimEnd();
   const handoff = t.handoff

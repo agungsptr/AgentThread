@@ -1,4 +1,4 @@
-import type { Actor, StoredEvent, ThreadStatus, ThreadType, TicketStatus } from "../domain/types.ts";
+import type { Actor, Layout, StoredEvent, ThreadStatus, ThreadType, TicketStatus } from "../domain/types.ts";
 
 export interface Ticket {
   id: string;
@@ -16,6 +16,8 @@ export interface Entry {
 
 export interface Thread {
   id: string;
+  tab?: string;
+  rootPane?: string;
   slug: string;
   title: string;
   type: ThreadType;
@@ -32,6 +34,7 @@ export interface Thread {
 }
 
 export interface State {
+  layout?: Layout;
   project?: { name: string };
   threads: Map<string, Thread>;
   lastSeq: number;
@@ -52,6 +55,11 @@ export function applyEvent(state: State, ev: StoredEvent): void {
 
   if (ev.type === "project.initialized") {
     state.project = { name: ev.payload.name };
+    return;
+  }
+
+  if (ev.type === "layout.registered") {
+    state.layout = ev.payload;
     return;
   }
 
@@ -86,6 +94,16 @@ export function applyEvent(state: State, ev: StoredEvent): void {
   };
 
   switch (ev.type) {
+    case "thread.tab_opened":
+      t.tab = ev.payload.tab;
+      t.rootPane = ev.payload.rootPane;
+      note(t, ev, `herdr tab ${ev.payload.tab} opened`);
+      break;
+    case "thread.tab_closed":
+      delete t.tab;
+      delete t.rootPane;
+      note(t, ev, `herdr tab ${ev.payload.tab} closed`);
+      break;
     case "thread.status_changed": {
       t.status = ev.payload.to;
       const reason = ev.payload.reason ? `: ${ev.payload.reason}` : "";

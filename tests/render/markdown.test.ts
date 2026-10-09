@@ -83,3 +83,13 @@ test("an unclosed code fence in the goal cannot swallow later sections", () => {
   expect(md.match(/^## /gm)).toHaveLength(4);
   expect(md.indexOf("```", md.indexOf("code"))).toBeLessThan(md.indexOf("## Acceptance criteria"));
 });
+
+test("sub thread frontmatter carries the herdr tab", () => {
+  const withTab = stateOf(
+    INIT,
+    threadCreated("001"),
+    { type: "thread.tab_opened", thread: "001", payload: { tab: "w7:t3", rootPane: "w7:p5" } },
+  ).threads.get("001")!;
+  expect(parse(renderSub(withTab).split("---\n")[1]!)).toMatchObject({ tab: "w7:t3" });
+  expect(parse(renderSub(stateOf(INIT, threadCreated("002")).threads.get("002")!).split("---\n")[1]!)).toMatchObject({ tab: null });
+});

@@ -20,7 +20,19 @@ export interface Actor {
   agent?: AgentKind;
 }
 
+export interface Layout {
+  workspace: string;
+  mainTab: string;
+  managerPane: string;
+  loggerPane: string;
+  herdrBin: string;
+  herdrSocket?: string;
+}
+
 export type EventBody =
+  | { type: "layout.registered"; thread?: undefined; payload: Layout }
+  | { type: "thread.tab_opened"; thread: string; payload: { tab: string; rootPane: string } }
+  | { type: "thread.tab_closed"; thread: string; payload: { tab: string } }
   | { type: "project.initialized"; thread?: undefined; payload: { name: string } }
   | {
       type: "thread.created";

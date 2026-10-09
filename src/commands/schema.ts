@@ -3,6 +3,7 @@ import { AGENT_KINDS, ROLES, THREAD_STATUSES, THREAD_TYPES } from "../domain/typ
 
 const threadId = z.string().regex(/^\d{3,}$/, "thread id must be numeric, like 002");
 const ticketId = z.string().regex(/^T\d+$/, "ticket id must look like T1");
+const herdrId = z.string().regex(/^[\w-]+(:[\w-]+)?$/, "invalid herdr id");
 const text = z.string().trim().min(1);
 
 export const CommandSchema = z.discriminatedUnion("cmd", [
@@ -23,6 +24,16 @@ export const CommandSchema = z.discriminatedUnion("cmd", [
   z.object({ cmd: z.literal("log"), thread: threadId, message: text }),
   z.object({ cmd: z.literal("decide"), thread: threadId, message: text }),
   z.object({ cmd: z.literal("handoff"), thread: threadId, content: text }),
+  z.object({
+    cmd: z.literal("layout.register"),
+    workspace: herdrId,
+    mainTab: herdrId,
+    managerPane: herdrId,
+    loggerPane: herdrId,
+    herdrBin: text,
+    herdrSocket: z.string().optional(),
+  }),
+  z.object({ cmd: z.literal("layout.reconcile") }),
 ]);
 
 export type Command = z.infer<typeof CommandSchema>;
