@@ -80,6 +80,7 @@ export interface FakeHerdrState {
   panes: string[];
   calls: string[][];
   fail?: string[];
+  failCode?: Record<string, string>;
   hang?: string[];
   envs: (string | null)[];
   agents?: string[];

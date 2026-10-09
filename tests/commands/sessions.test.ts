@@ -35,8 +35,8 @@ describe("agentName", () => {
   test("is herdr-safe and per role", () => {
     expect(agentName("/repo", "main")).toMatch(/^agt-[0-9a-f]{4}-main$/);
     expect(agentName("/repo", "coordinator", "001")).toBe(`agt-${H}-c001`);
-    expect(agentName("/repo", "worker", "001", "T12")).toBe(`agt-${H}-w001-t12`);
-    expect(agentName("/repo", "worker", "001", "T12")).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
+    expect(agentName("/repo", "worker", "001", "T12", "ab-cd1234-ef")).toBe(`agt-${H}-w001-t12-abcd`);
+    expect(agentName("/repo", "worker", "999", "T999", "ffffffff-ffff-4fff-8fff-ffffffffffff")).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
   });
 });
 
@@ -47,7 +47,7 @@ describe("worker.spawn", () => {
     expect(first.ok && first.result).toEqual({ session: "00000000-0000-4000-8000-000000000001", queued: false });
     expect(first.ok && first.effects).toEqual([
       {
-        kind: "agent.spawn", session: "00000000-0000-4000-8000-000000000001", role: "worker", name: `agt-${H}-w001-t1`,
+        kind: "agent.spawn", session: "00000000-0000-4000-8000-000000000001", role: "worker", name: `agt-${H}-w001-t1-0000`,
         thread: "001", ticket: "T1", cwd: "/repo/.worktrees/001-thread-001", splitFrom: "w1:p2", direction: "right",
       },
     ]);
@@ -111,6 +111,20 @@ describe("sessions", () => {
     expect(s.sessions.get(id)!.status).toBe("failed");
     expect(exec(s, { cmd: "session.attached", session: id, pane: "w1:p9" })).toMatchObject({ ok: true, events: [] });
     expect(err(exec(s, { cmd: "session.failed", session: id, reason: "x" }, COORD))).toBe("role coordinator may not run session.failed");
+  });
+
+  test("attached with a pending bootstrap queues it as a notice for the session", () => {
+    const s = threadWithTab();
+    exec(s, { cmd: "worker.spawn", thread: "001", ticket: "T1" }, COORD);
+    const id = "00000000-0000-4000-8000-000000000001";
+    expect(exec(s, { cmd: "session.attached", session: id, pane: "w1:p3", pending: "Start ticket T1 of thread 001 now." })).toMatchObject({
+      ok: true,
+      events: [
+        { type: "session.attached", thread: "001", payload: { session: id, pane: "w1:p3" } },
+        { type: "notice.queued", thread: "001", payload: { session: id, text: "Start ticket T1 of thread 001 now." } },
+      ],
+    });
+    expect(s.sessions.get(id)!.notices).toEqual(["Start ticket T1 of thread 001 now."]);
   });
 
   test("open_main replaces a stale main session; tell reaches main and coordinators", () => {

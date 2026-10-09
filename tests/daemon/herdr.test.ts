@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { AGT_BIN } from "../../src/agents/claude.ts";
 import { parse } from "yaml";
 import { request } from "../../src/daemon/client.ts";
 import { startDaemon, type Daemon } from "../../src/daemon/server.ts";
@@ -61,6 +62,7 @@ test("thread.new opens a tab in the worktree and records it", async () => {
   expect(create).toEqual([
     "tab", "create", "--workspace", "w1", "--cwd", join(root, ".worktrees", "001-fix-race"), "--label", "001-fix-race", "--no-focus",
     "--env", `AGT_ROOT=${root}`, "--env", "AGT_THREAD=001", "--env", "AGT_ROLE=coordinator",
+    "--env", "AGT_AGENT=claude-code", "--env", `PATH=${dirname(AGT_BIN)}:${process.env.PATH ?? ""}`,
   ]);
   expect(frontmatter("001-fix-race")).toMatchObject({ tab: "w1:t1" });
   expect(await events()).toEqual(["project.initialized", "layout.registered", "thread.created", "thread.tab_opened", "session.created"]);

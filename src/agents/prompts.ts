@@ -43,7 +43,7 @@ export function systemPrompt(o: PromptInput): string {
     `Work only inside ${t.worktree}, and only on the files in your ticket's scope (see ${dir}/board.md).`,
     "Steps:",
     `1. agt ticket claim ${t.id}/${o.ticket}`,
-    "2. Implement the ticket and run the relevant tests.",
+    "2. Implement the ticket. Run tests only with commands you are allowed to run without asking for approval; if a command you need requires approval, block the ticket and name the command in the reason.",
     `3. agt ticket done ${t.id}/${o.ticket} --summary "<one line>" — or, if you cannot finish, agt ticket block ${t.id}/${o.ticket} --reason "<why>".`,
     "Do not commit; the coordinator commits. Do not work on other tickets.",
   ].join("\n");

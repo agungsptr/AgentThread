@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
-import { closeSync, openSync } from "node:fs";
-import type { HerdrBridge } from "../herdr/bridge.ts";
+import { appendFileSync, closeSync, openSync } from "node:fs";
+import { HerdrError, type HerdrBridge } from "../herdr/bridge.ts";
 import { AGT_BIN } from "./claude.ts";
 
 export interface SpawnJob {
@@ -24,9 +24,21 @@ export async function runSpawnJob(job: SpawnJob, deps: { herdr: HerdrBridge; rep
   let created: string | undefined;
   try {
     const pane = job.pane ?? (created = deps.herdr.splitPane(job.split!));
-    deps.herdr.agentStart({ name: job.name, kind: job.kind, pane, args: job.args });
-    if (job.bootstrap) deps.herdr.agentPrompt(job.name, job.bootstrap);
-    await deps.report({ cmd: "session.attached", session: job.session, pane });
+    try {
+      deps.herdr.agentStart({ name: job.name, kind: job.kind, pane, args: job.args });
+    } catch (e) {
+      // The agent is in the pane but waiting on a startup dialog (trust, MCP): it is started, just not ready yet.
+      if (!(e instanceof HerdrError && e.code === "agent_not_ready")) throw e;
+    }
+    let pending: string | undefined;
+    if (job.bootstrap) {
+      try {
+        deps.herdr.agentPrompt(job.name, job.bootstrap);
+      } catch {
+        pending = job.bootstrap; // the daemon queues it and delivers it at the agent's first idle
+      }
+    }
+    await deps.report({ cmd: "session.attached", session: job.session, pane, ...(pending ? { pending } : {}) });
   } catch (e) {
     if (created) {
       try {
@@ -39,10 +51,19 @@ export async function runSpawnJob(job: SpawnJob, deps: { herdr: HerdrBridge; rep
   }
 }
 
-export function launchSpawnJob(job: SpawnJob, opts: { logFile: string }): void {
+export function launchSpawnJob(job: SpawnJob, opts: { logFile: string; spawn?: typeof spawn }): void {
   const fd = openSync(opts.logFile, "a");
   try {
-    spawn(process.execPath, [AGT_BIN, "__spawn", encodeJob(job)], { stdio: ["ignore", fd, fd], env: { ...process.env, AGT_ROOT: job.root } }).unref();
+    const child = (opts.spawn ?? spawn)(process.execPath, [AGT_BIN, "__spawn", encodeJob(job)], { stdio: ["ignore", fd, fd], env: { ...process.env, AGT_ROOT: job.root } });
+    // An async spawn error must never crash the daemon; log it instead.
+    child.on("error", (e) => {
+      try {
+        appendFileSync(opts.logFile, `spawn job for session ${job.session} failed: ${e.message}\n`);
+      } catch {
+        // nothing left to report to
+      }
+    });
+    child.unref();
   } finally {
     closeSync(fd);
   }

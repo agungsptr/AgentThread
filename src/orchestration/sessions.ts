@@ -18,12 +18,16 @@ export function workerLimit(t: Thread, config: Config): number {
   return t.maxWorkers ?? config.workers.max_workers;
 }
 
-/** Herdr agent names must be unique per Herdr server, so they carry a short hash of the project root. */
-export function agentName(root: string, role: SessionRole, thread?: string, ticket?: string): string {
+/**
+ * Herdr agent names must be unique per Herdr server, so they carry a short hash of the project root.
+ * Worker names also carry a short session prefix, so a ticket's next worker never reuses an earlier worker's name.
+ */
+export function agentName(root: string, role: SessionRole, thread?: string, ticket?: string, session?: string): string {
   const h = Bun.hash(root).toString(16).padStart(4, "0").slice(-4);
   if (role === "main") return `agt-${h}-main`;
   if (role === "coordinator") return `agt-${h}-c${thread}`;
-  return `agt-${h}-w${thread}-${(ticket ?? "").toLowerCase()}`;
+  const suffix = session ? `-${session.replaceAll("-", "").slice(0, 4).toLowerCase()}` : "";
+  return `agt-${h}-w${thread}-${(ticket ?? "").toLowerCase()}${suffix}`;
 }
 
 export function spawnCoordinator(t: Thread, ctx: SpawnContext): { events: EventBody[]; effects: Effect[] } {
@@ -37,7 +41,7 @@ export function spawnCoordinator(t: Thread, ctx: SpawnContext): { events: EventB
 
 export function spawnWorker(state: State, t: Thread, ticket: string, ctx: SpawnContext): { events: EventBody[]; effects: Effect[] } {
   const session = ctx.newId();
-  const name = agentName(ctx.root, "worker", t.id, ticket);
+  const name = agentName(ctx.root, "worker", t.id, ticket, session);
   const last = liveSessions(state, t.id, "worker")
     .filter((s) => s.pane)
     .at(-1);

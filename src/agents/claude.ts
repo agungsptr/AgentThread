@@ -25,17 +25,19 @@ export function hookSettings() {
 
 const READ_TOOLS = ["Bash(agt *)", "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)"];
 
-export function allowedTools(role: SessionRole, config: Config): string[] {
+/** The thread files live under <root>/.agentthread, outside the agent's worktree cwd; `//abs/path` is Claude's absolute-path rule form. */
+export function allowedTools(role: SessionRole, config: Config, root?: string): string[] {
   const base = role === "main" ? ["Bash(agt *)"] : role === "coordinator" ? [...READ_TOOLS, "Bash(git add *)", "Bash(git commit *)"] : READ_TOOLS;
-  return [...base, ...config.agents.claude.extra_allowed_tools];
+  const stateFiles = root && role !== "main" ? [`Read(/${root}/.agentthread/**)`] : [];
+  return [...base, ...stateFiles, ...config.agents.claude.extra_allowed_tools];
 }
 
-export function claudeArgs(o: { session: string; role: SessionRole; systemPrompt: string; config: Config }): string[] {
+export function claudeArgs(o: { session: string; role: SessionRole; systemPrompt: string; config: Config; root: string }): string[] {
   const claude = o.config.agents.claude;
   return [
     "--session-id", o.session,
     "--permission-mode", claude.permission_mode,
-    "--allowed-tools", allowedTools(o.role, o.config).join(","),
+    "--allowed-tools", allowedTools(o.role, o.config, o.root).join(","),
     "--settings", JSON.stringify(hookSettings()),
     ...(claude.model ? ["--model", claude.model] : []),
     "--append-system-prompt", o.systemPrompt,

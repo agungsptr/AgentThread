@@ -39,7 +39,7 @@ export const CommandSchema = z.discriminatedUnion("cmd", [
   z.object({ cmd: z.literal("worker.spawn"), thread: threadId, ticket: ticketId }),
   z.object({ cmd: z.literal("tell"), target: z.union([threadId, z.literal("main")]), message: text }),
   z.object({ cmd: z.literal("session.signal"), session: sessionId, signal: z.enum(SESSION_SIGNALS) }),
-  z.object({ cmd: z.literal("session.attached"), session: sessionId, pane: herdrId }),
+  z.object({ cmd: z.literal("session.attached"), session: sessionId, pane: herdrId, pending: text.optional() }),
   z.object({ cmd: z.literal("session.failed"), session: sessionId, reason: text }),
   z.object({ cmd: z.literal("session.open_main"), session: sessionId, pane: herdrId }),
 ]);

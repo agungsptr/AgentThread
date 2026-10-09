@@ -81,6 +81,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
       case "session.failed": {
         const s = state.sessions.get(ev.payload.session);
         if (s?.role === "worker") notify(coordinatorOf(s.thread), `Worker for ${s.ticket} failed: ${ev.payload.reason}.`);
+        if (s?.role === "coordinator") notify(liveSessions(state, undefined, "main")[0], `Coordinator for thread ${s.thread} failed: ${ev.payload.reason}.`);
         fillWorkers(s?.thread);
         break;
       }
@@ -93,8 +94,9 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         break;
       case "agent.idle": {
         const s = state.sessions.get(ev.payload.session);
-        const finished =
-          s && isLive(s) && s.role === "worker" && s.thread && state.threads.get(s.thread)?.tickets.find((k) => k.id === s.ticket)?.status === "done";
+        const ticketStatus = s?.thread ? state.threads.get(s.thread)?.tickets.find((k) => k.id === s.ticket)?.status : undefined;
+        // A worker whose ticket is done or blocked has nothing left to do; ending it frees its slot.
+        const finished = s && isLive(s) && s.role === "worker" && (ticketStatus === "done" || ticketStatus === "blocked");
         if (!finished) {
           deliver(s);
         } else if (end(s) && ctx.config.herdr.close_worker_pane_on_end && s.pane) {

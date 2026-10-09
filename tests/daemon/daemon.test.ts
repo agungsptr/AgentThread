@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:te
 import { chmodSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { request } from "../../src/daemon/client.ts";
-import { startDaemon, type Daemon } from "../../src/daemon/server.ts";
+import { runFollowUps, startDaemon, type Daemon } from "../../src/daemon/server.ts";
 import type { Actor, StoredEvent } from "../../src/domain/types.ts";
 import { EventStore } from "../../src/store/event-store.ts";
 import { initProject } from "../../src/project/init.ts";
@@ -154,4 +154,17 @@ test("socket directory is forced back to 0700", async () => {
   chmodSync(paths(root).socketDir, 0o755);
   daemon = await startDaemon(root);
   expect(statSync(paths(root).socketDir).mode & 0o777).toBe(0o700);
+});
+
+test("follow-up rounds stop at the cap and say so; a settled chain logs nothing", () => {
+  const ev = { seq: 1 } as StoredEvent;
+  const logged: string[] = [];
+  let rounds = 0;
+  runFollowUps([ev], () => (rounds++, [ev]), (m) => logged.push(m));
+  expect(rounds).toBe(10);
+  expect(logged).toEqual(["reactor stopped after 10 rounds"]);
+  rounds = 0;
+  runFollowUps([ev], () => (++rounds < 3 ? [ev] : []), (m) => logged.push(m));
+  expect(rounds).toBe(3);
+  expect(logged).toHaveLength(1);
 });

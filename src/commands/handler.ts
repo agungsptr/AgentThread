@@ -123,7 +123,13 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
     const s = state.sessions.get(cmd.session) ?? reject(`unknown session ${cmd.session}`);
     if (!isLive(s)) return { events: [] };
     return cmd.cmd === "session.attached"
-      ? { events: [{ type: "session.attached", thread: s.thread, payload: { session: s.id, pane: cmd.pane } }] }
+      ? {
+          events: [
+            { type: "session.attached", thread: s.thread, payload: { session: s.id, pane: cmd.pane } },
+            // A bootstrap prompt the spawn job could not deliver is queued; the reactor sends it at the first idle.
+            ...(cmd.pending ? [{ type: "notice.queued" as const, thread: s.thread, payload: { session: s.id, text: cmd.pending } }] : []),
+          ],
+        }
       : { events: [{ type: "session.failed", thread: s.thread, payload: { session: s.id, reason: cmd.reason } }] };
   }
   if (cmd.cmd === "session.open_main") {

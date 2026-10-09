@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { initProject } from "../../src/project/init.ts";
 import { FAKE_CLAUDE, FAKE_HERDR, fakeHerdrState, isolatedConfigHome, tempRepo } from "../helpers.ts";
@@ -10,9 +10,9 @@ let fake: ReturnType<typeof fakeHerdrState>;
 let xdg: string;
 let claudeLog: string;
 
-function agt(args: string[], extra: Record<string, string> = {}, stdin?: string) {
+function agt(args: string[], extra: Record<string, string> = {}, stdin?: string, cwd = root) {
   const r = Bun.spawnSync([process.execPath, BIN, ...args], {
-    cwd: root,
+    cwd,
     env: {
       PATH: process.env.PATH ?? "", HOME: "/nonexistent", XDG_CONFIG_HOME: xdg, AGT_ROOT: root, FAKE_HERDR_STATE: fake.file,
       HERDR_ENV: "1", HERDR_WORKSPACE_ID: "w1", HERDR_TAB_ID: "w1:t0", HERDR_PANE_ID: "w1:p0", HERDR_BIN_PATH: FAKE_HERDR,
@@ -48,6 +48,14 @@ test("agt start runs the main manager in the foreground with session, hooks and 
   expect(run.env).toMatchObject({ AGT_ROLE: "main", AGT_SESSION: id, AGT_ROOT: root, AGT_AGENT: "claude-code" });
   const fm = readFileSync(join(root, ".agentthread", "main.thread.md"), "utf8");
   expect(fm).toContain("# Main Thread");
+});
+
+test("the main manager runs in the project root even when agt start runs from a subdirectory", () => {
+  const sub = join(root, "src", "deep");
+  mkdirSync(sub, { recursive: true });
+  expect(agt(["start"], {}, undefined, sub).code).toBe(0);
+  const run = JSON.parse(readFileSync(claudeLog, "utf8").trim()) as { cwd: string };
+  expect(realpathSync(run.cwd)).toBe(realpathSync(root));
 });
 
 test("--no-manager skips Claude", () => {

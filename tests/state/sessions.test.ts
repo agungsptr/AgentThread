@@ -88,3 +88,17 @@ test("ended does not overwrite failed", () => {
   );
   expect(s.sessions.get(S1)!.status).toBe("failed");
 });
+
+test("session.started makes a main session idle (it waits for the user), but coordinators and workers active", () => {
+  const M = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+  const s = stateOf(
+    INIT,
+    threadCreated("001"),
+    { type: "session.created", payload: { session: M, role: "main", agent: "claude-code", name: "m" } },
+    { type: "session.started", payload: { session: M } },
+    created(S1, "coordinator"),
+    { type: "session.started", thread: "001", payload: { session: S1 } },
+  );
+  expect(s.sessions.get(M)!.status).toBe("idle");
+  expect(s.sessions.get(S1)!.status).toBe("active");
+});

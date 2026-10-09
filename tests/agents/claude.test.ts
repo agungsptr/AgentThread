@@ -32,17 +32,26 @@ describe("claude adapter", () => {
     ]);
   });
 
+  test("with a root, coordinator and worker may read the project's .agentthread files", () => {
+    const read = "Read(//repo/.agentthread/**)";
+    expect(allowedTools("worker", DEFAULT_CONFIG, "/repo")).toEqual(["Bash(agt *)", "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)", read]);
+    expect(allowedTools("coordinator", DEFAULT_CONFIG, "/repo")).toEqual([
+      "Bash(agt *)", "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)", "Bash(git add *)", "Bash(git commit *)", read,
+    ]);
+    expect(allowedTools("main", DEFAULT_CONFIG, "/repo")).toEqual(["Bash(agt *)"]);
+  });
+
   test("claude args order and optional model", () => {
-    const args = claudeArgs({ session: "s-1", role: "worker", systemPrompt: "SP", config: DEFAULT_CONFIG });
+    const args = claudeArgs({ session: "s-1", role: "worker", systemPrompt: "SP", config: DEFAULT_CONFIG, root: "/repo" });
     expect(args).toEqual([
       "--session-id", "s-1",
       "--permission-mode", "acceptEdits",
-      "--allowed-tools", "Bash(agt *),Bash(git status*),Bash(git diff*),Bash(git log*)",
+      "--allowed-tools", "Bash(agt *),Bash(git status*),Bash(git diff*),Bash(git log*),Read(//repo/.agentthread/**)",
       "--settings", JSON.stringify(hookSettings()),
       "--append-system-prompt", "SP",
     ]);
     const withModel = { ...DEFAULT_CONFIG, agents: { ...DEFAULT_CONFIG.agents, claude: { ...DEFAULT_CONFIG.agents.claude, model: "opus" } } };
-    expect(claudeArgs({ session: "s", role: "main", systemPrompt: "x", config: withModel }).slice(8, 10)).toEqual(["--model", "opus"]);
+    expect(claudeArgs({ session: "s", role: "main", systemPrompt: "x", config: withModel, root: "/repo" }).slice(8, 10)).toEqual(["--model", "opus"]);
   });
 
   test("agent env puts agt on PATH and identifies the session", () => {
@@ -66,7 +75,7 @@ describe("prompts", () => {
 
   test("worker prompt is scoped to its ticket and forbids commits", () => {
     const p = systemPrompt({ root: "/repo", role: "worker", thread: T, ticket: "T3" });
-    for (const s of ["ticket T3 of thread 002", "agt ticket claim 002/T3", "agt ticket done 002/T3", "agt ticket block 002/T3", "Do not commit"]) {
+    for (const s of ["ticket T3 of thread 002", "agt ticket claim 002/T3", "agt ticket done 002/T3", "agt ticket block 002/T3", "Do not commit", "Run tests only with commands you are allowed to run without asking for approval; if a command you need requires approval, block the ticket and name the command in the reason."]) {
       expect(p).toContain(s);
     }
     expect(bootstrapPrompt({ root: "/repo", role: "worker", thread: T, ticket: "T3" })).toBe("Start ticket T3 of thread 002 now.");

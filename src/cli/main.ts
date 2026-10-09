@@ -256,7 +256,8 @@ async function start(root: string, env: Env, argv: string[]): Promise<number> {
   const mainTab = env.HERDR_TAB_ID;
   const managerPane = env.HERDR_PANE_ID;
   if (env.HERDR_ENV !== "1" || !workspace || !mainTab || !managerPane) throw new Error("agt start must run inside a Herdr pane");
-  if (env.AGT_THREAD || env.AGT_ROLE === "coordinator" || env.AGT_ROLE === "worker") {
+  // An agent pane (including the main manager's own Claude session) must never start another layout or main manager.
+  if (env.AGT_THREAD || env.AGT_ROLE === "coordinator" || env.AGT_ROLE === "worker" || env.AGT_ROLE === "main") {
     throw new Error("agt start must run from the main tab, not a subthread pane");
   }
   const config = loadConfig(root, env);
@@ -297,8 +298,9 @@ async function start(root: string, env: Env, argv: string[]): Promise<number> {
   const bin = env.AGT_CLAUDE_BIN ?? "claude";
   let code: number;
   try {
-    const proc = Bun.spawn([bin, ...claudeArgs({ session, role: "main", systemPrompt: systemPrompt({ root, role: "main" }), config })], {
+    const proc = Bun.spawn([bin, ...claudeArgs({ session, role: "main", systemPrompt: systemPrompt({ root, role: "main" }), config, root })], {
       stdio: ["inherit", "inherit", "inherit"],
+      cwd: root,
       env: { ...env, ...agentEnv({ root, role: "main", session }) },
     });
     code = await proc.exited;

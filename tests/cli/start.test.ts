@@ -98,11 +98,8 @@ test("refuses to run from a subthread pane and touches nothing in Herdr", () => 
   expect(r).toMatchObject({ code: 1, err: "agt: agt start must run from the main tab, not a subthread pane" });
   expect(fake.read().calls).toEqual([]);
   expect(agt(["start", "--no-manager"], { AGT_ROLE: "worker" }).code).toBe(1);
+  expect(agt(["start", "--no-manager"], { AGT_ROLE: "main" })).toMatchObject({ code: 1, err: "agt: agt start must run from the main tab, not a subthread pane" });
   expect(fake.read().calls).toEqual([]);
-});
-
-test("runs from a pane whose AGT_ROLE is main", () => {
-  expect(agt(["start", "--no-manager"], { AGT_ROLE: "main" }).code).toBe(0);
 });
 
 test("the daemon's herdr calls carry HERDR_SOCKET_PATH", () => {

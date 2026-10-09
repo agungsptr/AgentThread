@@ -161,3 +161,26 @@ test("duplicate idle events for a done worker end it and close its pane once, wi
   expect(r.events).toEqual([{ type: "session.ended", thread: "001", payload: { session: W1 } }]);
   expect(r.effects).toEqual([{ kind: "pane.close", pane: "w1:p3" }]);
 });
+
+test("idle worker with a blocked ticket ends, closes its pane, and the slot spawns the next queued ticket", () => {
+  const s = base(1);
+  apply(
+    s,
+    { type: "session.created", thread: "001", payload: { session: W1, role: "worker", agent: "claude-code", name: "w", ticket: "T1" } },
+    { type: "session.attached", thread: "001", payload: { session: W1, pane: "w1:p3" } },
+    { type: "worker.queued", thread: "001", payload: { ticket: "T2" } },
+    { type: "ticket.claimed", thread: "001", payload: { ticket: "T1", assignee: W1 } },
+    { type: "ticket.blocked", thread: "001", payload: { ticket: "T1", reason: "needs approval for bun test" } },
+  );
+  const r = react(s, apply(s, { type: "agent.idle", thread: "001", payload: { session: W1 } }), ctx());
+  expect(r.events).toEqual([{ type: "session.ended", thread: "001", payload: { session: W1 } }]);
+  expect(r.effects).toEqual([{ kind: "pane.close", pane: "w1:p3" }]);
+  const next = react(s, apply(s, ...r.events), ctx());
+  expect(next.events).toEqual([expect.objectContaining({ type: "session.created", payload: expect.objectContaining({ ticket: "T2" }) })]);
+});
+
+test("a failed coordinator notifies the live main session", () => {
+  const s = base();
+  const r = react(s, apply(s, { type: "session.failed", thread: "001", payload: { session: C, reason: "pane_not_found" } }), ctx());
+  expect(r.events).toEqual([{ type: "notice.queued", payload: { session: M, text: "Coordinator for thread 001 failed: pane_not_found." } }]);
+});

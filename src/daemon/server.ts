@@ -4,7 +4,7 @@ import type { SpawnJob } from "../agents/spawn-job.ts";
 import { handle } from "../commands/handler.ts";
 import { ActorSchema, CommandSchema } from "../commands/schema.ts";
 import { loadConfig, type Config } from "../config/config.ts";
-import type { EventBody } from "../domain/types.ts";
+import type { EventBody, StoredEvent } from "../domain/types.ts";
 import { react } from "../orchestration/reactor.ts";
 import { paths } from "../project/paths.ts";
 import { writeAll } from "../render/write.ts";
@@ -18,6 +18,14 @@ import { ensureSocketDir } from "./socket-dir.ts";
 export interface Daemon {
   stop(): Promise<void>;
   closed: Promise<void>;
+}
+
+const MAX_FOLLOW_UP_ROUNDS = 10;
+
+/** Follow-ups (spawns, notifications, teardown) are themselves events; bound the chain so a bug can't loop forever. */
+export function runFollowUps(fresh: StoredEvent[], round: (events: StoredEvent[]) => StoredEvent[], log: (message: string) => void): void {
+  for (let i = 0; i < MAX_FOLLOW_UP_ROUNDS && fresh.length > 0; i++) fresh = round(fresh);
+  if (fresh.length > 0) log(`reactor stopped after ${MAX_FOLLOW_UP_ROUNDS} rounds`);
 }
 
 export async function startDaemon(root: string, opts: { log?: (message: string) => void; launch?: (job: SpawnJob) => void } = {}): Promise<Daemon> {
@@ -70,14 +78,16 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
       for (const ev of stored) applyEvent(state, ev);
       return stored;
     };
-    let fresh = commit([...decision.events, ...decision.effects.flatMap(runEffect)]);
-    // Follow-ups (spawns, notifications, teardown) are themselves events; bound the chain so a bug can't loop forever.
-    for (let round = 0; round < 10 && fresh.length > 0; round++) {
-      const next = react(state, fresh, { root, config, newId: randomUUID });
-      const bodies = [...next.events, ...next.effects.flatMap(runEffect)];
-      if (bodies.length === 0) break;
-      fresh = commit(bodies);
-    }
+    const fresh = commit([...decision.events, ...decision.effects.flatMap(runEffect)]);
+    runFollowUps(
+      fresh,
+      (events) => {
+        const next = react(state, events, { root, config, newId: randomUUID });
+        const bodies = [...next.events, ...next.effects.flatMap(runEffect)];
+        return bodies.length === 0 ? [] : commit(bodies);
+      },
+      opts.log ?? console.error,
+    );
     try {
       writeAll(root, state, config);
     } catch (e) {

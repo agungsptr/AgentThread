@@ -66,7 +66,7 @@ test("worker capacity: queue, finish, next worker spawns; coordinator gets notif
   expect(await cmd({ cmd: "worker.spawn", thread: "001", ticket: "T1" }, coord)).toMatchObject({ ok: true, result: { queued: false } });
   expect(await cmd({ cmd: "worker.spawn", thread: "001", ticket: "T2" }, coord)).toMatchObject({ ok: true, result: { queued: true } });
   const w1 = (await sessionOf("worker", "T1"))!.session;
-  expect(jobs.at(-1)).toMatchObject({ name: expect.stringMatching(/-w001-t1$/), split: { pane: "w1:p1", direction: "right", env: expect.objectContaining({ AGT_SESSION: w1, AGT_TICKET: "T1" }) } });
+  expect(jobs.at(-1)).toMatchObject({ name: expect.stringMatching(/-w001-t1-[0-9a-f]{4}$/), split: { pane: "w1:p1", direction: "right", env: expect.objectContaining({ AGT_SESSION: w1, AGT_TICKET: "T1" }) } });
   // attach the worker pane in the fake so pane.close can find it
   const s = fake.read();
   writeFileSync(fake.file, JSON.stringify({ ...s, panes: [...s.panes, "w1:p7"] }));
@@ -99,6 +99,22 @@ test("spawn failure: session failed, coordinator notified, slot freed", async ()
   expect(all.some((e) => e.type === "notice.queued" && (e.payload as { text: string }).text.startsWith("Worker for T1 failed:"))).toBe(true);
   // the split pane of the failed worker was closed again
   expect(fake.read().calls.filter((c) => c[0] === "pane" && c[1] === "close").length).toBeGreaterThanOrEqual(1);
+});
+
+test("a coordinator blocked at a startup dialog is attached and gets its bootstrap at the first idle", async () => {
+  await boot({ seed: { fail: ["agent start", "agent prompt"], failCode: { "agent start": "agent_not_ready", "agent prompt": "agent_blocked" } } });
+  await cmd({ cmd: "thread.new", title: "X", type: "bug" });
+  await waitFor(async () => (await events()).some((e) => e.type === "session.attached" || e.type === "session.failed"), 10_000);
+  const all = await events();
+  expect(all.some((e) => e.type === "session.failed")).toBe(false);
+  const c = (await sessionOf("coordinator"))!.session;
+  expect(all.find((e) => e.type === "notice.queued")?.payload).toEqual({ session: c, text: expect.stringMatching(/^Start coordinating thread 001\./) });
+  // the dialog is dismissed; the first idle delivers the bootstrap
+  const s = fake.read();
+  writeFileSync(fake.file, JSON.stringify({ ...s, fail: [] }));
+  await cmd({ cmd: "session.signal", session: c, signal: "idle" });
+  expect((await events()).at(-1)!.type).toBe("notice.delivered");
+  expect(fake.read().calls.filter((x) => x[0] === "agent" && x[1] === "prompt" && x[2] === "w1:p1").map((x) => x[3]!.slice(0, 26))).toEqual(["Start coordinating thread "]);
 });
 
 test("a hanging agent start never blocks the daemon", async () => {

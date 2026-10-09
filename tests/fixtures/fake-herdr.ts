@@ -8,6 +8,8 @@ interface FakeState {
   panes: string[];
   calls: string[][];
   fail?: string[];
+  /** Error code to fail with per "group sub" in `fail`; defaults to server_unavailable. */
+  failCode?: Record<string, string>;
   hang?: string[];
   envs: (string | null)[];
   agents?: string[];
@@ -43,7 +45,10 @@ if (state.hang?.includes(`${group} ${sub}`)) {
   writeFileSync(file, JSON.stringify(state));
   await Bun.sleep(1e9);
 }
-if (state.fail?.includes(`${group} ${sub}`)) fail("server_unavailable", "herdr server unavailable");
+if (state.fail?.includes(`${group} ${sub}`)) {
+  const code = state.failCode?.[`${group} ${sub}`];
+  fail(code ?? "server_unavailable", code ? `herdr ${group} ${sub} failed: ${code}` : "herdr server unavailable");
+}
 
 if (group === "tab" && sub === "create") {
   const n = ++state.next;

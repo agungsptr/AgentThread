@@ -1,4 +1,5 @@
-import { agentEnv, claudeArgs } from "../agents/claude.ts";
+import { dirname } from "node:path";
+import { AGT_BIN, agentEnv, claudeArgs } from "../agents/claude.ts";
 import { bootstrapPrompt, systemPrompt } from "../agents/prompts.ts";
 import { launchSpawnJob, type SpawnJob } from "../agents/spawn-job.ts";
 import type { Effect } from "../commands/handler.ts";
@@ -70,7 +71,7 @@ export function createEffectRunner(opts: {
                   },
                 }
               : {}),
-            args: claudeArgs({ session: effect.session, role: effect.role, systemPrompt: systemPrompt(prompt), config: opts.config }),
+            args: claudeArgs({ session: effect.session, role: effect.role, systemPrompt: systemPrompt(prompt), config: opts.config, root: opts.root }),
             bootstrap: bootstrapPrompt(prompt),
           });
           return [];
@@ -110,7 +111,13 @@ function runHerdr(effect: HerdrEffect, bridge: HerdrBridge, layout: Layout, root
       workspace: layout.workspace,
       cwd: effect.cwd,
       label: effect.label,
-      env: { AGT_ROOT: root, AGT_THREAD: effect.thread, AGT_ROLE: "coordinator" },
+      env: {
+        AGT_ROOT: root,
+        AGT_THREAD: effect.thread,
+        AGT_ROLE: "coordinator",
+        AGT_AGENT: "claude-code",
+        PATH: `${dirname(AGT_BIN)}:${process.env.PATH ?? ""}`,
+      },
     });
     return [{ type: "thread.tab_opened", thread: effect.thread, payload: { tab: tabId, rootPane: rootPaneId } }];
   }
