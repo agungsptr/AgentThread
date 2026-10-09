@@ -70,9 +70,13 @@ describe("HerdrCli with a recording runner", () => {
     );
   });
 
-  test("tabExists is true on success and false on a herdr error", () => {
+  test("tabExists is false only for not-found errors and throws on any other error", () => {
+    const err = (code?: string) => recording({ exitCode: 1, stderr: code ? JSON.stringify({ error: { code, message: "x" } }) : "{}" }).runner;
     expect(new HerdrCli({ bin: "herdr", runner: recording().runner }).tabExists("w1:t1")).toBe(true);
-    expect(new HerdrCli({ bin: "herdr", runner: recording({ exitCode: 1, stderr: "{}" }).runner }).tabExists("w1:t1")).toBe(false);
+    expect(new HerdrCli({ bin: "herdr", runner: err("tab_not_found") }).tabExists("w1:t1")).toBe(false);
+    expect(new HerdrCli({ bin: "herdr", runner: err("not_found") }).tabExists("w1:t1")).toBe(false);
+    expect(() => new HerdrCli({ bin: "herdr", runner: err() }).tabExists("w1:t1")).toThrow(HerdrError);
+    expect(() => new HerdrCli({ bin: "herdr", runner: err("server_unavailable") }).tabExists("w1:t1")).toThrow(HerdrError);
   });
 });
 

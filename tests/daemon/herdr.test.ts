@@ -117,3 +117,22 @@ test("an invalid config stops the daemon from starting", async () => {
   writeFileSync(join(root, ".agentthread", "config.yaml"), "");
   daemon = await startDaemon(root, { log: (m) => logged.push(m) });
 });
+
+test("a herdr error other than not-found neither closes nor records the close", async () => {
+  await register();
+  await cmd({ cmd: "thread.new", title: "X", type: "bug" });
+  writeFileSync(fake.file, JSON.stringify({ ...fake.read(), fail: ["tab get"] }));
+  for (const status of ["in_progress", "review", "done"]) expect(await cmd({ cmd: "thread.status", thread: "001", status })).toMatchObject({ ok: true });
+  expect(fake.read().tabs).toContain("w1:t1");
+  expect(frontmatter("001-x")).toMatchObject({ status: "done", tab: "w1:t1" });
+  expect((await events()).at(-1)).toBe("thread.status_changed");
+  expect(logged.join("\n")).toMatch(/herdr\.tab\.close for thread 001 failed/);
+});
+
+test("reconcile does not create a duplicate tab while herdr errors", async () => {
+  await register();
+  await cmd({ cmd: "thread.new", title: "X", type: "bug" });
+  writeFileSync(fake.file, JSON.stringify({ ...fake.read(), fail: ["tab get"] }));
+  await cmd({ cmd: "layout.reconcile" });
+  expect(fake.read().calls.filter((c) => c[1] === "create")).toHaveLength(1);
+});

@@ -7,6 +7,7 @@ interface FakeState {
   tabs: string[];
   panes: string[];
   calls: string[][];
+  fail?: string[];
 }
 
 const file = process.env.FAKE_HERDR_STATE;
@@ -33,6 +34,8 @@ function fail(code: string, message: string): never {
 }
 
 const [group, sub, target] = args;
+
+if (state.fail?.includes(`${group} ${sub}`)) fail("server_unavailable", "herdr server unavailable");
 
 if (group === "tab" && sub === "create") {
   const n = ++state.next;

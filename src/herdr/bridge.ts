@@ -59,7 +59,7 @@ export class HerdrCli implements HerdrBridge {
       this.call(["tab", "get", tabId]);
       return true;
     } catch (e) {
-      if (e instanceof HerdrError) return false;
+      if (e instanceof HerdrError && (e.code === "tab_not_found" || e.code === "not_found")) return false;
       throw e;
     }
   }

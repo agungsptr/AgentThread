@@ -64,6 +64,7 @@ export interface FakeHerdrState {
   tabs: string[];
   panes: string[];
   calls: string[][];
+  fail?: string[];
 }
 
 /** A state file for tests/fixtures/fake-herdr.ts; pass `file` as FAKE_HERDR_STATE. */
