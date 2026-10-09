@@ -30,7 +30,7 @@ function base(maxWorkers = 1): State {
     { type: "session.created", payload: { session: M, role: "main", agent: "claude-code", name: "m" } },
     { type: "session.attached", payload: { session: M, pane: "w1:p0" } },
   );
-  for (const k of ["T1", "T2", "T3"]) apply(s, { type: "ticket.created", thread: "001", payload: { ticket: k, title: k, scope: [k] } });
+  for (const k of ["T1", "T2", "T3", "T4", "T5"]) apply(s, { type: "ticket.created", thread: "001", payload: { ticket: k, title: k, scope: [k] } });
   return s;
 }
 
@@ -89,6 +89,8 @@ test("two freed slots in one batch spawn two queued workers, never more", () => 
     { type: "session.created", thread: "001", payload: { session: W1, role: "worker", agent: "claude-code", name: "w1", ticket: "T1" } },
     { type: "session.created", thread: "001", payload: { session: W2, role: "worker", agent: "claude-code", name: "w2", ticket: "T2" } },
     { type: "worker.queued", thread: "001", payload: { ticket: "T3" } },
+    { type: "worker.queued", thread: "001", payload: { ticket: "T4" } },
+    { type: "worker.queued", thread: "001", payload: { ticket: "T5" } },
   );
   const ended = apply(
     s,
@@ -96,7 +98,8 @@ test("two freed slots in one batch spawn two queued workers, never more", () => 
     { type: "session.failed", thread: "001", payload: { session: W2, reason: "agent_not_ready" } },
   );
   const r = react(s, ended, ctx());
-  expect(r.events.filter((e) => e.type === "session.created")).toHaveLength(1);
+  const created = r.events.filter((e) => e.type === "session.created");
+  expect(created.map((e) => (e.payload as { ticket?: string }).ticket)).toEqual(["T3", "T4"]);
   expect(r.events).toContainEqual({ type: "notice.queued", thread: "001", payload: { session: C, text: "Worker for T2 failed: agent_not_ready." } });
 });
 
@@ -128,4 +131,33 @@ test("status changes: unblock notifies coordinator, review notifies main, done e
   expect(react(s, apply(s, { type: "thread.status_changed", thread: "001", payload: { from: "review", to: "done" } }), ctx()).events).toEqual([
     { type: "session.ended", thread: "001", payload: { session: C } },
   ]);
+});
+
+test("no delivery to a busy agent across rounds", () => {
+  const s = base();
+  const r1 = react(s, apply(s, { type: "notice.queued", thread: "001", payload: { session: C, text: "a" } }, { type: "agent.idle", thread: "001", payload: { session: C } }), ctx());
+  const eff = r1.effects[0] as { count: number };
+  expect(r1.effects).toHaveLength(1);
+  const evs = apply(
+    s,
+    { type: "notice.delivered", thread: "001", payload: { session: C, count: eff.count } },
+    { type: "notice.queued", thread: "001", payload: { session: C, text: "b" } },
+  );
+  expect(react(s, evs, ctx()).effects).toEqual([]);
+});
+
+test("duplicate idle events for a done worker end it and close its pane once, without delivering", () => {
+  const s = base();
+  apply(
+    s,
+    { type: "session.created", thread: "001", payload: { session: W1, role: "worker", agent: "claude-code", name: "w", ticket: "T1" } },
+    { type: "session.attached", thread: "001", payload: { session: W1, pane: "w1:p3" } },
+    { type: "ticket.claimed", thread: "001", payload: { ticket: "T1", assignee: W1 } },
+    { type: "ticket.completed", thread: "001", payload: { ticket: "T1" } },
+    { type: "notice.queued", thread: "001", payload: { session: W1, text: "x" } },
+  );
+  const idle = { type: "agent.idle", thread: "001", payload: { session: W1 } } as const;
+  const r = react(s, apply(s, idle, idle), ctx());
+  expect(r.events).toEqual([{ type: "session.ended", thread: "001", payload: { session: W1 } }]);
+  expect(r.effects).toEqual([{ kind: "pane.close", pane: "w1:p3" }]);
 });

@@ -239,10 +239,14 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
       sessionOf(state, ev.seq, ev.payload.session);
       threadNote(state, ev, `session ${short(ev.payload.session)} is compacting`);
       return true;
-    case "session.ended":
-      sessionOf(state, ev.seq, ev.payload.session).status = "ended";
-      threadNote(state, ev, `session ${short(ev.payload.session)} ended`);
+    case "session.ended": {
+      const s = sessionOf(state, ev.seq, ev.payload.session);
+      if (isLive(s)) {
+        s.status = "ended";
+        threadNote(state, ev, `session ${short(ev.payload.session)} ended`);
+      }
       return true;
+    }
     case "session.failed":
       sessionOf(state, ev.seq, ev.payload.session).status = "failed";
       threadNote(state, ev, `session ${short(ev.payload.session)} failed: ${ev.payload.reason}`);
@@ -250,9 +254,12 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
     case "notice.queued":
       sessionOf(state, ev.seq, ev.payload.session).notices.push(ev.payload.text);
       return true;
-    case "notice.delivered":
-      sessionOf(state, ev.seq, ev.payload.session).notices.splice(0, ev.payload.count);
+    case "notice.delivered": {
+      const s = sessionOf(state, ev.seq, ev.payload.session);
+      s.notices.splice(0, ev.payload.count);
+      if (isLive(s)) s.status = "active"; // a pasted notice starts a turn
       return true;
+    }
     default:
       return false;
   }

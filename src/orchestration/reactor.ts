@@ -17,6 +17,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
   const delivered = new Set<string>();
   const spawnedPerThread = new Map<string, number>();
   const spawnedTickets = new Set<string>();
+  const ended = new Set<string>();
 
   const take = (r: { events: EventBody[]; effects: Effect[] }) => {
     out.push(...r.events);
@@ -30,6 +31,13 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
     if (!s || delivered.has(s.id) || !isLive(s) || s.status !== "idle" || !s.pane || s.notices.length === 0) return;
     delivered.add(s.id);
     effects.push({ kind: "notice.deliver", session: s.id, thread: s.thread, pane: s.pane, text: s.notices.join("\n"), count: s.notices.length });
+  };
+  /** Emits session.ended at most once per session per call; returns whether it did. */
+  const end = (s: Session): boolean => {
+    if (ended.has(s.id)) return false;
+    ended.add(s.id);
+    out.push({ type: "session.ended", thread: s.thread, payload: { session: s.id } } as EventBody);
+    return true;
   };
   const fillWorkers = (threadId: string | undefined) => {
     const t = threadId ? state.threads.get(threadId) : undefined;
@@ -66,7 +74,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         } else if (ev.payload.to === "review") {
           notify(liveSessions(state, undefined, "main")[0], `Thread ${ev.thread} (${t?.title ?? ""}) is ready for review.`);
         } else if (ev.payload.to === "done") {
-          for (const s of liveSessions(state, ev.thread)) out.push({ type: "session.ended", thread: ev.thread, payload: { session: s.id } });
+          for (const s of liveSessions(state, ev.thread)) end(s);
         }
         break;
       }
@@ -85,13 +93,12 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         break;
       case "agent.idle": {
         const s = state.sessions.get(ev.payload.session);
-        deliver(s);
-        if (s && isLive(s) && s.role === "worker" && s.thread) {
-          const ticket = state.threads.get(s.thread)?.tickets.find((k) => k.id === s.ticket);
-          if (ticket?.status === "done") {
-            out.push({ type: "session.ended", thread: s.thread, payload: { session: s.id } });
-            if (ctx.config.herdr.close_worker_pane_on_end && s.pane) effects.push({ kind: "pane.close", pane: s.pane });
-          }
+        const finished =
+          s && isLive(s) && s.role === "worker" && s.thread && state.threads.get(s.thread)?.tickets.find((k) => k.id === s.ticket)?.status === "done";
+        if (!finished) {
+          deliver(s);
+        } else if (end(s) && ctx.config.herdr.close_worker_pane_on_end && s.pane) {
+          effects.push({ kind: "pane.close", pane: s.pane });
         }
         break;
       }
