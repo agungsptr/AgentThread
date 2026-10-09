@@ -51,3 +51,8 @@ export function tempRepo(): string {
   git("commit", "-q", "--allow-empty", "-m", "init");
   return dir;
 }
+
+/** A temp dir to use as XDG_CONFIG_HOME so tests never read the developer's real user config. */
+export function isolatedConfigHome(): string {
+  return realpathSync(mkdtempSync(join(tmpdir(), "agt-xdg-")));
+}

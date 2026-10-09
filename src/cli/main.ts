@@ -1,8 +1,10 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs, type ParseArgsConfig } from "node:util";
+import { stringify } from "yaml";
 import { isAlive, request } from "../daemon/client.ts";
 import { startDaemon } from "../daemon/server.ts";
+import { loadConfig } from "../config/config.ts";
 import { ROLES, type Actor, type StoredEvent } from "../domain/types.ts";
 import { initProject } from "../project/init.ts";
 import { paths } from "../project/paths.ts";
@@ -14,6 +16,7 @@ const USAGE = `usage: agt <command>
 
   init [--name <name>]
   daemon start|stop|status
+  config
   thread new <title...> --type feature|bug|chore [--goal <text>] [--criteria <text>]... [--depends <id>]...
   thread status <id> <status> [--reason <text>]
   ticket add <thread> <title...> --scope <path> [--scope <path>]...
@@ -72,6 +75,9 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
     }
     case "daemon":
       return daemon(sub, findRoot(cwd, env), env);
+    case "config":
+      console.log(stringify(loadConfig(findRoot(cwd, env), env)).trimEnd());
+      return 0;
     case "thread":
       return thread(sub, rest, findRoot(cwd, env), env);
     case "ticket":
