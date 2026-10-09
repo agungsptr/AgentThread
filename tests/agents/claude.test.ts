@@ -1,0 +1,80 @@
+import { describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { AGT_BIN, agentEnv, allowedTools, claudeArgs, hookCommand, hookSettings } from "../../src/agents/claude.ts";
+import { bootstrapPrompt, systemPrompt } from "../../src/agents/prompts.ts";
+import { DEFAULT_CONFIG } from "../../src/config/config.ts";
+import { shellQuote } from "../../src/herdr/bridge.ts";
+
+const T = { id: "002", title: "Fix race", slug: "fix-race", worktree: "/repo/.worktrees/002-fix-race" };
+const DIR = "/repo/.agentthread/threads/002-fix-race";
+
+describe("claude adapter", () => {
+  test("AGT_BIN points at bin/agt", () => {
+    expect(AGT_BIN.endsWith(join("bin", "agt"))).toBe(true);
+    expect(existsSync(AGT_BIN)).toBe(true);
+  });
+
+  test("hooks call agt event with the mapped signal", () => {
+    expect(hookCommand("idle")).toBe(`${shellQuote(process.execPath)} ${shellQuote(AGT_BIN)} event idle`);
+    const h = hookSettings().hooks;
+    expect(Object.keys(h)).toEqual(["SessionStart", "UserPromptSubmit", "Stop", "PreCompact", "SessionEnd"]);
+    expect(h.Stop).toEqual([{ hooks: [{ type: "command", command: hookCommand("idle") }] }]);
+    expect(h.SessionEnd![0]!.hooks[0]!.command.endsWith(" event ended")).toBe(true);
+  });
+
+  test("allowed tools per role, plus configured extras", () => {
+    expect(allowedTools("main", DEFAULT_CONFIG)).toEqual(["Bash(agt *)"]);
+    expect(allowedTools("worker", DEFAULT_CONFIG)).toEqual(["Bash(agt *)", "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)"]);
+    const cfg = { ...DEFAULT_CONFIG, agents: { ...DEFAULT_CONFIG.agents, claude: { ...DEFAULT_CONFIG.agents.claude, extra_allowed_tools: ["Bash(bun test*)"] } } };
+    expect(allowedTools("coordinator", cfg)).toEqual([
+      "Bash(agt *)", "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)", "Bash(git add *)", "Bash(git commit *)", "Bash(bun test*)",
+    ]);
+  });
+
+  test("claude args order and optional model", () => {
+    const args = claudeArgs({ session: "s-1", role: "worker", systemPrompt: "SP", config: DEFAULT_CONFIG });
+    expect(args).toEqual([
+      "--session-id", "s-1",
+      "--permission-mode", "acceptEdits",
+      "--allowed-tools", "Bash(agt *),Bash(git status*),Bash(git diff*),Bash(git log*)",
+      "--settings", JSON.stringify(hookSettings()),
+      "--append-system-prompt", "SP",
+    ]);
+    const withModel = { ...DEFAULT_CONFIG, agents: { ...DEFAULT_CONFIG.agents, claude: { ...DEFAULT_CONFIG.agents.claude, model: "opus" } } };
+    expect(claudeArgs({ session: "s", role: "main", systemPrompt: "x", config: withModel }).slice(8, 10)).toEqual(["--model", "opus"]);
+  });
+
+  test("agent env puts agt on PATH and identifies the session", () => {
+    const env = agentEnv({ root: "/repo", role: "worker", session: "s-1", thread: "002", ticket: "T3" });
+    expect(env).toMatchObject({ AGT_ROOT: "/repo", AGT_ROLE: "worker", AGT_SESSION: "s-1", AGT_AGENT: "claude-code", AGT_THREAD: "002", AGT_TICKET: "T3" });
+    expect(env.PATH!.startsWith(`${dirname(AGT_BIN)}:`)).toBe(true);
+    expect(agentEnv({ root: "/repo", role: "main", session: "m" })).not.toHaveProperty("AGT_THREAD");
+  });
+});
+
+describe("prompts", () => {
+  test("coordinator prompt names its thread, files and commands", () => {
+    const p = systemPrompt({ root: "/repo", role: "coordinator", thread: T });
+    for (const s of [`thread 002 ("Fix race")`, T.worktree, `${DIR}/sub.thread.md`, `${DIR}/board.md`, "agt ticket add 002", "agt worker spawn 002 --ticket", "git commit", "agt thread status 002 review"]) {
+      expect(p).toContain(s);
+    }
+    expect(bootstrapPrompt({ root: "/repo", role: "coordinator", thread: T })).toBe(
+      `Start coordinating thread 002. Read ${DIR}/sub.thread.md and ${DIR}/board.md now.`,
+    );
+  });
+
+  test("worker prompt is scoped to its ticket and forbids commits", () => {
+    const p = systemPrompt({ root: "/repo", role: "worker", thread: T, ticket: "T3" });
+    for (const s of ["ticket T3 of thread 002", "agt ticket claim 002/T3", "agt ticket done 002/T3", "agt ticket block 002/T3", "Do not commit"]) {
+      expect(p).toContain(s);
+    }
+    expect(bootstrapPrompt({ root: "/repo", role: "worker", thread: T, ticket: "T3" })).toBe("Start ticket T3 of thread 002 now.");
+  });
+
+  test("main prompt requires user confirmation before creating threads", () => {
+    const p = systemPrompt({ root: "/repo", role: "main" });
+    for (const s of ["/repo/.agentthread/main.thread.md", "Only after the user confirms", "agt thread new", "agt tell"]) expect(p).toContain(s);
+    expect(bootstrapPrompt({ root: "/repo", role: "main" })).toBe("");
+  });
+});

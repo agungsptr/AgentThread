@@ -1,0 +1,55 @@
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import type { Config } from "../config/config.ts";
+import type { SessionRole, SessionSignal } from "../domain/types.ts";
+import { shellQuote } from "../herdr/bridge.ts";
+
+export const AGT_BIN = fileURLToPath(new URL("../../bin/agt", import.meta.url));
+
+export function hookCommand(signal: SessionSignal): string {
+  return `${shellQuote(process.execPath)} ${shellQuote(AGT_BIN)} event ${signal}`;
+}
+
+export function hookSettings() {
+  const on = (signal: SessionSignal) => [{ hooks: [{ type: "command" as const, command: hookCommand(signal) }] }];
+  return {
+    hooks: {
+      SessionStart: on("started"),
+      UserPromptSubmit: on("active"),
+      Stop: on("idle"),
+      PreCompact: on("compacting"),
+      SessionEnd: on("ended"),
+    },
+  };
+}
+
+const READ_TOOLS = ["Bash(agt *)", "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)"];
+
+export function allowedTools(role: SessionRole, config: Config): string[] {
+  const base = role === "main" ? ["Bash(agt *)"] : role === "coordinator" ? [...READ_TOOLS, "Bash(git add *)", "Bash(git commit *)"] : READ_TOOLS;
+  return [...base, ...config.agents.claude.extra_allowed_tools];
+}
+
+export function claudeArgs(o: { session: string; role: SessionRole; systemPrompt: string; config: Config }): string[] {
+  const claude = o.config.agents.claude;
+  return [
+    "--session-id", o.session,
+    "--permission-mode", claude.permission_mode,
+    "--allowed-tools", allowedTools(o.role, o.config).join(","),
+    "--settings", JSON.stringify(hookSettings()),
+    ...(claude.model ? ["--model", claude.model] : []),
+    "--append-system-prompt", o.systemPrompt,
+  ];
+}
+
+export function agentEnv(o: { root: string; role: SessionRole; session: string; thread?: string; ticket?: string }): Record<string, string> {
+  return {
+    AGT_ROOT: o.root,
+    AGT_ROLE: o.role,
+    AGT_SESSION: o.session,
+    AGT_AGENT: "claude-code",
+    ...(o.thread ? { AGT_THREAD: o.thread } : {}),
+    ...(o.ticket ? { AGT_TICKET: o.ticket } : {}),
+    PATH: `${dirname(AGT_BIN)}:${process.env.PATH ?? ""}`,
+  };
+}
