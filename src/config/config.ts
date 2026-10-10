@@ -24,6 +24,7 @@ export const ConfigSchema = z
             permission_mode: z.enum(PERMISSION_MODES).default("acceptEdits"),
             extra_allowed_tools: z.array(z.string().trim().min(1)).default([]),
             model: z.string().trim().min(1).optional(),
+            config_dir: z.string().trim().min(1).optional(),
           })
           .strict()
           .default({}),
@@ -41,6 +42,7 @@ export const ConfigSchema = z
             on_precompact: z.boolean().default(true),
             context_threshold: z.number().gt(0).lt(1).default(0.7),
             idle_timeout: duration.default("24h"),
+            context_window: z.number().int().min(1000).default(200_000),
           })
           .strict()
           .default({}),
@@ -104,4 +106,11 @@ function readYaml(file: string): Record<string, unknown> {
   if (value === null || value === undefined) return {};
   if (!isPlainObject(value)) throw new Error(`${file} must contain a YAML mapping`);
   return value;
+}
+
+export function durationMs(d: string): number {
+  const m = /^(\d+)([smhd])$/.exec(d);
+  if (!m) throw new Error(`invalid duration ${d}`);
+  const unit = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2] as "s" | "m" | "h" | "d"];
+  return Number(m[1]) * unit;
 }

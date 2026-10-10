@@ -35,7 +35,7 @@ test("defaults match the spec", () => {
     },
     workers: { max_workers: 3 },
     session: {
-      rotation: { on_precompact: true, context_threshold: 0.7, idle_timeout: "24h" },
+      rotation: { on_precompact: true, context_threshold: 0.7, idle_timeout: "24h", context_window: 200000 },
       handoff: { timeout: "5m", fallback_generate: true },
     },
     herdr: { main_tab_label: "main", close_tab_on_done: true, close_worker_pane_on_end: true },
@@ -104,4 +104,10 @@ test("claude section: permission mode, extra tools, model", () => {
   });
   const bad = setup({ project: "agents:\n  claude:\n    permission_mode: yolo\n" });
   expect(() => loadConfig(bad.root, bad.env)).toThrow(/agents\.claude\.permission_mode/);
+});
+
+test("durationMs", async () => {
+  const { durationMs } = await import("../../src/config/config.ts");
+  expect([durationMs("30s"), durationMs("5m"), durationMs("24h"), durationMs("2d")]).toEqual([30_000, 300_000, 86_400_000, 172_800_000]);
+  expect(() => durationMs("soon")).toThrow("invalid duration soon");
 });

@@ -1,6 +1,6 @@
 import { stringify } from "yaml";
 import { DEFAULT_CONFIG, type Config } from "../config/config.ts";
-import { isLive, type Session, type State, type Thread } from "../state/projection.ts";
+import { displayStatus, isLive, type Session, type State, type Thread } from "../state/projection.ts";
 
 const oneLine = (s: string) => s.replace(/\r?\n+/g, " ").trim();
 const cell = (s: string) => oneLine(s).replace(/\|/g, "\\|");
@@ -16,7 +16,8 @@ export function renderMain(state: State, config: Config = DEFAULT_CONFIG): strin
   const rows = threads.map((t) => {
     const done = t.tickets.filter((k) => k.status === "done").length;
     const live = [...state.sessions.values()].filter((s) => s.thread === t.id && isLive(s));
-    const coordinator = live.find((s) => s.role === "coordinator")?.status ?? "-";
+    const coord = live.find((s) => s.role === "coordinator");
+    const coordinator = coord ? displayStatus(coord) : "-";
     const workers = live.filter((s) => s.role === "worker").length;
     const limit = t.maxWorkers ?? config.workers.max_workers;
     return `| ${t.id} | ${cell(t.title)} | ${t.type} | ${t.status} | ${done}/${t.tickets.length} | ${t.dependsOn.join(", ") || "-"} | ${coordinator} | ${workers}/${limit} |`;
@@ -53,7 +54,8 @@ export function renderSub(t: Thread, sessions: Session[] = []): string {
       id: s.id,
       role: s.role,
       agent: s.agent,
-      status: s.status,
+      status: displayStatus(s),
+      ...(s.contextTokens !== undefined ? { context_tokens: s.contextTokens } : {}),
       ...(s.ticket ? { ticket: s.ticket } : {}),
       ...(s.pane ? { pane: s.pane } : {}),
     })),

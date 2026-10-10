@@ -67,14 +67,19 @@ export type EventBody =
   | {
       type: "session.created";
       thread?: string;
-      payload: { session: string; role: SessionRole; agent: AgentKind; name: string; ticket?: string };
+      payload: { session: string; role: SessionRole; agent: AgentKind; name: string; ticket?: string; replaces?: string };
     }
   | { type: "session.attached"; thread?: string; payload: { session: string; pane: string } }
   | {
       type: "session.started" | "session.active" | "agent.idle" | "session.compacting" | "session.ended";
       thread?: string;
-      payload: { session: string };
+      payload: { session: string; source?: string; contextTokens?: number };
     }
+  | { type: "session.rotation_requested"; thread?: string; payload: { session: string; reason: string } }
+  | { type: "session.rotated" | "session.lost" | "session.resume_failed"; thread?: string; payload: { session: string; reason: string } }
+  | { type: "session.resuming"; thread?: string; payload: { session: string } }
+  | { type: "ticket.released"; thread: string; payload: { ticket: string; reason: string } }
+  | { type: "thread.root_pane_changed"; thread: string; payload: { pane: string } }
   | { type: "session.failed"; thread?: string; payload: { session: string; reason: string } }
   | { type: "worker.queued"; thread: string; payload: { ticket: string } }
   | { type: "notice.queued"; thread?: string; payload: { session: string; text: string } }

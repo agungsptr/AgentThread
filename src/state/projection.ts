@@ -1,6 +1,6 @@
 import type { Actor, AgentKind, Layout, SessionRole, StoredEvent, ThreadStatus, ThreadType, TicketStatus } from "../domain/types.ts";
 
-export type SessionStatus = "starting" | "active" | "idle" | "ended" | "failed";
+export type SessionStatus = "starting" | "active" | "idle" | "rotated" | "ended" | "failed" | "lost";
 
 export interface Session {
   id: string;
@@ -12,10 +12,18 @@ export interface Session {
   pane?: string;
   status: SessionStatus;
   notices: string[];
+  lastActiveAt?: string;
+  contextTokens?: number;
+  rotation?: { reason: string; requestedAt: string };
+  replaces?: string;
 }
 
 export function isLive(s: Session): boolean {
-  return s.status !== "ended" && s.status !== "failed";
+  return s.status !== "ended" && s.status !== "failed" && s.status !== "rotated" && s.status !== "lost";
+}
+
+export function displayStatus(s: Session): string {
+  return s.rotation && isLive(s) ? "rotating" : s.status;
 }
 
 export interface Ticket {
@@ -165,6 +173,17 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       note(t, ev, `${k.id} reopened`);
       break;
     }
+    case "ticket.released": {
+      const k = ticket(ev.payload.ticket);
+      k.status = "open";
+      delete k.assignee;
+      note(t, ev, `${k.id} released: ${ev.payload.reason}`);
+      break;
+    }
+    case "thread.root_pane_changed":
+      t.rootPane = ev.payload.pane;
+      note(t, ev, `root pane is now ${ev.payload.pane}`);
+      break;
     case "worker.queued":
       t.workerQueue.push(ev.payload.ticket);
       note(t, ev, `${ev.payload.ticket} queued for a worker`);
@@ -214,6 +233,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
         ...(p.ticket ? { ticket: p.ticket } : {}),
         status: "starting",
         notices: [],
+        ...(p.replaces ? { replaces: p.replaces } : {}),
       });
       const t = ev.thread ? state.threads.get(ev.thread) : undefined;
       if (t && p.ticket) t.workerQueue = t.workerQueue.filter((k) => k !== p.ticket);
@@ -227,13 +247,59 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
     case "session.started":
     case "session.active": {
       const s = sessionOf(state, ev.seq, ev.payload.session);
-      // A first start leaves the agent at an empty prompt (no turn runs, so no Stop hook), so it is idle and can take notices.
-      if (isLive(s)) s.status = ev.type === "session.started" && s.status === "starting" ? "idle" : "active";
+      if (isLive(s)) {
+        // A first start, or a manual /compact, leaves the agent at an empty prompt: no turn runs, so no Stop hook follows.
+        const atPrompt = ev.type === "session.started" && (s.status === "starting" || ev.payload.source === "compact");
+        s.status = atPrompt ? "idle" : "active";
+        s.lastActiveAt = ev.ts;
+      }
       return true;
     }
     case "agent.idle": {
       const s = sessionOf(state, ev.seq, ev.payload.session);
-      if (isLive(s)) s.status = "idle";
+      if (isLive(s)) {
+        s.status = "idle";
+        s.lastActiveAt = ev.ts;
+        if (ev.payload.contextTokens !== undefined) s.contextTokens = ev.payload.contextTokens;
+      }
+      return true;
+    }
+    case "session.rotation_requested": {
+      const s = sessionOf(state, ev.seq, ev.payload.session);
+      if (isLive(s) && !s.rotation) {
+        s.rotation = { reason: ev.payload.reason, requestedAt: ev.ts };
+        threadNote(state, ev, `session ${short(s.id)} rotation requested (${ev.payload.reason})`);
+      }
+      return true;
+    }
+    case "session.rotated": {
+      const s = sessionOf(state, ev.seq, ev.payload.session);
+      if (isLive(s)) {
+        s.status = "rotated";
+        delete s.rotation;
+        threadNote(state, ev, `session ${short(s.id)} rotated (${ev.payload.reason})`);
+      }
+      return true;
+    }
+    case "session.lost": {
+      const s = sessionOf(state, ev.seq, ev.payload.session);
+      if (isLive(s)) {
+        s.status = "lost";
+        threadNote(state, ev, `session ${short(s.id)} lost: ${ev.payload.reason}`);
+      }
+      return true;
+    }
+    case "session.resume_failed":
+      sessionOf(state, ev.seq, ev.payload.session).status = "lost";
+      threadNote(state, ev, `session ${short(ev.payload.session)} could not be resumed: ${ev.payload.reason}`);
+      return true;
+    case "session.resuming": {
+      const s = sessionOf(state, ev.seq, ev.payload.session);
+      if (s.status === "lost") {
+        s.status = "starting";
+        delete s.pane;
+        threadNote(state, ev, `session ${short(s.id)} resuming`);
+      }
       return true;
     }
     case "session.compacting":
@@ -258,7 +324,10 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
     case "notice.delivered": {
       const s = sessionOf(state, ev.seq, ev.payload.session);
       s.notices.splice(0, ev.payload.count);
-      if (isLive(s)) s.status = "active"; // a pasted notice starts a turn
+      if (isLive(s)) {
+        s.status = "active"; // a pasted notice starts a turn
+        s.lastActiveAt = ev.ts;
+      }
       return true;
     }
     default:

@@ -111,3 +111,17 @@ test("sessions and worker capacity are rendered", () => {
   });
   expect(renderMain(s)).toContain("| idle | 0/2 |");
 });
+
+test("rotating sessions and context tokens are rendered", () => {
+  const S = "44444444-4444-4444-8444-444444444444";
+  const s = stateOf(
+    INIT,
+    threadCreated("001"),
+    { type: "session.created", thread: "001", payload: { session: S, role: "coordinator", agent: "claude-code", name: "c" } },
+    { type: "agent.idle", thread: "001", payload: { session: S, contextTokens: 1234 } },
+    { type: "session.rotation_requested", thread: "001", payload: { session: S, reason: "context" } },
+  );
+  const fm = parse(renderSub(s.threads.get("001")!, [...s.sessions.values()]).split("---\n")[1]!);
+  expect(fm.sessions[0]).toMatchObject({ status: "rotating", context_tokens: 1234 });
+  expect(renderMain(s)).toContain("| rotating |");
+});
