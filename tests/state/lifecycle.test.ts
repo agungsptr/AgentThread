@@ -70,3 +70,15 @@ test("ticket released and root pane changed; replaces is stored", () => {
   expect(t.rootPane).toBe("w1:p9");
   expect(s.sessions.get(W)!.replaces).toBe(C);
 });
+
+test("lost clears a pending rotation, so the resumed coordinator is not rotating", () => {
+  const s = stateOf(
+    INIT, threadCreated("001"), coord, at("w1:p2"),
+    { type: "session.rotation_requested", thread: "001", payload: { session: C, reason: "context" } },
+    { type: "session.lost", thread: "001", payload: { session: C, reason: "no agent in pane w1:p2" } },
+    { type: "session.resuming", thread: "001", payload: { session: C } },
+  );
+  const c = s.sessions.get(C)!;
+  expect(c.rotation).toBeUndefined();
+  expect(displayStatus(c)).toBe("starting");
+});

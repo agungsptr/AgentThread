@@ -4,7 +4,7 @@ import { type Config, durationMs } from "../config/config.ts";
 import type { EventBody, StoredEvent } from "../domain/types.ts";
 import { isLive, type Session, type State } from "../state/projection.ts";
 import { generateHandoff } from "./handoff.ts";
-import { liveSessions, rotateCoordinator, spawnCoordinator, spawnWorker, workerLimit } from "./sessions.ts";
+import { liveSessions, rotateCoordinator, spawnCoordinator, spawnReplacement, spawnWorker, workerLimit } from "./sessions.ts";
 
 export interface ReactorContext {
   root: string;
@@ -12,7 +12,7 @@ export interface ReactorContext {
   newId: () => string;
 }
 
-/** Pure follow-ups for freshly applied events: spawns, notifications, deliveries, worker teardown, coordinator rotation. */
+/** Pure follow-ups for freshly applied events: spawns, notifications, deliveries, worker teardown, coordinator rotation, recovery. */
 export function react(state: State, events: StoredEvent[], ctx: ReactorContext): { events: EventBody[]; effects: Effect[] } {
   const out: EventBody[] = [];
   const effects: Effect[] = [];
@@ -85,12 +85,63 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
     }
   };
   const { rotation } = ctx.config.session;
+  const lostSet = new Set<string>();
+  /** Emits session.lost at most once per session per call. */
+  const lose = (s: Session, reason: string) => {
+    if (!lostSet.has(s.id)) {
+      lostSet.add(s.id);
+      out.push({ type: "session.lost", thread: s.thread, payload: { session: s.id, reason } } as EventBody);
+    }
+  };
+  /** Threads whose coordinator is lost in this batch; it will be resumed, so tab_opened must not spawn a fresh one. */
+  const coordinatorLostIn = new Set(
+    events
+      .filter((e) => e.type === "session.lost")
+      .map((e) => (e.type === "session.lost" ? state.sessions.get(e.payload.session) : undefined))
+      .filter((s) => s?.role === "coordinator")
+      .map((s) => s!.thread),
+  );
 
   for (const ev of events) {
     switch (ev.type) {
       case "thread.tab_opened": {
         const t = state.threads.get(ev.thread);
-        if (t && t.status !== "done" && t.rootPane && !coordinatorOf(t.id)) take(spawnCoordinator(t, ctx));
+        if (!t || t.status === "done" || !t.rootPane) break;
+        const c = coordinatorOf(t.id);
+        if (c && c.pane && c.pane !== t.rootPane) {
+          lose(c, "tab was reopened");
+          for (const w of liveSessions(state, t.id, "worker")) lose(w, "tab was reopened");
+        } else if (!c && !coordinatorLostIn.has(t.id)) {
+          take(spawnCoordinator(t, ctx));
+        }
+        break;
+      }
+      case "session.lost": {
+        const s = state.sessions.get(ev.payload.session);
+        const t = s?.thread ? state.threads.get(s.thread) : undefined;
+        if (!s || !t || t.status === "done") break;
+        if (s.role === "coordinator" && t.rootPane) {
+          out.push({ type: "session.resuming", thread: t.id, payload: { session: s.id } });
+          effects.push({ kind: "agent.spawn", session: s.id, role: "coordinator", name: s.name, thread: t.id, cwd: t.worktree, pane: t.rootPane, resume: true, bootstrap: "resume" });
+        } else if (s.role === "worker") {
+          const k = t.tickets.find((x) => x.id === s.ticket);
+          if (k?.status === "in_progress" && k.assignee === s.id) {
+            out.push({ type: "ticket.released", thread: t.id, payload: { ticket: k.id, reason: "worker session lost" } });
+          }
+          notify(coordinatorOf(t.id), `Worker for ${s.ticket} was lost; the ticket is open again.`);
+          // The released ticket is not open in `state` yet, so this only spawns other queued tickets; the coordinator decides on the released one.
+          fillWorkers(t.id);
+        }
+        break;
+      }
+      case "session.resume_failed": {
+        const s = state.sessions.get(ev.payload.session);
+        const t = s?.thread ? state.threads.get(s.thread) : undefined;
+        if (!s || s.role !== "coordinator" || !t || t.status === "done" || !t.rootPane) break;
+        if (!t.handoff) {
+          out.push({ type: "handoff.submitted", thread: t.id, payload: { content: generateHandoff(t, "the previous coordinator session could not be resumed"), generated: true } });
+        }
+        take(spawnReplacement(t, s, ctx, { pane: t.rootPane, bootstrap: "handoff" }));
         break;
       }
       case "ticket.completed":

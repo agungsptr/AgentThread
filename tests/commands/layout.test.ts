@@ -130,3 +130,20 @@ test("tab events update the projection and the log", () => {
   expect(closed.rootPane).toBeUndefined();
   expect(closed.log.map((e) => e.message).slice(-2)).toEqual(["herdr tab w7:t3 opened", "herdr tab w7:t3 closed"]);
 });
+
+test("reconcile probes live coordinator and worker panes after tab effects", () => {
+  const C = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  const r = run(
+    [
+      INIT,
+      REGISTERED,
+      threadCreated("001"),
+      { type: "thread.tab_opened", thread: "001", payload: { tab: "w7:t3", rootPane: "w7:p5" } },
+      { type: "session.created", thread: "001", payload: { session: C, role: "coordinator", agent: "claude-code", name: "c" } },
+      { type: "session.attached", thread: "001", payload: { session: C, pane: "w7:p5" } },
+    ],
+    { cmd: "layout.reconcile" },
+  );
+  expect(r.ok && r.effects.map((e) => e.kind)).toEqual(["herdr.tab.ensure", "session.probe"]);
+  expect(r.ok && r.effects[1]).toEqual({ kind: "session.probe", session: C, thread: "001", pane: "w7:p5" });
+});

@@ -100,6 +100,8 @@ export function createEffectRunner(opts: {
         }
         return [];
       }
+      case "session.probe":
+        return []; // probing the pane for a live agent arrives with the next task; until then a probe is a no-op
     }
   };
 }

@@ -26,7 +26,8 @@ export type Effect =
       resume?: boolean;
     }
   | { kind: "notice.deliver"; session: string; thread?: string; pane: string; text: string; count: number }
-  | { kind: "pane.close"; pane: string };
+  | { kind: "pane.close"; pane: string }
+  | { kind: "session.probe"; session: string; thread?: string; pane: string };
 
 export interface HandlerContext {
   root: string;
@@ -104,7 +105,10 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
     const closes: Effect[] = (ctx.config ?? DEFAULT_CONFIG).herdr.close_tab_on_done
       ? all.flatMap((t) => (t.status === "done" && t.tab ? [{ kind: "herdr.tab.close" as const, thread: t.id, tab: t.tab }] : []))
       : [];
-    return { events: [], effects: [...open.map(tabEnsure), ...closes], result: { threads: open.length } };
+    const probes: Effect[] = [...state.sessions.values()]
+      .filter((s) => isLive(s) && (s.role === "coordinator" || s.role === "worker") && s.pane)
+      .map((s) => ({ kind: "session.probe", session: s.id, ...(s.thread ? { thread: s.thread } : {}), pane: s.pane! }));
+    return { events: [], effects: [...open.map(tabEnsure), ...closes, ...probes], result: { threads: open.length } };
   }
 
   if (cmd.cmd === "tell") {
