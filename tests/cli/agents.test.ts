@@ -117,3 +117,11 @@ test("a missing Claude binary ends the main session and fails", () => {
 test("agt start returns Claude's exit code", () => {
   expect(agt(["start"], { FAKE_CLAUDE_EXIT: "3" }).code).toBe(3);
 });
+
+test("agt handoff --stdin", () => {
+  agt(["start", "--no-manager"]);
+  agt(["thread", "new", "X", "--type", "bug"]);
+  const content = ["Goal status", "Work done", "Decisions", "Next steps", "Risks"].map((s) => `## ${s}\nx`).join("\n");
+  expect(agt(["handoff", "001", "--stdin"], { AGT_ROLE: "coordinator", AGT_THREAD: "001" }, content)).toMatchObject({ code: 0, out: "ok" });
+  expect(agt(["handoff", "001"], { AGT_ROLE: "coordinator", AGT_THREAD: "001" }).code).toBe(2);
+});

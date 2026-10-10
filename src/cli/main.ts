@@ -32,7 +32,7 @@ const USAGE = `usage: agt <command>
   ticket block <thread>/<ticket> --reason <text>
   log <thread> <message...>
   decide <thread> <message...>
-  handoff <thread> --file <path>
+  handoff <thread> (--file <path> | --stdin)
   worker spawn <thread> --ticket <T>
   tell <thread|main> <message...>
   event started|active|idle|compacting|ended   (used by Claude Code hooks)
@@ -122,9 +122,9 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
       return send(findRoot(cwd, env), env, { cmd: group, thread: threadId, message: words.join(" ") });
     }
     case "handoff": {
-      const { values, positionals } = parse(argv.slice(1), { file: { type: "string" } });
-      if (!positionals[0] || !values.file) throw new UsageError("handoff needs <thread> --file <path>");
-      const content = readFileSync(resolve(cwd, values.file as string), "utf8");
+      const { values, positionals } = parse(argv.slice(1), { file: { type: "string" }, stdin: { type: "boolean" } });
+      if (!positionals[0] || Boolean(values.file) === Boolean(values.stdin)) throw new UsageError("handoff needs <thread> and exactly one of --file <path> or --stdin");
+      const content = values.stdin ? await Bun.stdin.text() : readFileSync(resolve(cwd, values.file as string), "utf8");
       return send(findRoot(cwd, env), env, { cmd: "handoff", thread: positionals[0], content });
     }
     case "worker": {

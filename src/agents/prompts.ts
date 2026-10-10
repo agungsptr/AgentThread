@@ -34,8 +34,9 @@ export function systemPrompt(o: PromptInput): string {
       `- Start one worker per ticket that can run in parallel: agt worker spawn ${t.id} --ticket <T>. The daemon limits how many run at once and queues the rest.`,
       "- Workers only edit files. You are the only one who commits: when a ticket is done, review the change, then git add and git commit in the worktree.",
       `- Record important decisions with agt decide ${t.id} "<decision>" and progress with agt log ${t.id} "<message>".`,
-      `- If a ticket is blocked, fix the cause or reopen it with agt ticket reopen ${t.id}/<T>.`,
+      `- If a ticket is blocked, fix the cause, or reopen it with agt ticket reopen ${t.id}/<T> and start a new worker for it with agt worker spawn ${t.id} --ticket <T>.`,
       "- You receive short notifications (ticket done or blocked, messages) as prompts. Act on them, then stop and wait.",
+      "- If you receive a HANDOFF REQUEST, write the handoff exactly as instructed and then stop.",
     ].join("\n");
   }
   return [
@@ -49,9 +50,35 @@ export function systemPrompt(o: PromptInput): string {
   ].join("\n");
 }
 
-export function bootstrapPrompt(o: PromptInput): string {
+export const HANDOFF_REQUEST_PREFIX = "HANDOFF REQUEST:";
+
+export function handoffRequestPrompt(o: { root: string; thread: { id: string; title: string; slug: string; worktree: string }; reason: string }): string {
+  const id = o.thread.id;
+  return [
+    `${HANDOFF_REQUEST_PREFIX} your coordinator session for thread ${id} is being rotated (${o.reason}).`,
+    "Write a handoff for the coordinator who continues after you, and submit it with this exact command shape:",
+    `agt handoff ${id} --stdin <<'EOF'`,
+    "## Goal status",
+    "<where the thread stands against its goal and acceptance criteria>",
+    "## Work done",
+    "<what is finished, with ticket ids>",
+    "## Decisions",
+    "<decisions and why>",
+    "## Next steps",
+    "<what to do next, in order>",
+    "## Risks",
+    "<open risks, blocked tickets, things to double-check>",
+    "EOF",
+    "Every section must have content. When the command prints ok, stop: a new coordinator takes over from your handoff.",
+  ].join("\n");
+}
+
+export function bootstrapPrompt(o: PromptInput, kind: "start" | "handoff" | "resume" = "start"): string {
   if (o.role === "main") return "";
   const dir = threadDir(o);
-  if (o.role === "coordinator") return `Start coordinating thread ${o.thread!.id}. Read ${dir}/sub.thread.md and ${dir}/board.md now.`;
-  return `Start ticket ${o.ticket} of thread ${o.thread!.id} now.`;
+  const id = o.thread!.id;
+  if (o.role === "worker") return `Start ticket ${o.ticket} of thread ${id} now.`;
+  if (kind === "handoff") return `Continue coordinating thread ${id} as its new coordinator. Read the Handoff section of ${dir}/sub.thread.md first, then ${dir}/board.md.`;
+  if (kind === "resume") return `You were resumed after an interruption. Re-read ${dir}/sub.thread.md and ${dir}/board.md, then continue coordinating thread ${id}.`;
+  return `Start coordinating thread ${id}. Read ${dir}/sub.thread.md and ${dir}/board.md now.`;
 }
