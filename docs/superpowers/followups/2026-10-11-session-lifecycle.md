@@ -1,0 +1,31 @@
+# Session lifecycle (Plan 4) — rulings and deferred follow-ups
+
+Source: SDD ledger for docs/superpowers/plans/2026-10-11-session-lifecycle.md. Review before Plan 5.
+
+## Rulings
+- Ruling: Task 2 also appends the two smoke-test items from the plan's "After merging" section to README.md — the plan says so explicitly; cost if wrong: none.
+- Task 1: Ruling: test adjustments accepted (lastActiveAt in existing toEqual; pane absence asserted with toBeUndefined on Bun 1.1.34) — same behavior asserted.
+- Task 1: Ruling: stale `rotation` survives lost→resuming — Task 5 must clear `rotation` in the projection on `session.lost` (a lost session's pending rotation is void; recovery uses the resume/handoff path) and test it — cost if wrong: a resumed coordinator could be rotated by the sweep right after resuming.
+- Task 3: Ruling: fix — transcript fields must be safe non-negative integers (cache fields default 0) else undefined; skip assistant entries with isSidechain:true or total 0; only read regular files (statSync.isFile); agt event truncates source to 32 chars; tests for malformed usage + unchanged context after garbage. Defer long-cwd hashing — cost if wrong: none.
+- Task 4: Ruling: (plan-mandated) in-call rotation leaks — reactor keeps rotatedTo map (old→replacement); deliver skips rotated ids; notify redirects to the replacement; at rotation time rewrite notice.queued already in this call's out for the old session to the replacement; include minors: sweep only when coordinatorOf(t)===s, rotation_requested reacts only when s.rotation.requestedAt===ev.ts, only a coordinator-authored or generated handoff completes a rotation, rotateCoordinator no-ops for done threads/no rootPane; regression tests — cost if wrong: none.
+- Task 5: Ruling: temporary no-op session.probe case in effects.ts (Task 6 replaces it); coordinatorLostIn type narrowing — accepted.
+- Task 5: Ruling: REVERSE the Task 1 ruling — keep a pending rotation across lost/resume (do not clear it on session.lost) so a resumed coordinator's handoff completes the rotation; notices for a thread whose coordinator is lost (in state or this batch) are queued to that lost coordinator id (kept on resume, carried on replacement); resume_failed replacement registers an old→new redirect for notify; worker-lost notice text conditional on release; reactor only recovers on session.lost when the session's status is lost; tests — cost if wrong: a resumed coordinator may be rotated soon after resume (rotation was already due).
+- Task 6: Ruling: tests/daemon/herdr.test.ts made hermetic for CLAUDE_CONFIG_DIR — accepted.
+- Final: Ruling: I-1/I-5 — `layout.reconcile` recovers every non-done thread that has a tab but no live coordinator: if its latest coordinator session ended (not rotated) → emit `session.lost` for it (projection lets `lost` apply to `ended` too) so the reactor resumes it; if the latest is failed (or none exists) → spawn a replacement split from t.rootPane with the handoff bootstrap. No immediate respawn on /exit. — cost if wrong: a coordinator the user deliberately quit comes back on the next agt start.
+- Final: Ruling: I-2 — reactor `session.ended` for a worker releases its in_progress ticket assigned to it and notifies the coordinator (same as lost).
+- Final: Ruling: I-3 — the resume_failed replacement is spawned as a split from t.rootPane (gets its own env) and retires the old root pane on attach (session.created gains `retirePane`; attach closes `old.pane ?? retirePane`).
+- Final: Ruling: I-4 — `session.resuming` resets a pending rotation's requestedAt to ev.ts; sweep skips coordinators with no pane or status starting; sweep marks a coordinator still `starting` more than 3 minutes after resuming as `session.resume_failed`.
+- Final: Ruling: I-5 notices — coordinatorToNotify falls back to the latest non-rotated coordinator session (live, lost, or failed) so notices persist until recovery carries them.
+- Final: Ruling: include T2 template-validation test and T7 e2e assertions (exactly one live coordinator after resume, resume bootstrap, session.resuming, AGT_SESSION in hook env); defer Minors 1–4 to followups.
+- Final: parked — recreated tab + failed/absent coordinator in one reconcile: replacement splits from the dead old root pane and fails; heals on the next agt start — Ruling: accepted minor, follow-up (re-split pane-less starting coordinator on tab_opened).
+
+## Deferred / parked
+- Task 1: minor (deferred): negative-path projection tests (resuming non-lost, lost non-live, released non-in_progress, resume_failed never-lost).
+- Task 2: minor (deferred): no test fills the handoff-request template and validates it (template/HANDOFF_SECTIONS drift).
+- Task 3: minor (deferred): no test for source truncation; long-cwd hashing in claudeSessionFile.
+- Task 4: minor (deferred): rotate() rewrite doesn't drop HANDOFF REQUEST notices (theoretical); [notice.queued(C), completing handoff] in one batch would double-deliver (no source produces it).
+- Task 5: minor (deferred → final triage): sweep may rotate a just-resumed coordinator before it attaches (old pane not closed; consider resetting requestedAt on resuming); tab closed→reopened later spawns a fresh coordinator instead of resume/replace, stranding notices/rotation on the lost one; resolver may pick a lost coordinator already superseded by a failed replacement; tab_opened with a live pane-less coordinator does nothing.
+- Task 6: minor (deferred → final triage): config-dir mismatch between daemon check and resumed pane can leave a session resuming with a dead agent (no escalation to resume_failed); sync probes N×10s in queue; probe soft-error/true path & config_dir override untested.
+- Task 7: minor (deferred): e2e doesn't assert exactly one coordinator after resume, resume bootstrap text, or session.resuming event.
+- Final: parked — recreated tab + failed/absent coordinator in one reconcile: replacement splits from the dead old root pane and fails; heals on the next agt start — Ruling: accepted minor, follow-up (re-split pane-less starting coordinator on tab_opened).
+- Final: parked — SessionEnd maps /clear to ended, so reconcile may resume into a busy pane; stale pane ids re-closed after re-attach; latest-lost-without-live coordinator not recovered (transient) — deferred to followups.
