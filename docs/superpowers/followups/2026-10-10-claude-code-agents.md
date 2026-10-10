@@ -30,3 +30,7 @@ Source: SDD ledger for docs/superpowers/plans/2026-10-10-claude-code-agents.md. 
 - Task 9: minor (deferred): no negative assertion T2 not spawned before w1 finished (covered in T4).
 - Final: RESIDUAL (load-bearing, surfaced to user — no second fix wave): I-4 bootstrap queued as pending notice is never delivered for an agent recovered from a startup dialog (status stays active; delivery needs idle). Proposed minimal fix: projection session.started sets idle when status was `starting` (any role; replaces main-only M-1 rule), reactor `case "session.started"` → deliver, integration test signals `started` not `idle`.
 - Final: deferred — allowed-tools comma join breaks roots with commas/spaces; unbounded id lengths vs 32-char names; coordinator prompt should say re-spawn after reopen; global-constraints text outdated for names/tools.
+
+## Residual I-4 — resolved before merge (user-authorized)
+- Fixed in cba0183: first `session.started` sets a session `idle` (any role); reactor delivers on `session.started`.
+- Remaining notes for Plan 4: SessionStart after `/clear` or `/compact` keeps `active` with no Stop hook, so notices wait for the next turn; verify in the manual smoke test that SessionStart fires after the trust/MCP dialog; a failed `notice.deliver` only retries on the next event for that session; attach can deliver queued notices during the bootstrap turn (harmless: Claude queues the paste or delivery fails and is retried).
