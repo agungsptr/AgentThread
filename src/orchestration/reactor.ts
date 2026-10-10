@@ -90,6 +90,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         break;
       case "notice.queued":
       case "session.attached":
+      case "session.started":
         deliver(state.sessions.get(ev.payload.session));
         break;
       case "agent.idle": {

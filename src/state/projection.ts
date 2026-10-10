@@ -227,8 +227,8 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
     case "session.started":
     case "session.active": {
       const s = sessionOf(state, ev.seq, ev.payload.session);
-      // The main manager starts waiting for the user, so notices for it need not wait for a first turn to end.
-      if (isLive(s)) s.status = ev.type === "session.started" && s.role === "main" ? "idle" : "active";
+      // A first start leaves the agent at an empty prompt (no turn runs, so no Stop hook), so it is idle and can take notices.
+      if (isLive(s)) s.status = ev.type === "session.started" && s.status === "starting" ? "idle" : "active";
       return true;
     }
     case "agent.idle": {

@@ -101,7 +101,7 @@ test("spawn failure: session failed, coordinator notified, slot freed", async ()
   expect(fake.read().calls.filter((c) => c[0] === "pane" && c[1] === "close").length).toBeGreaterThanOrEqual(1);
 });
 
-test("a coordinator blocked at a startup dialog is attached and gets its bootstrap at the first idle", async () => {
+test("a coordinator blocked at a startup dialog is attached and gets its bootstrap when its session starts", async () => {
   await boot({ seed: { fail: ["agent start", "agent prompt"], failCode: { "agent start": "agent_not_ready", "agent prompt": "agent_blocked" } } });
   await cmd({ cmd: "thread.new", title: "X", type: "bug" });
   await waitFor(async () => (await events()).some((e) => e.type === "session.attached" || e.type === "session.failed"), 10_000);
@@ -109,10 +109,10 @@ test("a coordinator blocked at a startup dialog is attached and gets its bootstr
   expect(all.some((e) => e.type === "session.failed")).toBe(false);
   const c = (await sessionOf("coordinator"))!.session;
   expect(all.find((e) => e.type === "notice.queued")?.payload).toEqual({ session: c, text: expect.stringMatching(/^Start coordinating thread 001\./) });
-  // the dialog is dismissed; the first idle delivers the bootstrap
+  // the dialog is dismissed; SessionStart fires at the empty prompt and delivers the bootstrap
   const s = fake.read();
   writeFileSync(fake.file, JSON.stringify({ ...s, fail: [] }));
-  await cmd({ cmd: "session.signal", session: c, signal: "idle" });
+  await cmd({ cmd: "session.signal", session: c, signal: "started" });
   expect((await events()).at(-1)!.type).toBe("notice.delivered");
   expect(fake.read().calls.filter((x) => x[0] === "agent" && x[1] === "prompt" && x[2] === "w1:p1").map((x) => x[3]!.slice(0, 26))).toEqual(["Start coordinating thread "]);
 });

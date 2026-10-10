@@ -89,7 +89,7 @@ test("ended does not overwrite failed", () => {
   expect(s.sessions.get(S1)!.status).toBe("failed");
 });
 
-test("session.started makes a main session idle (it waits for the user), but coordinators and workers active", () => {
+test("a first session.started makes any role idle; a later one (compact/resume) makes it active", () => {
   const M = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
   const s = stateOf(
     INIT,
@@ -98,7 +98,26 @@ test("session.started makes a main session idle (it waits for the user), but coo
     { type: "session.started", payload: { session: M } },
     created(S1, "coordinator"),
     { type: "session.started", thread: "001", payload: { session: S1 } },
+    created(S2, "worker", "T1"),
+    { type: "session.started", thread: "001", payload: { session: S2 } },
   );
-  expect(s.sessions.get(M)!.status).toBe("idle");
-  expect(s.sessions.get(S1)!.status).toBe("active");
+  for (const id of [M, S1, S2]) expect(s.sessions.get(id)!.status).toBe("idle");
+  const s2 = stateOf(
+    INIT,
+    threadCreated("001"),
+    created(S1, "coordinator"),
+    { type: "session.started", thread: "001", payload: { session: S1 } },
+    { type: "session.active", thread: "001", payload: { session: S1 } },
+    { type: "session.started", thread: "001", payload: { session: S1 } },
+  );
+  expect(s2.sessions.get(S1)!.status).toBe("active");
+  const s3 = stateOf(
+    INIT,
+    threadCreated("001"),
+    created(S1, "coordinator"),
+    { type: "session.started", thread: "001", payload: { session: S1 } },
+    { type: "agent.idle", thread: "001", payload: { session: S1 } },
+    { type: "session.started", thread: "001", payload: { session: S1 } },
+  );
+  expect(s3.sessions.get(S1)!.status).toBe("active");
 });

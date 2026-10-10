@@ -62,6 +62,15 @@ test("ticket events notify the coordinator; delivery waits for idle and happens 
   expect(react(s, both, ctx()).effects).toHaveLength(1);
 });
 
+test("a fresh session.started delivers the notices queued before it", () => {
+  const s = base();
+  apply(s, { type: "notice.queued", thread: "001", payload: { session: C, text: "Start coordinating." } });
+  const started = apply(s, { type: "session.started", thread: "001", payload: { session: C } });
+  expect(react(s, started, ctx()).effects).toEqual([
+    { kind: "notice.deliver", session: C, thread: "001", pane: "w1:p2", text: "Start coordinating.", count: 1 },
+  ]);
+});
+
 test("idle worker with a done ticket ends, closes its pane, and the slot spawns the next queued ticket", () => {
   const s = base(1);
   apply(
