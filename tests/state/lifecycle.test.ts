@@ -71,7 +71,7 @@ test("ticket released and root pane changed; replaces is stored", () => {
   expect(s.sessions.get(W)!.replaces).toBe(C);
 });
 
-test("lost clears a pending rotation, so the resumed coordinator is not rotating", () => {
+test("a pending rotation survives lost and resuming", () => {
   const s = stateOf(
     INIT, threadCreated("001"), coord, at("w1:p2"),
     { type: "session.rotation_requested", thread: "001", payload: { session: C, reason: "context" } },
@@ -79,6 +79,6 @@ test("lost clears a pending rotation, so the resumed coordinator is not rotating
     { type: "session.resuming", thread: "001", payload: { session: C } },
   );
   const c = s.sessions.get(C)!;
-  expect(c.rotation).toBeUndefined();
-  expect(displayStatus(c)).toBe("starting");
+  expect(c.rotation).toEqual({ reason: "context", requestedAt: "2026-10-09T10:00:04.000Z" });
+  expect(displayStatus(c)).toBe("rotating");
 });

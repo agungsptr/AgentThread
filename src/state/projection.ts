@@ -285,7 +285,6 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
       const s = sessionOf(state, ev.seq, ev.payload.session);
       if (isLive(s)) {
         s.status = "lost";
-        delete s.rotation; // a resumed coordinator starts fresh, not mid-rotation
         threadNote(state, ev, `session ${short(s.id)} lost: ${ev.payload.reason}`);
       }
       return true;

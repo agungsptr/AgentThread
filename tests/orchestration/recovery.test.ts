@@ -86,3 +86,85 @@ test("tab reopened in the same batch as a probe loss: resume once, no fresh coor
   expect(r.events.filter((e) => e.type === "session.created")).toEqual([]);
   expect(r.effects).toEqual([expect.objectContaining({ kind: "agent.spawn", session: C, pane: "w1:p9", resume: true })]);
 });
+
+const COORD = { role: "coordinator" as const, thread: "001", session: C };
+
+test("a rotation pending at loss completes after resume: request delivered, coordinator handoff rotates", () => {
+  const s = base();
+  const req = react(s, apply(s, { type: "session.rotation_requested", thread: "001", payload: { session: C, reason: "context" } }), ctx());
+  apply(s, ...req.events); // the HANDOFF REQUEST notice, not yet delivered
+  apply(s, { type: "session.lost", thread: "001", payload: { session: C, reason: "no agent in pane w1:p2" } }, { type: "session.resuming", thread: "001", payload: { session: C } });
+  const r = react(s, apply(s, { type: "session.attached", thread: "001", payload: { session: C, pane: "w1:p2" } }, { type: "session.started", thread: "001", payload: { session: C } }), ctx());
+  expect(r.effects).toEqual([expect.objectContaining({ kind: "notice.deliver", session: C, text: expect.stringContaining("HANDOFF REQUEST") })]);
+  const ev = { type: "handoff.submitted", thread: "001", payload: { content: "h", generated: false }, seq: s.lastSeq + 1, ts: "2026-10-11T10:00:00.000Z", actor: COORD } as StoredEvent;
+  applyEvent(s, ev);
+  const h = react(s, [ev], ctx());
+  expect(h.events.map((e) => e.type)).toEqual(["session.rotated", "session.created"]);
+  expect(h.events[1]).toMatchObject({ payload: { replaces: C } });
+});
+
+test("coordinator and worker lost in one batch: ticket released and the notice is queued to the lost coordinator", () => {
+  const s = base();
+  const r = react(
+    s,
+    apply(
+      s,
+      { type: "session.lost", thread: "001", payload: { session: C, reason: "no agent in pane w1:p2" } },
+      { type: "session.lost", thread: "001", payload: { session: W, reason: "no agent in pane w1:p3" } },
+    ),
+    ctx(),
+  );
+  expect(r.events).toEqual([
+    { type: "session.resuming", thread: "001", payload: { session: C } },
+    { type: "ticket.released", thread: "001", payload: { ticket: "T1", reason: "worker session lost" } },
+    { type: "notice.queued", thread: "001", payload: { session: C, text: "Worker for T1 was lost; the ticket is open again." } },
+  ]);
+});
+
+test("tab reopened path: the follow-up losses resume C and queue the worker notice to C", () => {
+  const s = base();
+  const first = react(s, apply(s, { type: "thread.tab_opened", thread: "001", payload: { tab: "w1:t9", rootPane: "w1:p9" } }), ctx());
+  const r = react(s, apply(s, ...first.events), ctx());
+  expect(r.events).toEqual([
+    { type: "session.resuming", thread: "001", payload: { session: C } },
+    { type: "ticket.released", thread: "001", payload: { ticket: "T1", reason: "worker session lost" } },
+    { type: "notice.queued", thread: "001", payload: { session: C, text: "Worker for T1 was lost; the ticket is open again." } },
+  ]);
+  expect(r.effects).toEqual([expect.objectContaining({ kind: "agent.spawn", session: C, pane: "w1:p9", resume: true })]);
+  apply(s, ...r.events);
+  expect(s.sessions.get(C)!.notices).toEqual(["Worker for T1 was lost; the ticket is open again."]);
+});
+
+test("resume_failed: notices queued later in the same call go to the replacement; feeding its events back does not rotate", () => {
+  const s = base();
+  apply(s, { type: "session.rotation_requested", thread: "001", payload: { session: C, reason: "context" } });
+  apply(s, { type: "session.lost", thread: "001", payload: { session: C, reason: "x" } }, { type: "session.resuming", thread: "001", payload: { session: C } });
+  const r = react(
+    s,
+    apply(
+      s,
+      { type: "session.resume_failed", thread: "001", payload: { session: C, reason: "no saved Claude session" } },
+      { type: "ticket.blocked", thread: "001", payload: { ticket: "T2", reason: "needs input" } },
+    ),
+    ctx(),
+  );
+  const created = r.events.find((e) => e.type === "session.created");
+  const newId = created?.type === "session.created" ? created.payload.session : "";
+  expect(r.events.find((e) => e.type === "notice.queued")).toMatchObject({ payload: { session: newId, text: "Ticket T2 is blocked: needs input." } });
+  const back = react(s, apply(s, ...r.events), ctx());
+  expect(back.events.filter((e) => e.type === "session.rotated" || e.type === "session.created")).toEqual([]);
+});
+
+test("worker lost whose ticket is not in progress and assigned to it: no release, plain notice", () => {
+  const s = base();
+  apply(s, { type: "ticket.completed", thread: "001", payload: { ticket: "T1" } });
+  const r = react(s, apply(s, { type: "session.lost", thread: "001", payload: { session: W, reason: "x" } }), ctx());
+  expect(r.events).toEqual([{ type: "notice.queued", thread: "001", payload: { session: C, text: "Worker for T1 was lost." } }]);
+});
+
+test("a loss of an ended session is ignored", () => {
+  const s = base();
+  apply(s, { type: "session.ended", thread: "001", payload: { session: W } });
+  const r = react(s, apply(s, { type: "session.lost", thread: "001", payload: { session: W, reason: "x" } }), ctx());
+  expect(r.events.filter((e) => e.type !== "session.created")).toEqual([]);
+});

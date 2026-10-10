@@ -147,3 +147,28 @@ test("reconcile probes live coordinator and worker panes after tab effects", () 
   expect(r.ok && r.effects.map((e) => e.kind)).toEqual(["herdr.tab.ensure", "session.probe"]);
   expect(r.ok && r.effects[1]).toEqual({ kind: "session.probe", session: C, thread: "001", pane: "w7:p5" });
 });
+
+test("reconcile does not probe main, non-live or pane-less sessions", () => {
+  const C = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  const W = "11111111-1111-4111-8111-111111111111";
+  const W2 = "22222222-2222-4222-8222-222222222222";
+  const M = "33333333-3333-4333-8333-333333333333";
+  const r = run(
+    [
+      INIT,
+      REGISTERED,
+      threadCreated("001"),
+      { type: "thread.tab_opened", thread: "001", payload: { tab: "w7:t3", rootPane: "w7:p5" } },
+      { type: "session.created", payload: { session: M, role: "main", agent: "claude-code", name: "m" } },
+      { type: "session.attached", payload: { session: M, pane: "w7:p1" } },
+      { type: "session.created", thread: "001", payload: { session: C, role: "coordinator", agent: "claude-code", name: "c" } },
+      { type: "session.created", thread: "001", payload: { session: W, role: "worker", agent: "claude-code", name: "w", ticket: "T1" } },
+      { type: "session.attached", thread: "001", payload: { session: W, pane: "w7:p6" } },
+      { type: "session.ended", thread: "001", payload: { session: W } },
+      { type: "session.created", thread: "001", payload: { session: W2, role: "worker", agent: "claude-code", name: "w2", ticket: "T2" } },
+      { type: "session.attached", thread: "001", payload: { session: W2, pane: "w7:p7" } },
+    ],
+    { cmd: "layout.reconcile" },
+  );
+  expect(r.ok && r.effects.filter((e) => e.kind === "session.probe")).toEqual([{ kind: "session.probe", session: W2, thread: "001", pane: "w7:p7" }]);
+});

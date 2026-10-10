@@ -34,6 +34,26 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
     else if (target) out.push({ type: "notice.queued", ...(target.thread ? { thread: target.thread } : {}), payload: { session: target.id, text } });
   };
   const coordinatorOf = (thread: string | undefined) => (thread ? liveSessions(state, thread, "coordinator")[0] : undefined);
+  const lostSet = new Set<string>();
+  /**
+   * Who receives notices meant for a thread's coordinator: the live one, else the latest lost one.
+   * Notices persist on a lost session; a resume keeps its id and a replacement carries them over.
+   */
+  const coordinatorToNotify = (thread: string | undefined): Session | undefined => {
+    const live = coordinatorOf(thread);
+    if (live || !thread) return live;
+    return [...state.sessions.values()]
+      .filter((s) => s.thread === thread && s.role === "coordinator" && (s.status === "lost" || lostSet.has(s.id)))
+      .at(-1);
+  };
+  /** Records that `oldId` was replaced in this call and moves notices queued for it earlier in this call to `newId`. */
+  const redirect = (oldId: string, newId: string) => {
+    rotatedTo.set(oldId, newId);
+    for (let i = 0; i < out.length; i++) {
+      const e = out[i]!;
+      if (e.type === "notice.queued" && e.payload.session === oldId) out[i] = { ...e, payload: { ...e.payload, session: newId } };
+    }
+  };
   const deliver = (s: Session | undefined) => {
     if (!s || delivered.has(s.id) || rotated.has(s.id) || !isLive(s) || s.status !== "idle" || !s.pane || s.notices.length === 0) return;
     delivered.add(s.id);
@@ -67,12 +87,8 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
     const created = r.events.find((e) => e.type === "session.created");
     if (!created || created.type !== "session.created") return false;
     rotated.add(s.id);
-    rotatedTo.set(s.id, created.payload.session);
     // Notices queued for the old session earlier in this call were not part of the carry-over; send them to the replacement.
-    for (let i = 0; i < out.length; i++) {
-      const e = out[i]!;
-      if (e.type === "notice.queued" && e.payload.session === s.id) out[i] = { ...e, payload: { ...e.payload, session: created.payload.session } };
-    }
+    redirect(s.id, created.payload.session);
     if (first) out.push(first);
     take(r);
     return true;
@@ -85,7 +101,6 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
     }
   };
   const { rotation } = ctx.config.session;
-  const lostSet = new Set<string>();
   /** Emits session.lost at most once per session per call. */
   const lose = (s: Session, reason: string) => {
     if (!lostSet.has(s.id)) {
@@ -119,16 +134,16 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
       case "session.lost": {
         const s = state.sessions.get(ev.payload.session);
         const t = s?.thread ? state.threads.get(s.thread) : undefined;
-        if (!s || !t || t.status === "done") break;
+        // The projection ignores a loss of a session that already rotated, ended or failed.
+        if (!s || s.status !== "lost" || !t || t.status === "done") break;
         if (s.role === "coordinator" && t.rootPane) {
           out.push({ type: "session.resuming", thread: t.id, payload: { session: s.id } });
           effects.push({ kind: "agent.spawn", session: s.id, role: "coordinator", name: s.name, thread: t.id, cwd: t.worktree, pane: t.rootPane, resume: true, bootstrap: "resume" });
         } else if (s.role === "worker") {
           const k = t.tickets.find((x) => x.id === s.ticket);
-          if (k?.status === "in_progress" && k.assignee === s.id) {
-            out.push({ type: "ticket.released", thread: t.id, payload: { ticket: k.id, reason: "worker session lost" } });
-          }
-          notify(coordinatorOf(t.id), `Worker for ${s.ticket} was lost; the ticket is open again.`);
+          const release = k?.status === "in_progress" && k.assignee === s.id;
+          if (release) out.push({ type: "ticket.released", thread: t.id, payload: { ticket: k.id, reason: "worker session lost" } });
+          notify(coordinatorToNotify(t.id), release ? `Worker for ${s.ticket} was lost; the ticket is open again.` : `Worker for ${s.ticket} was lost.`);
           // The released ticket is not open in `state` yet, so this only spawns other queued tickets; the coordinator decides on the released one.
           fillWorkers(t.id);
         }
@@ -141,19 +156,22 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         if (!t.handoff) {
           out.push({ type: "handoff.submitted", thread: t.id, payload: { content: generateHandoff(t, "the previous coordinator session could not be resumed"), generated: true } });
         }
-        take(spawnReplacement(t, s, ctx, { pane: t.rootPane, bootstrap: "handoff" }));
+        const r = spawnReplacement(t, s, ctx, { pane: t.rootPane, bootstrap: "handoff" });
+        const created = r.events.find((e) => e.type === "session.created");
+        if (created?.type === "session.created") redirect(s.id, created.payload.session);
+        take(r);
         break;
       }
       case "ticket.completed":
-        notify(coordinatorOf(ev.thread), `Ticket ${ev.payload.ticket} is done${ev.payload.summary ? `: ${ev.payload.summary}` : ""}.`);
+        notify(coordinatorToNotify(ev.thread), `Ticket ${ev.payload.ticket} is done${ev.payload.summary ? `: ${ev.payload.summary}` : ""}.`);
         break;
       case "ticket.blocked":
-        notify(coordinatorOf(ev.thread), `Ticket ${ev.payload.ticket} is blocked: ${ev.payload.reason}.`);
+        notify(coordinatorToNotify(ev.thread), `Ticket ${ev.payload.ticket} is blocked: ${ev.payload.reason}.`);
         break;
       case "thread.status_changed": {
         const t = state.threads.get(ev.thread);
         if (ev.payload.from === "blocked" && ev.payload.to === "open") {
-          notify(coordinatorOf(ev.thread), `Thread ${ev.thread} is unblocked: ${ev.payload.reason ?? "no reason given"}.`);
+          notify(coordinatorToNotify(ev.thread), `Thread ${ev.thread} is unblocked: ${ev.payload.reason ?? "no reason given"}.`);
         } else if (ev.payload.to === "review") {
           notify(liveSessions(state, undefined, "main")[0], `Thread ${ev.thread} (${t?.title ?? ""}) is ready for review.`);
         } else if (ev.payload.to === "done") {
@@ -163,7 +181,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
       }
       case "session.failed": {
         const s = state.sessions.get(ev.payload.session);
-        if (s?.role === "worker") notify(coordinatorOf(s.thread), `Worker for ${s.ticket} failed: ${ev.payload.reason}.`);
+        if (s?.role === "worker") notify(coordinatorToNotify(s.thread), `Worker for ${s.ticket} failed: ${ev.payload.reason}.`);
         if (s?.role === "coordinator") notify(liveSessions(state, undefined, "main")[0], `Coordinator for thread ${s.thread} failed: ${ev.payload.reason}.`);
         fillWorkers(s?.thread);
         break;
