@@ -7,6 +7,7 @@ import { stringify } from "yaml";
 import { agentEnv, claudeArgs } from "../agents/claude.ts";
 import { systemPrompt } from "../agents/prompts.ts";
 import { decodeJob, runSpawnJob } from "../agents/spawn-job.ts";
+import { contextTokensFromTranscript } from "../agents/transcript.ts";
 import { isAlive, request } from "../daemon/client.ts";
 import { startDaemon } from "../daemon/server.ts";
 import { loadConfig } from "../config/config.ts";
@@ -327,12 +328,24 @@ async function hookEvent(signal: string | undefined, env: Env, cwd: string): Pro
     // A hook runner may leave stdin open; never wait on it for long.
     const input = process.stdin.isTTY ? "" : ((await Promise.race([Bun.stdin.text(), Bun.sleep(1_500).then(() => "")])) as string).trim();
     let session = env.AGT_SESSION;
+    let transcript: unknown;
+    let source: unknown;
     if (input) {
-      const parsed = JSON.parse(input) as { session_id?: unknown };
+      const parsed = JSON.parse(input) as { session_id?: unknown; transcript_path?: unknown; source?: unknown };
       if (typeof parsed.session_id === "string") session = parsed.session_id;
+      transcript = parsed.transcript_path;
+      source = parsed.source;
     }
     if (!session) throw new Error("no session id (hook stdin session_id or AGT_SESSION)");
-    const res = await request(paths(findRoot(cwd, env)).socket, { op: "command", command: { cmd: "session.signal", session, signal }, actor: actorFromEnv(env) }, 3_000);
+    const contextTokens = signal === "idle" && typeof transcript === "string" ? contextTokensFromTranscript(transcript) : undefined;
+    const command = {
+      cmd: "session.signal",
+      session,
+      signal,
+      ...(contextTokens !== undefined ? { contextTokens } : {}),
+      ...(signal === "started" && typeof source === "string" ? { source } : {}),
+    };
+    const res = await request(paths(findRoot(cwd, env)).socket, { op: "command", command, actor: actorFromEnv(env) }, 3_000);
     if (!res.ok) throw new Error(res.error);
   } catch (e) {
     console.error(`agt event: ${e instanceof Error ? e.message : String(e)}`);

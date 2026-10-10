@@ -117,7 +117,12 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
     const s = state.sessions.get(cmd.session) ?? reject(`unknown session ${cmd.session}`);
     if (actor.session && actor.session !== s.id) reject(`actor session ${actor.session} cannot signal ${s.id}`);
     if (!isLive(s)) return { events: [] };
-    return { events: [{ type: SIGNAL_EVENT[cmd.signal], thread: s.thread, payload: { session: s.id } }] };
+    const payload = {
+      session: s.id,
+      ...(cmd.signal === "idle" && cmd.contextTokens !== undefined ? { contextTokens: cmd.contextTokens } : {}),
+      ...(cmd.signal === "started" && cmd.source ? { source: cmd.source } : {}),
+    };
+    return { events: [{ type: SIGNAL_EVENT[cmd.signal], thread: s.thread, payload }] };
   }
   if (cmd.cmd === "session.attached" || cmd.cmd === "session.failed") {
     const s = state.sessions.get(cmd.session) ?? reject(`unknown session ${cmd.session}`);

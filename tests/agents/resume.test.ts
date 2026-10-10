@@ -1,0 +1,42 @@
+import { expect, test } from "bun:test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
+import { agentEnv, claudeArgs, claudeConfigDir, claudeSessionFile } from "../../src/agents/claude.ts";
+import { contextTokensFromTranscript } from "../../src/agents/transcript.ts";
+import { DEFAULT_CONFIG } from "../../src/config/config.ts";
+
+test("config dir precedence", () => {
+  const withDir = { ...DEFAULT_CONFIG, agents: { ...DEFAULT_CONFIG.agents, claude: { ...DEFAULT_CONFIG.agents.claude, config_dir: "/cfg" } } };
+  expect(claudeConfigDir(withDir, { CLAUDE_CONFIG_DIR: "/env" })).toBe("/cfg");
+  expect(claudeConfigDir(DEFAULT_CONFIG, { CLAUDE_CONFIG_DIR: "/env" })).toBe("/env");
+  expect(claudeConfigDir(DEFAULT_CONFIG, {})).toBe(join(homedir(), ".claude"));
+});
+
+test("session file path encodes every non-alphanumeric character", () => {
+  expect(claudeSessionFile({ configDir: "/c", cwd: "/repo/.worktrees/001-x", session: "s-1" })).toBe("/c/projects/-repo--worktrees-001-x/s-1.jsonl");
+});
+
+test("resume args and CLAUDE_CONFIG_DIR env", () => {
+  const args = claudeArgs({ session: "s-1", role: "coordinator", systemPrompt: "SP", config: DEFAULT_CONFIG, root: "/repo", resume: true });
+  expect(args.slice(0, 4)).toEqual(["--resume", "s-1", "--permission-mode", "acceptEdits"]);
+  expect(args).not.toContain("--session-id");
+  expect(agentEnv({ root: "/repo", role: "worker", session: "s", configDir: "/c" }).CLAUDE_CONFIG_DIR).toBe("/c");
+  expect(agentEnv({ root: "/repo", role: "worker", session: "s" })).not.toHaveProperty("CLAUDE_CONFIG_DIR");
+});
+
+test("context tokens from the last assistant usage; robust to junk", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agt-tr-"));
+  const file = join(dir, "t.jsonl");
+  const lines = [
+    { type: "user", message: { content: "hi" } },
+    { type: "assistant", message: { usage: { input_tokens: 10, cache_read_input_tokens: 100, cache_creation_input_tokens: 5, output_tokens: 7 } } },
+    { type: "assistant", message: { usage: { input_tokens: 20, cache_read_input_tokens: 1000, cache_creation_input_tokens: 0, output_tokens: 1 } } },
+    { type: "user", message: { content: "x" } },
+  ];
+  writeFileSync(file, `garbage line\n${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+  expect(contextTokensFromTranscript(file)).toBe(1020);
+  expect(contextTokensFromTranscript(join(dir, "missing.jsonl"))).toBeUndefined();
+  writeFileSync(file, "x".repeat(300_000));
+  expect(contextTokensFromTranscript(file)).toBeUndefined();
+});

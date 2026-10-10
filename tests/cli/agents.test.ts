@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { parse } from "yaml";
 import { initProject } from "../../src/project/init.ts";
 import { FAKE_CLAUDE, FAKE_HERDR, fakeHerdrState, isolatedConfigHome, tempRepo } from "../helpers.ts";
 
@@ -124,4 +125,20 @@ test("agt handoff --stdin", () => {
   const content = ["Goal status", "Work done", "Decisions", "Next steps", "Risks"].map((s) => `## ${s}\nx`).join("\n");
   expect(agt(["handoff", "001", "--stdin"], { AGT_ROLE: "coordinator", AGT_THREAD: "001" }, content)).toMatchObject({ code: 0, out: "ok" });
   expect(agt(["handoff", "001"], { AGT_ROLE: "coordinator", AGT_THREAD: "001" }).code).toBe(2);
+});
+
+test("agt event idle reports context tokens from the hook transcript", () => {
+  agt(["start", "--no-manager"]);
+  agt(["thread", "new", "X", "--type", "bug"]);
+  const fm = () => parse(readFileSync(join(root, ".agentthread/threads/001-x/sub.thread.md"), "utf8").split("---\n")[1]!) as { sessions: { id: string; role: string; context_tokens?: number }[] };
+  const c = fm().sessions.find((s) => s.role === "coordinator")!;
+  const transcript = join(xdg, "t.jsonl");
+  writeFileSync(transcript, `${JSON.stringify({ type: "assistant", message: { usage: { input_tokens: 5, cache_read_input_tokens: 50, cache_creation_input_tokens: 0 } } })}\n`);
+  expect(agt(["event", "idle"], { AGT_ROLE: "coordinator", AGT_THREAD: "001" }, JSON.stringify({ session_id: c.id, transcript_path: transcript })).code).toBe(0);
+  expect(fm().sessions.find((s) => s.id === c.id)!.context_tokens).toBe(55);
+  // a huge garbage transcript still exits 0 quickly
+  writeFileSync(transcript, "y".repeat(5_000_000));
+  const t0 = Date.now();
+  expect(agt(["event", "idle"], { AGT_ROLE: "coordinator", AGT_THREAD: "001" }, JSON.stringify({ session_id: c.id, transcript_path: transcript })).code).toBe(0);
+  expect(Date.now() - t0).toBeLessThan(3000);
 });

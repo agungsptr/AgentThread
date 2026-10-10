@@ -147,4 +147,18 @@ describe("sessions", () => {
     expect(r.ok && r.events[0]).toMatchObject({ payload: { maxWorkers: 2 } });
     expect(() => CommandSchema.parse({ cmd: "thread.new", title: "X", type: "bug", maxWorkers: 0 })).toThrow();
   });
+
+  test("signal carries contextTokens on idle and source on started only", () => {
+    const s = threadWithTab();
+    exec(s, { cmd: "worker.spawn", thread: "001", ticket: "T1" }, COORD);
+    const id = "00000000-0000-4000-8000-000000000001";
+    expect(exec(s, { cmd: "session.signal", session: id, signal: "idle", contextTokens: 42 })).toMatchObject({
+      events: [{ type: "agent.idle", payload: { session: id, contextTokens: 42 } }],
+    });
+    expect(exec(s, { cmd: "session.signal", session: id, signal: "started", source: "compact", contextTokens: 9 })).toMatchObject({
+      events: [{ type: "session.started", payload: { session: id, source: "compact" } }],
+    });
+    const started = exec(s, { cmd: "session.signal", session: id, signal: "started", contextTokens: 9 });
+    expect(started.ok && started.events[0]!.payload).toEqual({ session: id });
+  });
 });
