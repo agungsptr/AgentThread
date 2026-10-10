@@ -1,5 +1,6 @@
+import { existsSync } from "node:fs";
 import { dirname } from "node:path";
-import { AGT_BIN, agentEnv, claudeArgs } from "../agents/claude.ts";
+import { AGT_BIN, agentEnv, claudeArgs, claudeConfigDir, claudeSessionFile } from "../agents/claude.ts";
 import { bootstrapPrompt, systemPrompt } from "../agents/prompts.ts";
 import { launchSpawnJob, type SpawnJob } from "../agents/spawn-job.ts";
 import type { Effect } from "../commands/handler.ts";
@@ -20,6 +21,7 @@ export function createEffectRunner(opts: {
   launch?: (job: SpawnJob) => void;
   bridge?: (layout: Layout) => HerdrBridge;
   log?: (message: string) => void;
+  sessionFileExists?: (path: string) => boolean;
 }): (effect: Effect) => EventBody[] {
   const log = opts.log ?? ((m: string) => console.error(m));
   const launch = opts.launch ?? ((job: SpawnJob) => launchSpawnJob(job, { logFile: paths(opts.root).daemonLog }));
@@ -27,6 +29,8 @@ export function createEffectRunner(opts: {
     opts.bridge ??
     ((layout: Layout) =>
       new HerdrCli({ bin: layout.herdrBin, env: { ...process.env, ...(layout.herdrSocket ? { HERDR_SOCKET_PATH: layout.herdrSocket } : {}) } }));
+
+  const configDir = claudeConfigDir(opts.config);
 
   return (effect) => {
     switch (effect.kind) {
@@ -38,7 +42,7 @@ export function createEffectRunner(opts: {
         const layout = opts.layout();
         if (!layout) return [];
         try {
-          return runHerdr(effect, bridgeFor(layout), layout, opts.root);
+          return runHerdr(effect, bridgeFor(layout), layout, opts.root, configDir);
         } catch (e) {
           // Herdr is a view: a failure here must never fail the command. `agt start` reconciles missing tabs.
           log(`herdr ${effect.kind} for thread ${effect.thread} failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -52,6 +56,12 @@ export function createEffectRunner(opts: {
         if (!layout) return failed("no Herdr layout registered");
         if (!t) return failed(`unknown thread ${effect.thread}`);
         const prompt = { root: opts.root, role: effect.role, thread: t, ticket: effect.ticket };
+        if (effect.resume) {
+          const file = claudeSessionFile({ configDir, cwd: effect.cwd, session: effect.session });
+          if (!(opts.sessionFileExists ?? existsSync)(file)) {
+            return [{ type: "session.resume_failed", thread: effect.thread, payload: { session: effect.session, reason: `no saved Claude session at ${file}` } }];
+          }
+        }
         try {
           launch({
             root: opts.root,
@@ -67,12 +77,12 @@ export function createEffectRunner(opts: {
                     pane: effect.splitFrom,
                     direction: effect.direction ?? "right",
                     cwd: effect.cwd,
-                    env: agentEnv({ root: opts.root, role: effect.role, session: effect.session, thread: effect.thread, ticket: effect.ticket }),
+                    env: agentEnv({ root: opts.root, role: effect.role, session: effect.session, thread: effect.thread, ticket: effect.ticket, configDir }),
                   },
                 }
               : {}),
-            args: claudeArgs({ session: effect.session, role: effect.role, systemPrompt: systemPrompt(prompt), config: opts.config, root: opts.root }),
-            bootstrap: bootstrapPrompt(prompt),
+            args: claudeArgs({ session: effect.session, role: effect.role, systemPrompt: systemPrompt(prompt), config: opts.config, root: opts.root, resume: effect.resume }),
+            bootstrap: bootstrapPrompt(prompt, effect.bootstrap ?? "start"),
           });
           return [];
         } catch (e) {
@@ -100,13 +110,23 @@ export function createEffectRunner(opts: {
         }
         return [];
       }
-      case "session.probe":
-        return []; // probing the pane for a live agent arrives with the next task; until then a probe is a no-op
+      case "session.probe": {
+        const layout = opts.layout();
+        if (!layout) return [];
+        try {
+          return bridgeFor(layout).agentExists(effect.pane)
+            ? []
+            : [{ type: "session.lost", ...(effect.thread ? { thread: effect.thread } : {}), payload: { session: effect.session, reason: `no agent in pane ${effect.pane}` } }];
+        } catch (e) {
+          log(`probing pane ${effect.pane} failed: ${e instanceof Error ? e.message : String(e)}`);
+          return [];
+        }
+      }
     }
   };
 }
 
-function runHerdr(effect: HerdrEffect, bridge: HerdrBridge, layout: Layout, root: string): EventBody[] {
+function runHerdr(effect: HerdrEffect, bridge: HerdrBridge, layout: Layout, root: string, configDir: string): EventBody[] {
   if (effect.kind === "herdr.tab.ensure") {
     if (effect.tab && bridge.tabExists(effect.tab)) return [];
     const { tabId, rootPaneId } = bridge.createTab({
@@ -118,6 +138,7 @@ function runHerdr(effect: HerdrEffect, bridge: HerdrBridge, layout: Layout, root
         AGT_THREAD: effect.thread,
         AGT_ROLE: "coordinator",
         AGT_AGENT: "claude-code",
+        CLAUDE_CONFIG_DIR: configDir,
         PATH: `${dirname(AGT_BIN)}:${process.env.PATH ?? ""}`,
       },
     });

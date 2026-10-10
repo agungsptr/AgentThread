@@ -163,3 +163,23 @@ describe("agent commands", () => {
     expect(fake.read().agents).toEqual(["a"]);
   });
 });
+
+describe("agentExists", () => {
+  test("true on success, false for not-found codes, rethrows others", () => {
+    const run = (exitCode: number, stderr = "") => new HerdrCli({ bin: "herdr", runner: () => ({ exitCode, stdout: '{"result":{"type":"agent_info"}}', stderr }) });
+    expect(run(0).agentExists("w1:p2")).toBe(true);
+    expect(run(1, '{"error":{"code":"agent_not_found","message":"x"}}').agentExists("w1:p2")).toBe(false);
+    expect(run(1, '{"error":{"code":"pane_not_found","message":"x"}}').agentExists("w1:p2")).toBe(false);
+    expect(() => run(1, '{"error":{"code":"server_unavailable","message":"down"}}').agentExists("w1:p2")).toThrow("down");
+  });
+
+  test("fake herdr tracks agent panes", () => {
+    const fake = fakeHerdrState({ panes: ["w1:p2"] });
+    const h = new HerdrCli({ bin: FAKE_HERDR, env: { ...process.env, FAKE_HERDR_STATE: fake.file } });
+    expect(h.agentExists("w1:p2")).toBe(false);
+    h.agentStart({ name: "a", kind: "claude", pane: "w1:p2", args: [] });
+    expect(h.agentExists("w1:p2")).toBe(true);
+    h.closePane("w1:p2");
+    expect(h.agentExists("w1:p2")).toBe(false);
+  });
+});

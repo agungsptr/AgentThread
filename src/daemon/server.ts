@@ -4,8 +4,9 @@ import type { SpawnJob } from "../agents/spawn-job.ts";
 import { handle } from "../commands/handler.ts";
 import { ActorSchema, CommandSchema } from "../commands/schema.ts";
 import { loadConfig, type Config } from "../config/config.ts";
-import type { EventBody, StoredEvent } from "../domain/types.ts";
+import type { Actor, EventBody, StoredEvent } from "../domain/types.ts";
 import { react } from "../orchestration/reactor.ts";
+import { sweep } from "../orchestration/sweep.ts";
 import { paths } from "../project/paths.ts";
 import { writeAll } from "../render/write.ts";
 import { applyEvent, project } from "../state/projection.ts";
@@ -28,7 +29,7 @@ export function runFollowUps(fresh: StoredEvent[], round: (events: StoredEvent[]
   if (fresh.length > 0) log(`reactor stopped after ${MAX_FOLLOW_UP_ROUNDS} rounds`);
 }
 
-export async function startDaemon(root: string, opts: { log?: (message: string) => void; launch?: (job: SpawnJob) => void } = {}): Promise<Daemon> {
+export async function startDaemon(root: string, opts: { log?: (message: string) => void; launch?: (job: SpawnJob) => void; sweepIntervalMs?: number } = {}): Promise<Daemon> {
   const p = paths(root);
   // Taking the exclusive store lock first makes "one daemon per project" a property of state.db, not of the socket path.
   const store = new EventStore(p.db, { exclusive: true });
@@ -66,25 +67,19 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
     launch: opts.launch,
   });
 
-  const runCommand = (raw: { command: unknown; actor: unknown }): Response => {
-    const command = CommandSchema.safeParse(raw.command);
-    if (!command.success) return { ok: false, error: `invalid command: ${command.error.issues.map((i) => i.message).join("; ")}` };
-    const actor = ActorSchema.safeParse(raw.actor);
-    if (!actor.success) return { ok: false, error: `invalid actor: ${actor.error.issues.map((i) => i.message).join("; ")}` };
-    const decision = handle(state, command.data, actor.data, { root, config, newId: randomUUID });
-    if (!decision.ok) return decision;
-    const commit = (bodies: EventBody[]) => {
-      const stored = store.append(bodies, actor.data);
+  const applyAndReact = (bodies: EventBody[], actor: Actor): void => {
+    const commit = (b: EventBody[]) => {
+      const stored = store.append(b, actor);
       for (const ev of stored) applyEvent(state, ev);
       return stored;
     };
-    const fresh = commit([...decision.events, ...decision.effects.flatMap(runEffect)]);
+    const fresh = bodies.length ? commit(bodies) : [];
     runFollowUps(
       fresh,
-      (events) => {
-        const next = react(state, events, { root, config, newId: randomUUID });
-        const bodies = [...next.events, ...next.effects.flatMap(runEffect)];
-        return bodies.length === 0 ? [] : commit(bodies);
+      (evs) => {
+        const next = react(state, evs, { root, config, newId: randomUUID });
+        const more = [...next.events, ...next.effects.flatMap(runEffect)];
+        return more.length === 0 ? [] : commit(more);
       },
       opts.log ?? console.error,
     );
@@ -94,6 +89,16 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
       // Events are already committed; failing here would make the client retry and duplicate the command.
       (opts.log ?? console.error)(`render failed after commit: ${e instanceof Error ? e.message : String(e)}`);
     }
+  };
+
+  const runCommand = (raw: { command: unknown; actor: unknown }): Response => {
+    const command = CommandSchema.safeParse(raw.command);
+    if (!command.success) return { ok: false, error: `invalid command: ${command.error.issues.map((i) => i.message).join("; ")}` };
+    const actor = ActorSchema.safeParse(raw.actor);
+    if (!actor.success) return { ok: false, error: `invalid actor: ${actor.error.issues.map((i) => i.message).join("; ")}` };
+    const decision = handle(state, command.data, actor.data, { root, config, newId: randomUUID });
+    if (!decision.ok) return decision;
+    applyAndReact([...decision.events, ...decision.effects.flatMap(runEffect)], actor.data);
     return { ok: true, result: decision.result };
   };
 
@@ -148,8 +153,19 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
     },
   });
 
+  const sweepTimer = setInterval(() => {
+    if (shuttingDown) return;
+    void enqueue(() => {
+      const r = sweep(state, new Date().toISOString(), { root, config, newId: randomUUID });
+      const bodies = [...r.events, ...r.effects.flatMap(runEffect)];
+      if (bodies.length) applyAndReact(bodies, { role: "user" });
+    }).catch((e) => (opts.log ?? console.error)(`sweep failed: ${e instanceof Error ? e.message : String(e)}`));
+  }, opts.sweepIntervalMs ?? 15_000);
+  sweepTimer.unref?.();
+
   const stop = (): Promise<void> => {
     shuttingDown = true;
+    clearInterval(sweepTimer);
     stopping ??= (async () => {
       await chain;
       listener.stop(true);

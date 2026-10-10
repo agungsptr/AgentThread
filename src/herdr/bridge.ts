@@ -48,6 +48,7 @@ export interface HerdrBridge {
   agentStart(o: { name: string; kind: "claude" | "opencode"; pane: string; args: string[]; timeoutMs?: number }): void;
   agentPrompt(target: string, text: string): void;
   closePane(pane: string): void;
+  agentExists(target: string): boolean;
 }
 
 const envArgs = (env: Record<string, string>) => Object.entries(env).flatMap(([k, v]) => ["--env", `${k}=${v}`]);
@@ -115,6 +116,16 @@ export class HerdrCli implements HerdrBridge {
 
   closePane(pane: string): void {
     this.call(["pane", "close", pane]);
+  }
+
+  agentExists(target: string): boolean {
+    try {
+      this.call(["agent", "get", target]);
+      return true;
+    } catch (e) {
+      if (e instanceof HerdrError && (e.code === "agent_not_found" || e.code === "pane_not_found" || e.code === "not_found")) return false;
+      throw e;
+    }
   }
 
   private call(args: string[], timeoutMs = this.opts.timeoutMs ?? DEFAULT_TIMEOUT_MS): unknown {

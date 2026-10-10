@@ -14,10 +14,11 @@ let root: string;
 let daemon: Daemon;
 let fake: ReturnType<typeof fakeHerdrState>;
 let logged: string[];
-const savedEnv = { XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, FAKE_HERDR_STATE: process.env.FAKE_HERDR_STATE };
+const savedEnv = { XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, FAKE_HERDR_STATE: process.env.FAKE_HERDR_STATE, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
 
 beforeAll(() => {
   process.env.XDG_CONFIG_HOME = isolatedConfigHome();
+  process.env.CLAUDE_CONFIG_DIR = "/claude-config";
 });
 
 afterAll(() => {
@@ -62,7 +63,7 @@ test("thread.new opens a tab in the worktree and records it", async () => {
   expect(create).toEqual([
     "tab", "create", "--workspace", "w1", "--cwd", join(root, ".worktrees", "001-fix-race"), "--label", "001-fix-race", "--no-focus",
     "--env", `AGT_ROOT=${root}`, "--env", "AGT_THREAD=001", "--env", "AGT_ROLE=coordinator",
-    "--env", "AGT_AGENT=claude-code", "--env", `PATH=${dirname(AGT_BIN)}:${process.env.PATH ?? ""}`,
+    "--env", "AGT_AGENT=claude-code", "--env", "CLAUDE_CONFIG_DIR=/claude-config", "--env", `PATH=${dirname(AGT_BIN)}:${process.env.PATH ?? ""}`,
   ]);
   expect(frontmatter("001-fix-race")).toMatchObject({ tab: "w1:t1" });
   expect(await events()).toEqual(["project.initialized", "layout.registered", "thread.created", "thread.tab_opened", "session.created"]);
