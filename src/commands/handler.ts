@@ -22,6 +22,8 @@ export type Effect =
       pane?: string;
       splitFrom?: string;
       direction?: "right" | "down";
+      bootstrap?: "start" | "handoff" | "resume";
+      resume?: boolean;
     }
   | { kind: "notice.deliver"; session: string; thread?: string; pane: string; text: string; count: number }
   | { kind: "pane.close"; pane: string };

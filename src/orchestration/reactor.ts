@@ -1,8 +1,10 @@
+import { handoffRequestPrompt } from "../agents/prompts.ts";
 import type { Effect } from "../commands/handler.ts";
-import type { Config } from "../config/config.ts";
+import { type Config, durationMs } from "../config/config.ts";
 import type { EventBody, StoredEvent } from "../domain/types.ts";
 import { isLive, type Session, type State } from "../state/projection.ts";
-import { liveSessions, spawnCoordinator, spawnWorker, workerLimit } from "./sessions.ts";
+import { generateHandoff } from "./handoff.ts";
+import { liveSessions, rotateCoordinator, spawnCoordinator, spawnWorker, workerLimit } from "./sessions.ts";
 
 export interface ReactorContext {
   root: string;
@@ -10,7 +12,7 @@ export interface ReactorContext {
   newId: () => string;
 }
 
-/** Pure follow-ups for freshly applied events: spawns, notifications, deliveries, worker teardown. */
+/** Pure follow-ups for freshly applied events: spawns, notifications, deliveries, worker teardown, coordinator rotation. */
 export function react(state: State, events: StoredEvent[], ctx: ReactorContext): { events: EventBody[]; effects: Effect[] } {
   const out: EventBody[] = [];
   const effects: Effect[] = [];
@@ -53,6 +55,20 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
       free--;
     }
   };
+  const rotated = new Set<string>();
+  const rotate = (s: Session, reason: string) => {
+    if (rotated.has(s.id)) return;
+    rotated.add(s.id);
+    take(rotateCoordinator(state, s, reason, ctx));
+  };
+  const requested = new Set<string>();
+  const requestRotation = (s: Session | undefined, reason: string) => {
+    if (s && isLive(s) && s.role === "coordinator" && !s.rotation && !requested.has(s.id) && !rotated.has(s.id)) {
+      requested.add(s.id);
+      out.push({ type: "session.rotation_requested", thread: s.thread, payload: { session: s.id, reason } } as EventBody);
+    }
+  };
+  const { rotation } = ctx.config.session;
 
   for (const ev of events) {
     switch (ev.type) {
@@ -88,17 +104,55 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
       case "session.ended":
         fillWorkers(state.sessions.get(ev.payload.session)?.thread);
         break;
-      case "notice.queued":
-      case "session.attached":
+      case "notice.queued": {
+        const s = state.sessions.get(ev.payload.session);
+        const t = s?.thread ? state.threads.get(s.thread) : undefined;
+        const stale =
+          s && t && isLive(s) && s.role === "coordinator" && !s.rotation && s.status === "idle" && s.lastActiveAt &&
+          Date.parse(ev.ts) - Date.parse(s.lastActiveAt) > durationMs(rotation.idle_timeout);
+        if (stale && !rotated.has(s.id)) {
+          out.push({ type: "handoff.submitted", thread: t.id, payload: { content: generateHandoff(t, `the coordinator was idle for more than ${rotation.idle_timeout}`), generated: true } });
+          rotate(s, "idle_timeout");
+        } else {
+          deliver(s);
+        }
+        break;
+      }
+      case "session.attached": {
+        const s = state.sessions.get(ev.payload.session);
+        const old = s?.replaces ? state.sessions.get(s.replaces) : undefined;
+        const t = s?.thread ? state.threads.get(s.thread) : undefined;
+        if (old?.pane && old.pane !== ev.payload.pane) effects.push({ kind: "pane.close", pane: old.pane });
+        if (s?.replaces && t && t.rootPane !== ev.payload.pane) out.push({ type: "thread.root_pane_changed", thread: t.id, payload: { pane: ev.payload.pane } });
+        deliver(s);
+        break;
+      }
       case "session.started":
         deliver(state.sessions.get(ev.payload.session));
         break;
+      case "session.compacting":
+        if (rotation.on_precompact) requestRotation(state.sessions.get(ev.payload.session), "precompact");
+        break;
+      case "session.rotation_requested": {
+        const s = state.sessions.get(ev.payload.session);
+        const t = s?.thread ? state.threads.get(s.thread) : undefined;
+        if (s && t && s.rotation) notify(s, handoffRequestPrompt({ root: ctx.root, thread: t, reason: ev.payload.reason }));
+        break;
+      }
+      case "handoff.submitted": {
+        const c = coordinatorOf(ev.thread);
+        if (c?.rotation) rotate(c, c.rotation.reason);
+        break;
+      }
       case "agent.idle": {
         const s = state.sessions.get(ev.payload.session);
         const ticketStatus = s?.thread ? state.threads.get(s.thread)?.tickets.find((k) => k.id === s.ticket)?.status : undefined;
         // A worker whose ticket is done or blocked has nothing left to do; ending it frees its slot.
         const finished = s && isLive(s) && s.role === "worker" && (ticketStatus === "done" || ticketStatus === "blocked");
         if (!finished) {
+          if (s && s.role === "coordinator" && s.contextTokens !== undefined && s.contextTokens / rotation.context_window >= rotation.context_threshold) {
+            requestRotation(s, "context");
+          }
           deliver(s);
         } else if (end(s) && ctx.config.herdr.close_worker_pane_on_end && s.pane) {
           effects.push({ kind: "pane.close", pane: s.pane });

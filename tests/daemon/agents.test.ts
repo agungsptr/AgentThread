@@ -50,7 +50,7 @@ test("a new thread gets a coordinator that is started through the spawner child"
   await cmd({ cmd: "thread.new", title: "X", type: "bug" });
   await waitFor(async () => (await events()).some((e) => e.type === "session.attached"), 10_000);
   const start = fake.read().calls.find((c) => c[0] === "agent" && c[1] === "start")!;
-  expect(start.slice(0, 9)).toEqual(["agent", "start", expect.stringMatching(/^agt-[0-9a-f]{4}-c001$/), "--kind", "claude", "--pane", "w1:p1", "--timeout", "60000"]);
+  expect(start.slice(0, 9)).toEqual(["agent", "start", expect.stringMatching(/^agt-[0-9a-f]{4}-c001-[0-9a-f]{4}$/), "--kind", "claude", "--pane", "w1:p1", "--timeout", "60000"]);
   expect(start).toContain("--session-id");
   expect(start).toContain("acceptEdits");
   expect(fake.read().calls.some((c) => c[0] === "agent" && c[1] === "prompt" && c[3]!.startsWith("Start coordinating thread 001."))).toBe(true);
