@@ -96,7 +96,7 @@ export function spawnReplacement(
 
 export function rotateCoordinator(state: State, s: Session, reason: string, ctx: SpawnContext): { events: EventBody[]; effects: Effect[] } {
   const t = s.thread ? state.threads.get(s.thread) : undefined;
-  if (!t) return { events: [], effects: [] };
+  if (!t || t.status === "done" || !t.rootPane) return { events: [], effects: [] };
   const next = spawnReplacement(t, s, ctx, { bootstrap: "handoff" });
   return { events: [{ type: "session.rotated", thread: t.id, payload: { session: s.id, reason } }, ...next.events], effects: next.effects };
 }

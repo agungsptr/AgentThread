@@ -17,6 +17,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
   const out: EventBody[] = [];
   const effects: Effect[] = [];
   const delivered = new Set<string>();
+  const rotated = new Set<string>();
   const spawnedPerThread = new Map<string, number>();
   const spawnedTickets = new Set<string>();
   const ended = new Set<string>();
@@ -25,12 +26,16 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
     out.push(...r.events);
     effects.push(...r.effects);
   };
+  /** Coordinators rotated earlier in this call, old id → replacement id. State does not know about them yet. */
+  const rotatedTo = new Map<string, string>();
   const notify = (target: Session | undefined, text: string) => {
-    if (target) out.push({ type: "notice.queued", ...(target.thread ? { thread: target.thread } : {}), payload: { session: target.id, text } });
+    const to = target && rotatedTo.get(target.id);
+    if (target && to) out.push({ type: "notice.queued", ...(target.thread ? { thread: target.thread } : {}), payload: { session: to, text } });
+    else if (target) out.push({ type: "notice.queued", ...(target.thread ? { thread: target.thread } : {}), payload: { session: target.id, text } });
   };
   const coordinatorOf = (thread: string | undefined) => (thread ? liveSessions(state, thread, "coordinator")[0] : undefined);
   const deliver = (s: Session | undefined) => {
-    if (!s || delivered.has(s.id) || !isLive(s) || s.status !== "idle" || !s.pane || s.notices.length === 0) return;
+    if (!s || delivered.has(s.id) || rotated.has(s.id) || !isLive(s) || s.status !== "idle" || !s.pane || s.notices.length === 0) return;
     delivered.add(s.id);
     effects.push({ kind: "notice.deliver", session: s.id, thread: s.thread, pane: s.pane, text: s.notices.join("\n"), count: s.notices.length });
   };
@@ -55,11 +60,22 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
       free--;
     }
   };
-  const rotated = new Set<string>();
-  const rotate = (s: Session, reason: string) => {
-    if (rotated.has(s.id)) return;
+  /** Rotates a coordinator at most once per call; `first` is emitted just before the rotation. Returns whether it rotated. */
+  const rotate = (s: Session, reason: string, first?: EventBody): boolean => {
+    if (rotated.has(s.id)) return false;
+    const r = rotateCoordinator(state, s, reason, ctx);
+    const created = r.events.find((e) => e.type === "session.created");
+    if (!created || created.type !== "session.created") return false;
     rotated.add(s.id);
-    take(rotateCoordinator(state, s, reason, ctx));
+    rotatedTo.set(s.id, created.payload.session);
+    // Notices queued for the old session earlier in this call were not part of the carry-over; send them to the replacement.
+    for (let i = 0; i < out.length; i++) {
+      const e = out[i]!;
+      if (e.type === "notice.queued" && e.payload.session === s.id) out[i] = { ...e, payload: { ...e.payload, session: created.payload.session } };
+    }
+    if (first) out.push(first);
+    take(r);
+    return true;
   };
   const requested = new Set<string>();
   const requestRotation = (s: Session | undefined, reason: string) => {
@@ -110,12 +126,11 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         const stale =
           s && t && isLive(s) && s.role === "coordinator" && !s.rotation && s.status === "idle" && s.lastActiveAt &&
           Date.parse(ev.ts) - Date.parse(s.lastActiveAt) > durationMs(rotation.idle_timeout);
-        if (stale && !rotated.has(s.id)) {
-          out.push({ type: "handoff.submitted", thread: t.id, payload: { content: generateHandoff(t, `the coordinator was idle for more than ${rotation.idle_timeout}`), generated: true } });
-          rotate(s, "idle_timeout");
-        } else {
-          deliver(s);
-        }
+        if (s && rotated.has(s.id)) break; // already rotated in this call; its notices went to the replacement
+        const handoff: EventBody | undefined = stale
+          ? { type: "handoff.submitted", thread: t.id, payload: { content: generateHandoff(t, `the coordinator was idle for more than ${rotation.idle_timeout}`), generated: true } }
+          : undefined;
+        if (!handoff || !rotate(s!, "idle_timeout", handoff)) deliver(s);
         break;
       }
       case "session.attached": {
@@ -136,12 +151,13 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
       case "session.rotation_requested": {
         const s = state.sessions.get(ev.payload.session);
         const t = s?.thread ? state.threads.get(s.thread) : undefined;
-        if (s && t && s.rotation) notify(s, handoffRequestPrompt({ root: ctx.root, thread: t, reason: ev.payload.reason }));
+        if (s && t && s.rotation?.requestedAt === ev.ts && !rotated.has(s.id)) notify(s, handoffRequestPrompt({ root: ctx.root, thread: t, reason: ev.payload.reason }));
         break;
       }
       case "handoff.submitted": {
+        // Only the coordinator's own handoff, or a generated one, completes a pending rotation.
         const c = coordinatorOf(ev.thread);
-        if (c?.rotation) rotate(c, c.rotation.reason);
+        if (c?.rotation && (ev.actor.role === "coordinator" || ev.payload.generated)) rotate(c, c.rotation.reason);
         break;
       }
       case "agent.idle": {

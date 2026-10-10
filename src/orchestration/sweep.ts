@@ -14,7 +14,7 @@ export function sweep(state: State, now: string, ctx: ReactorContext): { events:
   for (const s of liveSessions(state, undefined, "coordinator")) {
     if (!s.rotation || Date.parse(now) - Date.parse(s.rotation.requestedAt) <= durationMs(timeout)) continue;
     const t = s.thread ? state.threads.get(s.thread) : undefined;
-    if (!t) continue;
+    if (!t || liveSessions(state, t.id, "coordinator")[0] !== s) continue; // only the thread's acting coordinator
     if (fallback_generate) {
       events.push({ type: "handoff.submitted", thread: t.id, payload: { content: generateHandoff(t, `the coordinator did not write a handoff within ${timeout}`), generated: true } });
     } else {
