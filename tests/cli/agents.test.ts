@@ -132,6 +132,7 @@ test("agt event idle reports context tokens from the hook transcript", () => {
   agt(["thread", "new", "X", "--type", "bug"]);
   const fm = () => parse(readFileSync(join(root, ".agentthread/threads/001-x/sub.thread.md"), "utf8").split("---\n")[1]!) as { sessions: { id: string; role: string; context_tokens?: number }[] };
   const c = fm().sessions.find((s) => s.role === "coordinator")!;
+  const status = () => (fm().sessions.find((s) => s.id === c.id) as { status?: string }).status;
   const transcript = join(xdg, "t.jsonl");
   writeFileSync(transcript, `${JSON.stringify({ type: "assistant", message: { usage: { input_tokens: 5, cache_read_input_tokens: 50, cache_creation_input_tokens: 0 } } })}\n`);
   expect(agt(["event", "idle"], { AGT_ROLE: "coordinator", AGT_THREAD: "001" }, JSON.stringify({ session_id: c.id, transcript_path: transcript })).code).toBe(0);
@@ -141,4 +142,14 @@ test("agt event idle reports context tokens from the hook transcript", () => {
   const t0 = Date.now();
   expect(agt(["event", "idle"], { AGT_ROLE: "coordinator", AGT_THREAD: "001" }, JSON.stringify({ session_id: c.id, transcript_path: transcript })).code).toBe(0);
   expect(Date.now() - t0).toBeLessThan(3000);
+  expect(fm().sessions.find((s) => s.id === c.id)!.context_tokens).toBe(55);
+  expect(status()).toBe("idle");
+  // malformed usage must not drop the idle signal
+  const hook = (sig: string) => agt(["event", sig], { AGT_ROLE: "coordinator", AGT_THREAD: "001" }, JSON.stringify({ session_id: c.id, transcript_path: transcript }));
+  expect(hook("active").code).toBe(0);
+  expect(status()).toBe("active");
+  writeFileSync(transcript, `${JSON.stringify({ type: "assistant", message: { usage: { input_tokens: 5, cache_read_input_tokens: "x" } } })}\n`);
+  expect(hook("idle").code).toBe(0);
+  expect(status()).toBe("idle");
+  expect(fm().sessions.find((s) => s.id === c.id)!.context_tokens).toBe(55);
 });

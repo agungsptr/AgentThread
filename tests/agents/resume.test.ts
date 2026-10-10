@@ -40,3 +40,25 @@ test("context tokens from the last assistant usage; robust to junk", () => {
   writeFileSync(file, "x".repeat(300_000));
   expect(contextTokensFromTranscript(file)).toBeUndefined();
 });
+
+test("malformed usage, sidechain and zero-total entries are skipped; non-files are ignored", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agt-tr-"));
+  const file = join(dir, "t.jsonl");
+  const good = { type: "assistant", message: { usage: { input_tokens: 3, cache_read_input_tokens: 4 } } };
+  const bad = (usage: object, extra: object = {}) => ({ type: "assistant", ...extra, message: { usage } });
+  const run = (entry: object) => {
+    writeFileSync(file, `${JSON.stringify(good)}\n${JSON.stringify(entry)}\n`);
+    return contextTokensFromTranscript(file);
+  };
+  expect(run(bad({ input_tokens: 1, cache_read_input_tokens: "x" }))).toBe(7);
+  expect(run(bad({ input_tokens: -1 }))).toBe(7);
+  expect(run(bad({ input_tokens: 1.5 }))).toBe(7);
+  expect(run(bad({ input_tokens: 1, cache_creation_input_tokens: -2 }))).toBe(7);
+  writeFileSync(file, `${JSON.stringify(good)}\n{"type":"assistant","message":{"usage":{"input_tokens":1e400}}}\n`);
+  expect(contextTokensFromTranscript(file)).toBe(7);
+  expect(run(bad({ input_tokens: 99 }, { isSidechain: true }))).toBe(7);
+  expect(run(bad({ input_tokens: 0 }))).toBe(7);
+  writeFileSync(file, `${JSON.stringify(bad({ input_tokens: 1, cache_read_input_tokens: "x" }))}\n`);
+  expect(contextTokensFromTranscript(file)).toBeUndefined();
+  expect(contextTokensFromTranscript(dir)).toBeUndefined();
+});

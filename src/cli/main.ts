@@ -343,7 +343,7 @@ async function hookEvent(signal: string | undefined, env: Env, cwd: string): Pro
       session,
       signal,
       ...(contextTokens !== undefined ? { contextTokens } : {}),
-      ...(signal === "started" && typeof source === "string" ? { source } : {}),
+      ...(signal === "started" && typeof source === "string" ? { source: source.slice(0, 32) } : {}),
     };
     const res = await request(paths(findRoot(cwd, env)).socket, { op: "command", command, actor: actorFromEnv(env) }, 3_000);
     if (!res.ok) throw new Error(res.error);
