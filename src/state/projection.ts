@@ -16,6 +16,10 @@ export interface Session {
   contextTokens?: number;
   rotation?: { reason: string; requestedAt: string };
   replaces?: string;
+  /** A pane to close once this session attaches elsewhere (the pane of a session it takes over from). */
+  retirePane?: string;
+  /** When the last resume of this session started; the sweep fails a resume that never completes. */
+  resumingAt?: string;
 }
 
 export function isLive(s: Session): boolean {
@@ -234,6 +238,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
         status: "starting",
         notices: [],
         ...(p.replaces ? { replaces: p.replaces } : {}),
+        ...(p.retirePane ? { retirePane: p.retirePane } : {}),
       });
       const t = ev.thread ? state.threads.get(ev.thread) : undefined;
       if (t && p.ticket) t.workerQueue = t.workerQueue.filter((k) => k !== p.ticket);
@@ -283,7 +288,8 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
     }
     case "session.lost": {
       const s = sessionOf(state, ev.seq, ev.payload.session);
-      if (isLive(s)) {
+      // A coordinator that exited normally is reported lost by `agt start`, so it gets resumed.
+      if (isLive(s) || (s.status === "ended" && s.role === "coordinator")) {
         s.status = "lost";
         threadNote(state, ev, `session ${short(s.id)} lost: ${ev.payload.reason}`);
       }
@@ -298,6 +304,9 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
       if (s.status === "lost") {
         s.status = "starting";
         delete s.pane;
+        s.resumingAt = ev.ts;
+        // A pending rotation's handoff clock restarts: the resumed agent needs time to see the request again.
+        if (s.rotation) s.rotation.requestedAt = ev.ts;
         threadNote(state, ev, `session ${short(s.id)} resuming`);
       }
       return true;

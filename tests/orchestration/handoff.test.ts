@@ -55,3 +55,17 @@ test("handoff request and bootstrap kinds", () => {
     `You were resumed after an interruption. Re-read ${DIR}/sub.thread.md and ${DIR}/board.md, then continue coordinating thread 002.`,
   );
 });
+
+test("the handoff request's heredoc template, filled in, passes validateHandoff", () => {
+  const lines = handoffRequestPrompt({ root: "/repo", thread: T, reason: "context" }).split("\n");
+  const start = lines.findIndex((l) => l.startsWith("agt handoff 002 --stdin <<'EOF'"));
+  const end = lines.indexOf("EOF", start + 1);
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  const body = lines
+    .slice(start + 1, end)
+    .map((l) => l.replace(/<[^>]+>/g, "filled in"))
+    .join("\n");
+  expect(body).not.toContain("<");
+  expect(validateHandoff(body)).toEqual({ ok: true });
+});

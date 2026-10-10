@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { DEFAULT_CONFIG, type Config } from "../config/config.ts";
 import { canTransitionThread, canTransitionTicket, scopesOverlap, slugify, validateHandoff } from "../domain/rules.ts";
 import { ROLES, type Actor, type EventBody, type Role, type ThreadStatus, type TicketStatus } from "../domain/types.ts";
-import { agentName, liveSessions, spawnWorker, workerLimit } from "../orchestration/sessions.ts";
+import { agentName, liveSessions, spawnCoordinator, spawnReplacement, spawnWorker, workerLimit } from "../orchestration/sessions.ts";
 import { isLive, type State, type Thread, type Ticket } from "../state/projection.ts";
 import type { Command, CommandName } from "./schema.ts";
 
@@ -108,7 +108,8 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
     const probes: Effect[] = [...state.sessions.values()]
       .filter((s) => isLive(s) && (s.role === "coordinator" || s.role === "worker") && s.pane)
       .map((s) => ({ kind: "session.probe", session: s.id, ...(s.thread ? { thread: s.thread } : {}), pane: s.pane! }));
-    return { events: [], effects: [...open.map(tabEnsure), ...closes, ...probes], result: { threads: open.length } };
+    const recovery = recoverCoordinators(state, open, ctx);
+    return { events: recovery.events, effects: [...open.map(tabEnsure), ...closes, ...probes, ...recovery.effects], result: { threads: open.length } };
   }
 
   if (cmd.cmd === "tell") {
@@ -219,6 +220,34 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
       return { events: [{ type: "handoff.submitted", thread: t.id, payload: { content: cmd.content, generated: false } }] };
     }
   }
+}
+
+/**
+ * Threads with a tab but no live coordinator (it exited, or it or its spawn failed) get one back on reconcile:
+ * an ended coordinator is reported lost, so the reactor resumes it; otherwise a fresh one is split from the root pane.
+ */
+function recoverCoordinators(state: State, open: Thread[], ctx: HandlerContext): Decision & { effects: Effect[] } {
+  const events: EventBody[] = [];
+  const effects: Effect[] = [];
+  const spawn = { root: ctx.root, newId: ctx.newId ?? randomUUID };
+  for (const t of open) {
+    if (!t.rootPane || liveSessions(state, t.id, "coordinator").length > 0) continue;
+    const latest = [...state.sessions.values()].filter((s) => s.thread === t.id && s.role === "coordinator").at(-1);
+    const how = { splitFrom: t.rootPane, bootstrap: t.handoff ? ("handoff" as const) : ("start" as const) };
+    let r: { events: EventBody[]; effects: Effect[] } | undefined;
+    if (latest?.status === "ended") {
+      events.push({ type: "session.lost", thread: t.id, payload: { session: latest.id, reason: "coordinator exited" } });
+    } else if (latest?.status === "failed") {
+      r = spawnReplacement(t, latest, spawn, { ...how, retirePane: t.rootPane });
+    } else if (!latest) {
+      r = spawnCoordinator(t, spawn, how);
+    }
+    if (r) {
+      events.push(...r.events);
+      effects.push(...r.effects);
+    }
+  }
+  return { events, effects };
 }
 
 function newThread(state: State, cmd: Extract<Command, { cmd: "thread.new" }>, ctx: HandlerContext): Decision {

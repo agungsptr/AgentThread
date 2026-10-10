@@ -202,3 +202,36 @@ test("rotateCoordinator does nothing for a done thread or one without a root pan
   t.rootPane = undefined;
   expect(rotateCoordinator(s, c, "context", ctx())).toEqual({ events: [], effects: [] });
 });
+
+test("resuming restarts a pending rotation's clock and records resumingAt; the sweep skips the resuming coordinator", () => {
+  const s = base();
+  apply(s, "2026-10-11T10:01:00.000Z", { type: "session.rotation_requested", thread: "001", payload: { session: C, reason: "precompact" } });
+  apply(s, "2026-10-11T10:09:00.000Z", { type: "session.lost", thread: "001", payload: { session: C, reason: "x" } }, { type: "session.resuming", thread: "001", payload: { session: C } });
+  const c = s.sessions.get(C)!;
+  expect(c.rotation).toEqual({ reason: "precompact", requestedAt: "2026-10-11T10:09:00.000Z" });
+  expect(c.resumingAt).toBe("2026-10-11T10:09:00.000Z");
+  // starting, no pane: neither a handoff nor a rotation, even though the original request is long overdue
+  expect(sweep(s, "2026-10-11T10:10:00.000Z", ctx())).toEqual({ events: [], effects: [] });
+  // attached and started again: the clock counts from the resume
+  apply(s, "2026-10-11T10:10:00.000Z", { type: "session.attached", thread: "001", payload: { session: C, pane: "w1:p2" } }, { type: "session.started", thread: "001", payload: { session: C } });
+  expect(sweep(s, "2026-10-11T10:13:00.000Z", ctx()).events).toEqual([]);
+  expect(sweep(s, "2026-10-11T10:15:00.000Z", ctx()).events.map((e) => e.type)).toEqual(["handoff.submitted"]);
+});
+
+test("sweep: a resume that has not completed within 3m fails, and only then", () => {
+  const s = base();
+  apply(s, "2026-10-11T10:01:00.000Z", { type: "session.lost", thread: "001", payload: { session: C, reason: "x" } }, { type: "session.resuming", thread: "001", payload: { session: C } });
+  expect(sweep(s, "2026-10-11T10:04:00.000Z", ctx()).events).toEqual([]);
+  expect(sweep(s, "2026-10-11T10:04:01.000Z", ctx()).events).toEqual([
+    { type: "session.resume_failed", thread: "001", payload: { session: C, reason: "resume did not complete within 3m" } },
+  ]);
+  apply(s, "2026-10-11T10:02:00.000Z", { type: "session.attached", thread: "001", payload: { session: C, pane: "w1:p2" } }, { type: "session.started", thread: "001", payload: { session: C } });
+  expect(sweep(s, "2026-10-11T10:30:00.000Z", ctx()).events).toEqual([]);
+});
+
+test("sweep skips a coordinator without a pane", () => {
+  const s = base();
+  delete s.sessions.get(C)!.pane;
+  apply(s, "2026-10-11T10:01:00.000Z", { type: "session.rotation_requested", thread: "001", payload: { session: C, reason: "precompact" } });
+  expect(sweep(s, "2026-10-11T11:00:00.000Z", ctx()).events).toEqual([]);
+});

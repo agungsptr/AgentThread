@@ -79,6 +79,8 @@ test("a pending rotation survives lost and resuming", () => {
     { type: "session.resuming", thread: "001", payload: { session: C } },
   );
   const c = s.sessions.get(C)!;
-  expect(c.rotation).toEqual({ reason: "context", requestedAt: "2026-10-09T10:00:04.000Z" });
+  // resuming restarts the handoff clock and records when the resume began
+  expect(c.rotation).toEqual({ reason: "context", requestedAt: "2026-10-09T10:00:06.000Z" });
+  expect(c.resumingAt).toBe("2026-10-09T10:00:06.000Z");
   expect(displayStatus(c)).toBe("rotating");
 });

@@ -84,7 +84,7 @@ describe("layout.reconcile", () => {
       { cmd: "layout.reconcile" },
     );
     expect(r.ok && r.result).toEqual({ threads: 2 });
-    expect(r.ok && r.effects).toEqual([
+    expect(r.ok && r.effects.filter((e) => e.kind === "herdr.tab.ensure")).toEqual([
       { kind: "herdr.tab.ensure", thread: "001", label: "001-thread-001", cwd: "/repo/.worktrees/001-thread-001", tab: "w7:t3" },
       { kind: "herdr.tab.ensure", thread: "003", label: "003-thread-003", cwd: "/repo/.worktrees/003-thread-003" },
     ]);
@@ -171,4 +171,69 @@ test("reconcile does not probe main, non-live or pane-less sessions", () => {
     { cmd: "layout.reconcile" },
   );
   expect(r.ok && r.effects.filter((e) => e.kind === "session.probe")).toEqual([{ kind: "session.probe", session: W2, thread: "001", pane: "w7:p7" }]);
+});
+
+describe("layout.reconcile recovers threads without a live coordinator", () => {
+  const C = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  const NEW = "00000000-0000-4000-8000-000000000001";
+  const opened: EventBody = { type: "thread.tab_opened", thread: "001", payload: { tab: "w7:t3", rootPane: "w7:p5" } };
+  const created: EventBody = { type: "session.created", thread: "001", payload: { session: C, role: "coordinator", agent: "claude-code", name: "c" } };
+  const attached: EventBody = { type: "session.attached", thread: "001", payload: { session: C, pane: "w7:p5" } };
+  const reconcile = (...bodies: EventBody[]) =>
+    handle(stateOf(INIT, REGISTERED, ...bodies), CommandSchema.parse({ cmd: "layout.reconcile" }), USER, { root: "/repo", config: DEFAULT_CONFIG, newId: () => NEW });
+
+  test("an ended coordinator is reported lost (so the reactor resumes it), after the tab effects", () => {
+    const r = reconcile(threadCreated("001"), opened, created, attached, { type: "session.ended", thread: "001", payload: { session: C } });
+    expect(r.ok && r.events).toEqual([{ type: "session.lost", thread: "001", payload: { session: C, reason: "coordinator exited" } }]);
+    expect(r.ok && r.effects.map((e) => e.kind)).toEqual(["herdr.tab.ensure"]);
+    // the projection lets the loss apply to the ended coordinator
+    const s = stateOf(INIT, threadCreated("001"), opened, created, attached, { type: "session.ended", thread: "001", payload: { session: C } }, ...(r.ok ? r.events : []));
+    expect(s.sessions.get(C)!.status).toBe("lost");
+  });
+
+  test("a failed coordinator is replaced by a split from the root pane, carrying its notices", () => {
+    const r = reconcile(
+      threadCreated("001"),
+      opened,
+      created,
+      { type: "notice.queued", thread: "001", payload: { session: C, text: "Ticket T1 is done." } },
+      { type: "session.failed", thread: "001", payload: { session: C, reason: "boom" } },
+    );
+    expect(r.ok && r.events).toEqual([
+      { type: "session.created", thread: "001", payload: { session: NEW, role: "coordinator", agent: "claude-code", name: expect.any(String), replaces: C, retirePane: "w7:p5" } },
+      { type: "notice.queued", thread: "001", payload: { session: NEW, text: "Ticket T1 is done." } },
+    ]);
+    expect(r.ok && r.effects.map((e) => e.kind)).toEqual(["herdr.tab.ensure", "agent.spawn"]);
+    expect(r.ok && r.effects[1]).toMatchObject({ kind: "agent.spawn", session: NEW, role: "coordinator", splitFrom: "w7:p5", bootstrap: "start" });
+  });
+
+  test("a failed coordinator with a recorded handoff is replaced with the handoff bootstrap", () => {
+    const r = reconcile(
+      threadCreated("001"),
+      opened,
+      created,
+      { type: "handoff.submitted", thread: "001", payload: { content: "h", generated: true } },
+      { type: "session.failed", thread: "001", payload: { session: C, reason: "boom" } },
+    );
+    expect(r.ok && r.effects[1]).toMatchObject({ kind: "agent.spawn", splitFrom: "w7:p5", bootstrap: "handoff" });
+  });
+
+  test("a thread with a tab and no coordinator session gets a fresh one split from the root pane", () => {
+    const r = reconcile(threadCreated("001"), opened);
+    expect(r.ok && r.events).toEqual([
+      { type: "session.created", thread: "001", payload: { session: NEW, role: "coordinator", agent: "claude-code", name: expect.any(String), retirePane: "w7:p5" } },
+    ]);
+    expect(r.ok && r.effects[1]).toMatchObject({ kind: "agent.spawn", session: NEW, splitFrom: "w7:p5", bootstrap: "start" });
+  });
+
+  test("nothing when a live coordinator exists, the thread is done, or it has no root pane", () => {
+    const live = reconcile(threadCreated("001"), opened, created, attached);
+    expect(live.ok && live.events).toEqual([]);
+    expect(live.ok && live.effects.map((e) => e.kind)).toEqual(["herdr.tab.ensure", "session.probe"]);
+    const done = reconcile(threadCreated("001", { status: "done" }), opened, created, attached, { type: "session.ended", thread: "001", payload: { session: C } });
+    expect(done.ok && done.events).toEqual([]);
+    expect(done.ok && done.effects.filter((e) => e.kind === "agent.spawn")).toEqual([]);
+    const noTab = reconcile(threadCreated("001"));
+    expect(noTab.ok && noTab.events).toEqual([]);
+  });
 });

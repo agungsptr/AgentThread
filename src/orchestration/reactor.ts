@@ -36,15 +36,15 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
   const coordinatorOf = (thread: string | undefined) => (thread ? liveSessions(state, thread, "coordinator")[0] : undefined);
   const lostSet = new Set<string>();
   /**
-   * Who receives notices meant for a thread's coordinator: the live one, else the latest lost one.
-   * Notices persist on a lost session; a resume keeps its id and a replacement carries them over.
+   * Who receives notices meant for a thread's coordinator: the live one, else the latest lost one, else the latest
+   * one that was not rotated (e.g. failed or ended). Notices persist on such a session; a resume keeps its id and a
+   * replacement carries them over.
    */
   const coordinatorToNotify = (thread: string | undefined): Session | undefined => {
     const live = coordinatorOf(thread);
     if (live || !thread) return live;
-    return [...state.sessions.values()]
-      .filter((s) => s.thread === thread && s.role === "coordinator" && (s.status === "lost" || lostSet.has(s.id)))
-      .at(-1);
+    const coordinators = [...state.sessions.values()].filter((s) => s.thread === thread && s.role === "coordinator");
+    return coordinators.filter((s) => s.status === "lost" || lostSet.has(s.id)).at(-1) ?? coordinators.filter((s) => s.status !== "rotated").at(-1);
   };
   /** Records that `oldId` was replaced in this call and moves notices queued for it earlier in this call to `newId`. */
   const redirect = (oldId: string, newId: string) => {
@@ -156,7 +156,8 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         if (!t.handoff) {
           out.push({ type: "handoff.submitted", thread: t.id, payload: { content: generateHandoff(t, "the previous coordinator session could not be resumed"), generated: true } });
         }
-        const r = spawnReplacement(t, s, ctx, { pane: t.rootPane, bootstrap: "handoff" });
+        // A split gets its own agent env; the root pane may carry the lost session's AGT_SESSION. It is retired on attach.
+        const r = spawnReplacement(t, s, ctx, { splitFrom: t.rootPane, retirePane: t.rootPane, bootstrap: "handoff" });
         const created = r.events.find((e) => e.type === "session.created");
         if (created?.type === "session.created") redirect(s.id, created.payload.session);
         take(r);
@@ -186,9 +187,20 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         fillWorkers(s?.thread);
         break;
       }
-      case "session.ended":
-        fillWorkers(state.sessions.get(ev.payload.session)?.thread);
+      case "session.ended": {
+        const s = state.sessions.get(ev.payload.session);
+        const t = s?.thread ? state.threads.get(s.thread) : undefined;
+        if (s?.role === "worker" && t && t.status !== "done") {
+          // A worker that exits on its own must not leave its ticket stuck; one ended by teardown has a done or blocked ticket.
+          const k = t.tickets.find((x) => x.id === s.ticket);
+          if (k?.status === "in_progress" && k.assignee === s.id) {
+            out.push({ type: "ticket.released", thread: t.id, payload: { ticket: k.id, reason: "worker session ended" } });
+            notify(coordinatorToNotify(t.id), `Worker for ${k.id} ended; the ticket is open again.`);
+          }
+        }
+        fillWorkers(s?.thread);
         break;
+      }
       case "notice.queued": {
         const s = state.sessions.get(ev.payload.session);
         const t = s?.thread ? state.threads.get(s.thread) : undefined;
@@ -206,8 +218,9 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         const s = state.sessions.get(ev.payload.session);
         const old = s?.replaces ? state.sessions.get(s.replaces) : undefined;
         const t = s?.thread ? state.threads.get(s.thread) : undefined;
-        if (old?.pane && old.pane !== ev.payload.pane) effects.push({ kind: "pane.close", pane: old.pane });
-        if (s?.replaces && t && t.rootPane !== ev.payload.pane) out.push({ type: "thread.root_pane_changed", thread: t.id, payload: { pane: ev.payload.pane } });
+        const retire = old?.pane ?? s?.retirePane;
+        if (retire && retire !== ev.payload.pane) effects.push({ kind: "pane.close", pane: retire });
+        if ((s?.replaces || s?.retirePane) && t && t.rootPane !== ev.payload.pane) out.push({ type: "thread.root_pane_changed", thread: t.id, payload: { pane: ev.payload.pane } });
         deliver(s);
         break;
       }

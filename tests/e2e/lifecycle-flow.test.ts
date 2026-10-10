@@ -32,7 +32,10 @@ type Sess = { id: string; role: string; status: string; pane?: string };
 const sessions = () =>
   (parse(readFileSync(join(root, ".agentthread/threads/001-login/sub.thread.md"), "utf8").split("---\n")[1]!) as { sessions: Sess[] }).sessions;
 const liveCoordinator = () => sessions().find((s) => s.role === "coordinator" && s.pane && !["rotated", "lost", "ended", "failed"].includes(s.status));
-const hook = (signal: string, id: string) => agt(["event", signal], { AGT_ROLE: "coordinator", AGT_THREAD: "001" }, JSON.stringify({ session_id: id }));
+/** `agtSession`: the AGT_SESSION a split-born (replacement) coordinator's pane carries; a tab's root pane has none. */
+const hook = (signal: string, id: string, agtSession?: string) =>
+  agt(["event", signal], { AGT_ROLE: "coordinator", AGT_THREAD: "001", ...(agtSession ? { AGT_SESSION: agtSession } : {}) }, JSON.stringify({ session_id: id }));
+const DEAD = ["rotated", "lost", "ended", "failed"];
 const HANDOFF = ["Goal status", "Work done", "Decisions", "Next steps", "Risks"].map((s) => `## ${s}\n${s} written by the coordinator`).join("\n");
 
 beforeAll(() => {
@@ -90,4 +93,17 @@ test("rotation on precompact, then recovery by resume", async () => {
   }, 10_000);
   expect(resumed).toContain(c2.id);
   expect(resumed[resumed.indexOf("--pane") + 1]).toBe(c2.pane);
+
+  // the resumed agent got the resume bootstrap, and its hooks (carrying its own AGT_SESSION) are accepted
+  await waitFor(() => prompts().some((p) => p.startsWith("You were resumed after an interruption.")), 10_000);
+  await waitFor(() => sessions().find((x) => x.id === c2.id && x.pane === c2.pane), 10_000);
+  hook("started", c2.id, c2.id);
+  expect(sessions().find((x) => x.id === c2.id)!.status).toBe("idle");
+  hook("active", c2.id, c2.id);
+  expect(sessions().find((x) => x.id === c2.id)!.status).toBe("active");
+
+  // exactly one live coordinator for the thread: the resumed c2
+  const live = sessions().filter((x) => x.role === "coordinator" && !DEAD.includes(x.status));
+  expect(live.map((x) => x.id)).toEqual([c2.id]);
+  expect(agt(["logs"]).split("\n").some((l) => l.split(" ")[2] === "session.resuming")).toBe(true);
 });

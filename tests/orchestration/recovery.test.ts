@@ -41,12 +41,13 @@ test("lost coordinator is resumed into the root pane with the same session id", 
   ]);
 });
 
-test("resume failure: generated handoff (only if none) and a fresh replacement in the same pane", () => {
+test("resume failure: generated handoff (only if none) and a fresh replacement split from the root pane", () => {
   const s = base();
   apply(s, { type: "session.lost", thread: "001", payload: { session: C, reason: "x" } }, { type: "session.resuming", thread: "001", payload: { session: C } });
   const r = react(s, apply(s, { type: "session.resume_failed", thread: "001", payload: { session: C, reason: "no saved Claude session" } }), ctx());
   expect(r.events.map((e) => e.type)).toEqual(["handoff.submitted", "session.created"]);
-  expect(r.effects).toEqual([expect.objectContaining({ kind: "agent.spawn", pane: "w1:p2", bootstrap: "handoff" })]);
+  expect(r.effects).toEqual([expect.objectContaining({ kind: "agent.spawn", splitFrom: "w1:p2", bootstrap: "handoff" })]);
+  expect(r.effects[0]).not.toHaveProperty("pane");
   // with an existing handoff, none is generated
   const s2 = base();
   apply(s2, { type: "handoff.submitted", thread: "001", payload: { content: "x", generated: false } });
@@ -167,4 +168,43 @@ test("a loss of an ended session is ignored", () => {
   apply(s, { type: "session.ended", thread: "001", payload: { session: W } });
   const r = react(s, apply(s, { type: "session.lost", thread: "001", payload: { session: W, reason: "x" } }), ctx());
   expect(r.events.filter((e) => e.type !== "session.created")).toEqual([]);
+});
+
+test("resume_failed replacement attaching in its own split retires the old root pane", () => {
+  const s = base();
+  apply(s, { type: "session.lost", thread: "001", payload: { session: C, reason: "x" } }, { type: "session.resuming", thread: "001", payload: { session: C } });
+  const r = react(s, apply(s, { type: "session.resume_failed", thread: "001", payload: { session: C, reason: "no saved Claude session" } }), ctx());
+  const created = r.events.find((e) => e.type === "session.created");
+  expect(created).toMatchObject({ payload: { replaces: C, retirePane: "w1:p2" } });
+  const newId = created?.type === "session.created" ? created.payload.session : "";
+  apply(s, ...r.events);
+  expect(s.sessions.get(newId)!.retirePane).toBe("w1:p2");
+  const a = react(s, apply(s, { type: "session.attached", thread: "001", payload: { session: newId, pane: "w1:p8" } }), ctx());
+  expect(a.effects).toEqual([{ kind: "pane.close", pane: "w1:p2" }]);
+  expect(a.events).toEqual([{ type: "thread.root_pane_changed", thread: "001", payload: { pane: "w1:p8" } }]);
+});
+
+test("a worker that ends with its ticket in progress releases it and tells the coordinator", () => {
+  const s = base();
+  apply(s, { type: "worker.queued", thread: "001", payload: { ticket: "T2" } });
+  const r = react(s, apply(s, { type: "session.ended", thread: "001", payload: { session: W } }), ctx());
+  expect(r.events).toEqual([
+    { type: "ticket.released", thread: "001", payload: { ticket: "T1", reason: "worker session ended" } },
+    { type: "notice.queued", thread: "001", payload: { session: C, text: "Worker for T1 ended; the ticket is open again." } },
+    expect.objectContaining({ type: "session.created", payload: expect.objectContaining({ ticket: "T2" }) }),
+  ]);
+});
+
+test("a worker ended after its ticket is done releases nothing", () => {
+  const s = base();
+  apply(s, { type: "ticket.completed", thread: "001", payload: { ticket: "T1" } });
+  const r = react(s, apply(s, { type: "session.ended", thread: "001", payload: { session: W } }), ctx());
+  expect(r.events.filter((e) => e.type === "ticket.released" || e.type === "notice.queued")).toEqual([]);
+});
+
+test("with no live or lost coordinator, notices go to the latest non-rotated one (e.g. failed)", () => {
+  const s = base();
+  apply(s, { type: "session.failed", thread: "001", payload: { session: C, reason: "spawn failed" } });
+  const r = react(s, apply(s, { type: "ticket.blocked", thread: "001", payload: { ticket: "T2", reason: "needs input" } }), ctx());
+  expect(r.events).toEqual([{ type: "notice.queued", thread: "001", payload: { session: C, text: "Ticket T2 is blocked: needs input." } }]);
 });

@@ -32,12 +32,37 @@ export function agentName(root: string, role: SessionRole, thread?: string, tick
   return `agt-${h}-w${thread}-${(ticket ?? "").toLowerCase()}${suffix}`;
 }
 
-export function spawnCoordinator(t: Thread, ctx: SpawnContext): { events: EventBody[]; effects: Effect[] } {
+/**
+ * A thread's first coordinator, started in the root pane. With `splitFrom` it starts in a split of that pane instead
+ * (getting its own agent env) and retires the root pane once it attaches.
+ */
+export function spawnCoordinator(
+  t: Thread,
+  ctx: SpawnContext,
+  how: { splitFrom?: string; bootstrap?: "start" | "handoff" } = {},
+): { events: EventBody[]; effects: Effect[] } {
   const session = ctx.newId();
   const name = agentName(ctx.root, "coordinator", t.id, undefined, session);
   return {
-    events: [{ type: "session.created", thread: t.id, payload: { session, role: "coordinator", agent: "claude-code", name } }],
-    effects: [{ kind: "agent.spawn", session, role: "coordinator", name, thread: t.id, cwd: t.worktree, pane: t.rootPane! }],
+    events: [
+      {
+        type: "session.created",
+        thread: t.id,
+        payload: { session, role: "coordinator", agent: "claude-code", name, ...(how.splitFrom ? { retirePane: how.splitFrom } : {}) },
+      },
+    ],
+    effects: [
+      {
+        kind: "agent.spawn",
+        session,
+        role: "coordinator",
+        name,
+        thread: t.id,
+        cwd: t.worktree,
+        ...(how.splitFrom ? { splitFrom: how.splitFrom, direction: "right" as const } : { pane: t.rootPane! }),
+        ...(how.bootstrap ? { bootstrap: how.bootstrap } : {}),
+      },
+    ],
   };
 }
 
@@ -69,14 +94,18 @@ export function spawnReplacement(
   t: Thread,
   old: Session,
   ctx: SpawnContext,
-  how: { pane?: string; bootstrap: "handoff" | "resume" },
+  how: { splitFrom?: string; retirePane?: string; bootstrap: "start" | "handoff" | "resume" },
 ): { events: EventBody[]; effects: Effect[] } {
   const session = ctx.newId();
   const name = agentName(ctx.root, "coordinator", t.id, undefined, session);
   const carried = old.notices.filter((n) => !n.startsWith(HANDOFF_REQUEST_PREFIX));
   return {
     events: [
-      { type: "session.created", thread: t.id, payload: { session, role: "coordinator", agent: "claude-code", name, replaces: old.id } },
+      {
+        type: "session.created",
+        thread: t.id,
+        payload: { session, role: "coordinator", agent: "claude-code", name, replaces: old.id, ...(how.retirePane ? { retirePane: how.retirePane } : {}) },
+      },
       ...(carried.length ? [{ type: "notice.queued" as const, thread: t.id, payload: { session, text: carried.join("\n") } }] : []),
     ],
     effects: [
@@ -87,7 +116,8 @@ export function spawnReplacement(
         name,
         thread: t.id,
         cwd: t.worktree,
-        ...(how.pane ? { pane: how.pane } : { splitFrom: old.pane ?? t.rootPane!, direction: "right" as const }),
+        splitFrom: how.splitFrom ?? old.pane ?? t.rootPane!,
+        direction: "right" as const,
         bootstrap: how.bootstrap,
       },
     ],

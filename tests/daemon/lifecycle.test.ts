@@ -46,6 +46,8 @@ const events = async () => {
   const r = await request(paths(root).socket, { op: "events.since", seq: 0 });
   return r.ok ? (r.result as StoredEvent[]) : [];
 };
+const rootPane = (all: StoredEvent[]) =>
+  (all.filter((e) => e.type === "thread.tab_opened").at(-1)!.payload as { rootPane: string }).rootPane;
 const coordinator = async () =>
   (await events()).filter((e) => e.type === "session.created" && e.payload.role === "coordinator").map((e) => e.payload as { session: string }).at(-1)!.session;
 
@@ -79,12 +81,38 @@ test("no transcript: resume fails, a handoff is generated, a fresh coordinator t
   expect(job.session).not.toBe(c);
   expect(job.args.slice(0, 2)).toEqual(["--session-id", job.session]);
   expect(job.bootstrap.startsWith("Continue coordinating thread 001 as its new coordinator.")).toBe(true);
+  // split from the root pane (own AGT_SESSION env), not started in the lost session's pane
+  expect(job.pane).toBeUndefined();
+  expect(job.split).toMatchObject({ pane: rootPane(all) });
+  expect(job.split!.env.AGT_SESSION).toBe(job.session);
+});
+
+test("a coordinator that exited normally is resumed by the next reconcile", async () => {
+  await boot();
+  const c = await coordinator();
+  await cmd({ cmd: "session.attached", session: c, pane: "w1:p1" });
+  await cmd({ cmd: "session.signal", session: c, signal: "ended" }, { role: "coordinator", thread: "001", session: c });
+  const before = jobs.length;
+  const file = claudeSessionFile({ configDir: claudeDir, cwd: join(root, ".worktrees", "001-x"), session: c });
+  mkdirSync(join(file, ".."), { recursive: true });
+  writeFileSync(file, "{}\n");
+  expect(jobs.length).toBe(before); // SessionEnd alone does not respawn
+  await cmd({ cmd: "layout.reconcile" });
+  const all = await events();
+  expect(all.find((e) => e.type === "session.lost")).toMatchObject({ payload: { session: c, reason: "coordinator exited" } });
+  expect(all.map((e) => e.type)).toContain("session.resuming");
+  const job = jobs.at(-1)!;
+  expect(jobs.length).toBe(before + 1);
+  expect(job.session).toBe(c);
+  expect(job.pane).toBe(rootPane(all));
+  expect(job.args.slice(0, 2)).toEqual(["--resume", c]);
 });
 
 test("handoff timeout: the sweep generates a handoff and rotates", async () => {
   await boot("session:\n  handoff:\n    timeout: 1s\n", 200);
   const c = await coordinator();
   await cmd({ cmd: "session.attached", session: c, pane: "w1:p1" });
+  await cmd({ cmd: "session.signal", session: c, signal: "started" }); // the sweep ignores a coordinator still starting
   await cmd({ cmd: "session.signal", session: c, signal: "compacting" });
   await waitFor(async () => (await events()).some((e) => e.type === "session.rotated"), 5000);
   const all = await events();
