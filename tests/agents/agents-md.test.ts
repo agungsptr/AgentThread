@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { agentsMd, writeAgentsFiles } from "../../src/agents/agents-md.ts";
+import { type Runner, spawnRunner } from "../../src/herdr/bridge.ts";
 import { DEFAULT_CONFIG } from "../../src/config/config.ts";
 import { createEffectRunner } from "../../src/daemon/effects.ts";
 import { addWorktree } from "../../src/project/git.ts";
@@ -18,7 +19,8 @@ const SECTION = "# AgentThread\n\nsection body\n";
 
 // Never read the developer's global git config or excludes.
 const HOME = isolatedConfigHome();
-const ENV = { ...process.env, HOME, XDG_CONFIG_HOME: join(HOME, "xdg"), GIT_CONFIG_GLOBAL: join(HOME, "gitconfig") };
+const envFor = (home: string) => ({ ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, "xdg"), GIT_CONFIG_GLOBAL: join(home, "gitconfig"), GIT_CONFIG_NOSYSTEM: "1" });
+const ENV = envFor(HOME);
 const write = (o: { root: string; worktree: string; content: string }, env: Record<string, string | undefined> = ENV) =>
   writeAgentsFiles({ ...o, env });
 
@@ -45,6 +47,8 @@ function expectSymlink(wt: string) {
   expect(readlinkSync(claude)).toBe("AGENTS.md");
   expect(readFileSync(claude, "utf8")).toBe(readFileSync(join(wt, "AGENTS.md"), "utf8"));
 }
+
+const lines = (t: string) => t.split("\n").map((l) => l.replace(/\r$/, ""));
 
 const status = (wt: string) => git(wt, "status", "--porcelain");
 
@@ -219,12 +223,57 @@ describe("writeAgentsFiles: symlinks, excludes, git operations", () => {
     const ignore = join(home, "global-ignore");
     writeFileSync(ignore, "*.log\r\n/AGENTS.md\r\n");
     writeFileSync(join(home, "gitconfig"), `[core]\n\texcludesFile = ${ignore}\n`);
-    const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, "xdg"), GIT_CONFIG_GLOBAL: join(home, "gitconfig") };
+    const env = envFor(home);
     const { root, wt } = repoWith({});
     write({ root, worktree: wt, content: SECTION }, env);
     write({ root, worktree: wt, content: SECTION }, env);
     expect(readFileSync(join(root, ".agentthread", "worktree-excludes"), "utf8")).toBe("*.log\n/AGENTS.md\n/CLAUDE.md\n");
     writeFileSync(join(wt, "debug.log"), "x\n");
+    expect(status(wt)).toBe("");
+  });
+
+  test("a core.excludesFile from an [include]d global file (with ~) keeps applying in the worktree", () => {
+    const home = isolatedConfigHome();
+    writeFileSync(join(home, "global-ignore"), "*.log\n");
+    writeFileSync(join(home, "extra.gitconfig"), "[core]\n\texcludesFile = ~/global-ignore\n");
+    writeFileSync(join(home, "gitconfig"), `[include]\n\tpath = ${join(home, "extra.gitconfig")}\n`);
+    // the XDG default holds something else and must not be used
+    mkdirSync(join(home, "xdg", "git"), { recursive: true });
+    writeFileSync(join(home, "xdg", "git", "ignore"), "*.wrong\n");
+    const { root, wt } = repoWith({});
+    write({ root, worktree: wt, content: SECTION }, envFor(home));
+    expect(readFileSync(join(root, ".agentthread", "worktree-excludes"), "utf8")).toBe("*.log\n/AGENTS.md\n/CLAUDE.md\n");
+    writeFileSync(join(wt, "debug.log"), "x\n");
+    expect(status(wt)).toBe("");
+  });
+
+  test("a repo-local core.excludesFile keeps applying in the worktree", () => {
+    const { root, wt } = repoWith({});
+    const local = join(isolatedConfigHome(), "repo-ignore");
+    writeFileSync(local, "*.tmp\r\n");
+    git(root, "config", "core.excludesFile", local);
+    write({ root, worktree: wt, content: SECTION });
+    writeFileSync(join(wt, "x.tmp"), "x\n");
+    expect(status(wt)).toBe("");
+    // running again never reads back our own per-worktree value
+    write({ root, worktree: wt, content: SECTION });
+    expect(readFileSync(join(root, ".agentthread", "worktree-excludes"), "utf8")).toBe("*.tmp\n/AGENTS.md\n/CLAUDE.md\n");
+  });
+
+  test("without per-worktree config: falls back to the shared info/exclude and reverts extensions.worktreeConfig", () => {
+    const { root, wt } = repoWith({});
+    const failing: Runner = (bin, args, env, t) =>
+      args.includes("--worktree") && !args.includes("--get")
+        ? { exitCode: 129, stdout: "", stderr: "error: unknown option `worktree'" }
+        : spawnRunner(bin, args, env, t);
+    const logs: string[] = [];
+    for (let i = 0; i < 2; i++) writeAgentsFiles({ root, worktree: wt, content: SECTION, env: ENV, runner: failing, log: (m) => logs.push(m) });
+    const info = lines(readFileSync(join(root, ".git", "info", "exclude"), "utf8"));
+    expect(info.filter((l) => l === "/AGENTS.md").length).toBe(1);
+    expect(info.filter((l) => l === "/CLAUDE.md").length).toBe(1);
+    expect(Bun.spawnSync(["git", "-C", root, "config", "--get", "extensions.worktreeConfig"]).exitCode).toBe(1);
+    expect(logs.some((m) => m.includes("per-worktree excludes unavailable"))).toBe(true);
+    expectSymlink(wt);
     expect(status(wt)).toBe("");
   });
 

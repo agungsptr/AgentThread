@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { spawnRunner } from "../herdr/bridge.ts";
+import { type Runner, spawnRunner } from "../herdr/bridge.ts";
 import { paths } from "../project/paths.ts";
 import { systemPrompt } from "./prompts.ts";
 
@@ -48,15 +48,19 @@ export function agentsMd(o: { root: string; thread: ThreadRef }): string {
 const GIT_TIMEOUT_MS = 5000;
 
 type Env = Record<string, string | undefined>;
+interface Ctx {
+  env: Env;
+  run: Runner;
+}
 
-function git(cwd: string, args: string[], env: Env): { ok: boolean; stdout: string } {
-  const r = spawnRunner("git", ["--no-optional-locks", "-C", cwd, ...args], env, GIT_TIMEOUT_MS);
+function git(c: Ctx, cwd: string, args: string[]): { ok: boolean; stdout: string } {
+  const r = c.run("git", ["--no-optional-locks", "-C", cwd, ...args], c.env, GIT_TIMEOUT_MS);
   if (r.timedOut) throw new Error(`git ${args.join(" ")} timed out in ${cwd}`);
   return { ok: r.exitCode === 0, stdout: r.stdout };
 }
 
-function mustGit(cwd: string, args: string[], env: Env): string {
-  const r = spawnRunner("git", ["-C", cwd, ...args], env, GIT_TIMEOUT_MS);
+function mustGit(c: Ctx, cwd: string, args: string[]): string {
+  const r = c.run("git", ["-C", cwd, ...args], c.env, GIT_TIMEOUT_MS);
   if (r.exitCode !== 0 || r.timedOut) throw new Error(`git ${args.join(" ")} failed in ${cwd}: ${r.timedOut ? "timed out" : r.stderr.trim()}`);
   return r.stdout;
 }
@@ -71,11 +75,11 @@ const isInside = (wt: string, p: string) => {
 };
 
 /** A HEAD tree entry: mode and blob content, or undefined if `file` is not in HEAD. */
-function headEntry(wt: string, file: string, env: Env): { mode: string; content: string } | undefined {
-  const entry = git(wt, ["ls-tree", "HEAD", "--", file], env);
+function headEntry(c: Ctx, wt: string, file: string): { mode: string; content: string } | undefined {
+  const entry = git(c, wt, ["ls-tree", "HEAD", "--", file]);
   const mode = entry.ok ? /^(\d+) blob /.exec(entry.stdout)?.[1] : undefined;
   if (!mode) return undefined;
-  const show = git(wt, ["show", `HEAD:${file}`], env);
+  const show = git(c, wt, ["show", `HEAD:${file}`]);
   return show.ok ? { mode, content: show.stdout } : undefined;
 }
 
@@ -83,14 +87,14 @@ function headEntry(wt: string, file: string, env: Env): { mode: string; content:
  * The project's own instructions in `file` at HEAD. A tracked symlink counts when its target is a regular file inside
  * the worktree that is tracked at HEAD (read from HEAD, so a rewritten worktree file never feeds back in).
  */
-function projectContent(wt: string, file: string, env: Env): string {
-  const e = headEntry(wt, file, env);
+function projectContent(c: Ctx, wt: string, file: string): string {
+  const e = headEntry(c, wt, file);
   if (!e) return "";
   if (e.mode === "100644" || e.mode === "100755") return e.content;
   if (e.mode !== "120000") return "";
   const target = resolve(wt, e.content.trim());
   if (!isInside(wt, target)) return "";
-  const t = headEntry(wt, relative(wt, target).split(sep).join("/"), env);
+  const t = headEntry(c, wt, relative(wt, target).split(sep).join("/"));
   return t && (t.mode === "100644" || t.mode === "100755") ? t.content : "";
 }
 
@@ -103,13 +107,20 @@ function removeIfPresent(p: string): void {
   rmSync(p, { force: true, recursive: true });
 }
 
-/** The user's global excludes file, which a per-worktree core.excludesFile would otherwise replace. */
-function globalExcludes(env: Env): string {
-  const home = env.HOME ?? "";
-  const configured = spawnRunner("git", ["config", "--global", "--get", "core.excludesFile"], env, GIT_TIMEOUT_MS);
-  let file = configured.exitCode === 0 && !configured.timedOut ? configured.stdout.trim() : "";
-  if (file.startsWith("~/")) file = join(home, file.slice(2));
-  if (!file) file = env.XDG_CONFIG_HOME ? join(env.XDG_CONFIG_HOME, "git", "ignore") : join(home, ".config", "git", "ignore");
+/**
+ * The excludes the main checkout uses (global, included, system or repo-local core.excludesFile, else git's XDG
+ * default). A per-worktree core.excludesFile replaces it, so its patterns are copied in. Read from the main checkout,
+ * never from a thread worktree, so our own per-worktree value is never read back.
+ */
+function effectiveExcludes(c: Ctx, root: string, ours: string): string {
+  const configured = git(c, root, ["config", "--path", "--get", "core.excludesFile"]);
+  let file = configured.ok ? configured.stdout.trim() : "";
+  if (file) file = resolve(root, file);
+  if (file === ours) file = "";
+  if (!file) {
+    const home = c.env.HOME ?? "";
+    file = c.env.XDG_CONFIG_HOME ? join(c.env.XDG_CONFIG_HOME, "git", "ignore") : join(home, ".config", "git", "ignore");
+  }
   try {
     return readFileSync(file, "utf8");
   } catch {
@@ -117,25 +128,49 @@ function globalExcludes(env: Env): string {
   }
 }
 
+function commonInfoExclude(c: Ctx, wt: string): string {
+  return join(resolve(wt, mustGit(c, wt, ["rev-parse", "--git-common-dir"]).trim()), "info", "exclude");
+}
+
+/** Old git without per-worktree config: the shared info/exclude, which also hides the main checkout's files. */
+function excludeInCommon(c: Ctx, wt: string): void {
+  const info = commonInfoExclude(c, wt);
+  let current = existsSync(info) ? readFileSync(info, "utf8") : "";
+  const have = lines(current);
+  for (const line of EXCLUDE_LINES) {
+    if (have.includes(line)) continue;
+    current = `${current}${current && !current.endsWith("\n") ? "\n" : ""}${line}\n`;
+  }
+  mkdirSync(dirname(info), { recursive: true });
+  writeFileSync(info, current);
+}
+
 /**
  * Hides untracked AGENTS.md/CLAUDE.md in thread worktrees only: a per-worktree core.excludesFile, so the main
  * checkout can still add its own. Also removes the lines that earlier versions put in the shared info/exclude.
  */
-function excludeInWorktree(root: string, wt: string, env: Env): void {
+function excludeInWorktree(c: Ctx, root: string, wt: string, log: (m: string) => void): void {
   const file = join(root, ".agentthread", "worktree-excludes");
-  const kept = lines(globalExcludes(env)).filter((l) => !EXCLUDE_LINES.includes(l));
+  const kept = lines(effectiveExcludes(c, root, file)).filter((l) => !EXCLUDE_LINES.includes(l));
   while (kept.length && kept[kept.length - 1] === "") kept.pop();
   const text = [...kept, ...EXCLUDE_LINES].join("\n") + "\n";
   mkdirSync(dirname(file), { recursive: true });
   if (!existsSync(file) || readFileSync(file, "utf8") !== text) writeFileSync(file, text);
-  if (git(root, ["config", "--get", "extensions.worktreeConfig"], env).stdout.trim() !== "true") {
-    mustGit(root, ["config", "extensions.worktreeConfig", "true"], env);
+
+  const wasEnabled = git(c, root, ["config", "--get", "extensions.worktreeConfig"]).stdout.trim() === "true";
+  try {
+    if (!wasEnabled) mustGit(c, root, ["config", "extensions.worktreeConfig", "true"]);
+    if (git(c, wt, ["config", "--worktree", "--get", "core.excludesFile"]).stdout.trim() !== file) {
+      mustGit(c, wt, ["config", "--worktree", "core.excludesFile", file]);
+    }
+  } catch (e) {
+    if (!wasEnabled) git(c, root, ["config", "--unset", "extensions.worktreeConfig"]);
+    log(`per-worktree excludes unavailable, using the shared info/exclude: ${e instanceof Error ? e.message : String(e)}`);
+    excludeInCommon(c, wt);
+    return;
   }
-  if (git(wt, ["config", "--worktree", "--get", "core.excludesFile"], env).stdout.trim() !== file) {
-    mustGit(wt, ["config", "--worktree", "core.excludesFile", file], env);
-  }
-  const common = resolve(wt, mustGit(wt, ["rev-parse", "--git-common-dir"], env).trim());
-  const info = join(common, "info", "exclude");
+
+  const info = commonInfoExclude(c, wt);
   if (!existsSync(info)) return;
   const current = readFileSync(info, "utf8");
   const filtered = current.split("\n").filter((l) => !EXCLUDE_LINES.includes(l.replace(/\r$/, "")));
@@ -145,12 +180,20 @@ function excludeInWorktree(root: string, wt: string, env: Env): void {
 /**
  * Writes `<worktree>/AGENTS.md` (the project's own instructions, then `content`) and makes `CLAUDE.md` a symlink to
  * it. Neither ever shows up in `git status` or a commit: tracked paths get skip-worktree, the others are excluded
- * through a per-worktree excludes file. Never writes through a symlink.
+ * through a per-worktree excludes file (set up first, so the files are never visible). Never writes through a symlink.
  */
-export function writeAgentsFiles(o: { root: string; worktree: string; content: string; env?: Env }): void {
+export function writeAgentsFiles(o: {
+  root: string;
+  worktree: string;
+  content: string;
+  env?: Env;
+  runner?: Runner;
+  log?: (message: string) => void;
+}): void {
   const wt = o.worktree;
-  const env = o.env ?? (process.env as Env);
-  const project = projectContent(wt, "AGENTS.md", env) || projectContent(wt, "CLAUDE.md", env);
+  const c: Ctx = { env: o.env ?? (process.env as Env), run: o.runner ?? spawnRunner };
+  excludeInWorktree(c, o.root, wt, o.log ?? ((m) => console.error(m)));
+  const project = projectContent(c, wt, "AGENTS.md") || projectContent(c, wt, "CLAUDE.md");
   const agents = join(wt, "AGENTS.md");
   let regular = false;
   try {
@@ -161,7 +204,6 @@ export function writeAgentsFiles(o: { root: string; worktree: string; content: s
   removeIfPresent(join(wt, "CLAUDE.md"));
   symlinkSync("AGENTS.md", join(wt, "CLAUDE.md"));
   for (const file of FILES) {
-    if (git(wt, ["ls-files", "--error-unmatch", "--", file], env).ok) mustGit(wt, ["update-index", "--skip-worktree", "--", file], env);
+    if (git(c, wt, ["ls-files", "--error-unmatch", "--", file]).ok) mustGit(c, wt, ["update-index", "--skip-worktree", "--", file]);
   }
-  excludeInWorktree(o.root, wt, env);
 }
