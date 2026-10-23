@@ -14,6 +14,8 @@ interface FakeState {
   envs: (string | null)[];
   agents?: string[];
   agentPanes?: string[];
+  status?: Record<string, string>;
+  kinds?: Record<string, string>;
 }
 
 const file = process.env.FAKE_HERDR_STATE;
@@ -79,6 +81,7 @@ if (group === "agent" && sub === "start") {
   if (!state.panes.includes(pane)) fail("pane_not_found", `pane ${pane} not found`);
   state.agents = [...(state.agents ?? []), target ?? ""];
   state.agentPanes = [...(state.agentPanes ?? []), pane];
+  state.status = { ...state.status, [pane]: "idle" };
   ok({ type: "agent_started", agent: { name: target, pane_id: pane } });
 }
 if (group === "pane" && sub === "close") {
@@ -86,6 +89,12 @@ if (group === "pane" && sub === "close") {
   state.panes = state.panes.filter((p) => p !== target);
   state.agentPanes = (state.agentPanes ?? []).filter((p) => p !== target);
   ok({ type: "ok" });
+}
+if (group === "agent" && sub === "list") {
+  ok({
+    type: "agent_list",
+    agents: (state.agentPanes ?? []).map((p) => ({ pane_id: p, agent_status: state.status?.[p] ?? "idle", agent: state.kinds?.[p] ?? "claude" })),
+  });
 }
 if (group === "agent" && sub === "get") {
   if (!(state.agentPanes ?? []).includes(target ?? "") && !(state.agents ?? []).includes(target ?? "")) fail("agent_not_found", `agent target ${target} not found`);

@@ -38,7 +38,7 @@ test("defaults match the spec", () => {
       rotation: { on_precompact: true, context_threshold: 0.7, idle_timeout: "24h", context_window: 200000 },
       handoff: { timeout: "5m", fallback_generate: true },
     },
-    herdr: { main_tab_label: "main", close_tab_on_done: true, close_worker_pane_on_end: true },
+    herdr: { main_tab_label: "main", close_tab_on_done: true, close_worker_pane_on_end: true, poll_interval: "2s" },
   });
 });
 
@@ -62,7 +62,7 @@ test("project overrides user, nested keys merge", () => {
   });
   const cfg = loadConfig(root, env);
   expect(cfg.workers.max_workers).toBe(2);
-  expect(cfg.herdr).toEqual({ main_tab_label: "home", close_tab_on_done: false, close_worker_pane_on_end: true });
+  expect(cfg.herdr).toEqual({ main_tab_label: "home", close_tab_on_done: false, close_worker_pane_on_end: true, poll_interval: "2s" });
 });
 
 test("empty files are allowed", () => {

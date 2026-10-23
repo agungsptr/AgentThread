@@ -37,6 +37,13 @@ export class HerdrError extends Error {
   }
 }
 
+export type AgentStatus = "idle" | "working" | "blocked" | "done" | "unknown";
+export interface AgentListing {
+  pane: string;
+  status: AgentStatus;
+  kind: string;
+}
+
 export interface HerdrBridge {
   createTab(o: { workspace: string; cwd: string; label: string; env: Record<string, string> }): { tabId: string; rootPaneId: string };
   renameTab(tabId: string, label: string): void;
@@ -49,6 +56,7 @@ export interface HerdrBridge {
   agentPrompt(target: string, text: string): void;
   closePane(pane: string): void;
   agentExists(target: string): boolean;
+  agentList(): AgentListing[];
 }
 
 const envArgs = (env: Record<string, string>) => Object.entries(env).flatMap(([k, v]) => ["--env", `${k}=${v}`]);
@@ -126,6 +134,19 @@ export class HerdrCli implements HerdrBridge {
       if (e instanceof HerdrError && (e.code === "agent_not_found" || e.code === "pane_not_found" || e.code === "not_found")) return false;
       throw e;
     }
+  }
+
+  agentList(): AgentListing[] {
+    const result = this.call(["agent", "list"]);
+    const agents = typeof result === "object" && result !== null ? (result as { agents?: unknown }).agents : undefined;
+    if (!Array.isArray(agents)) throw new HerdrError("bad_output", "herdr agent list: response missing agents");
+    const known = ["idle", "working", "blocked", "done"];
+    return agents.flatMap((a: unknown) => {
+      const r = (typeof a === "object" && a !== null ? a : {}) as Record<string, unknown>;
+      if (typeof r.pane_id !== "string") return [];
+      const status = typeof r.agent_status === "string" && known.includes(r.agent_status) ? (r.agent_status as AgentStatus) : "unknown";
+      return [{ pane: r.pane_id, status, kind: typeof r.agent === "string" ? r.agent : "unknown" }];
+    });
   }
 
   private call(args: string[], timeoutMs = this.opts.timeoutMs ?? DEFAULT_TIMEOUT_MS): unknown {

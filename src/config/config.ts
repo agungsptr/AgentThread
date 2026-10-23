@@ -7,7 +7,7 @@ import { AGENT_KINDS } from "../domain/types.ts";
 
 type Env = Record<string, string | undefined>;
 
-const duration = z.string().regex(/^\d+[smhd]$/, "duration must look like 30s, 5m, 24h or 2d");
+const duration = z.string().regex(/^\d+(ms|[smhd])$/, "duration must look like 30s, 5m, 24h or 2d");
 const agent = z.enum(AGENT_KINDS);
 export const PERMISSION_MODES = ["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"] as const;
 
@@ -58,6 +58,7 @@ export const ConfigSchema = z
         main_tab_label: z.string().trim().min(1).default("main"),
         close_tab_on_done: z.boolean().default(true),
         close_worker_pane_on_end: z.boolean().default(true),
+        poll_interval: duration.default("2s"),
       })
       .strict()
       .default({}),
@@ -109,8 +110,8 @@ function readYaml(file: string): Record<string, unknown> {
 }
 
 export function durationMs(d: string): number {
-  const m = /^(\d+)([smhd])$/.exec(d);
+  const m = /^(\d+)(ms|[smhd])$/.exec(d);
   if (!m) throw new Error(`invalid duration ${d}`);
-  const unit = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2] as "s" | "m" | "h" | "d"];
+  const unit = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2] as "ms" | "s" | "m" | "h" | "d"];
   return Number(m[1]) * unit;
 }

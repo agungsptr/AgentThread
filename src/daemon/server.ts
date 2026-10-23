@@ -3,7 +3,7 @@ import { rmSync } from "node:fs";
 import type { SpawnJob } from "../agents/spawn-job.ts";
 import { handle } from "../commands/handler.ts";
 import { ActorSchema, CommandSchema } from "../commands/schema.ts";
-import { loadConfig, type Config } from "../config/config.ts";
+import { durationMs, loadConfig, type Config } from "../config/config.ts";
 import type { Actor, EventBody, StoredEvent } from "../domain/types.ts";
 import { react } from "../orchestration/reactor.ts";
 import { sweep } from "../orchestration/sweep.ts";
@@ -15,6 +15,8 @@ import { EventStore } from "../store/event-store.ts";
 import { createEffectRunner } from "./effects.ts";
 import { LineReader, LineWriter } from "./framing.ts";
 import type { Request, Response } from "./protocol.ts";
+import { HerdrCli } from "../herdr/bridge.ts";
+import { diffAgentStatus } from "./poller.ts";
 import { ensureSocketDir } from "./socket-dir.ts";
 
 export interface Daemon {
@@ -165,9 +167,34 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
   }, opts.sweepIntervalMs ?? 15_000);
   sweepTimer.unref?.();
 
+  const misses = new Map<string, number>();
+  const pollTimer = setInterval(() => {
+    if (shuttingDown) return;
+    void enqueue(() => {
+      const layout = state.layout;
+      if (!layout) return;
+      const log = opts.log ?? console.error;
+      let listed;
+      try {
+        listed = new HerdrCli({ bin: layout.herdrBin, env: { ...process.env, ...(layout.herdrSocket ? { HERDR_SOCKET_PATH: layout.herdrSocket } : {}) } }).agentList();
+      } catch (e) {
+        log(`herdr poll failed: ${e instanceof Error ? e.message : String(e)}`);
+        return;
+      }
+      const actor: Actor = { role: "user" };
+      for (const d of diffAgentStatus({ sessions: [...state.sessions.values()], listed, misses })) {
+        const decision = handle(state, { cmd: "session.signal", session: d.session, signal: d.signal }, actor, { root, config, newId: randomUUID });
+        if (!decision.ok) continue;
+        applyAndReact([...decision.events, ...decision.effects.flatMap(runEffect)], actor);
+      }
+    }).catch((e) => (opts.log ?? console.error)(`poll failed: ${e instanceof Error ? e.message : String(e)}`));
+  }, durationMs(config.herdr.poll_interval));
+  pollTimer.unref?.();
+
   const stop = (): Promise<void> => {
     shuttingDown = true;
     clearInterval(sweepTimer);
+    clearInterval(pollTimer);
     stopping ??= (async () => {
       await chain;
       listener.stop(true);

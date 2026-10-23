@@ -85,6 +85,8 @@ export interface FakeHerdrState {
   envs: (string | null)[];
   agents?: string[];
   agentPanes?: string[];
+  status?: Record<string, string>;
+  kinds?: Record<string, string>;
 }
 
 /** A state file for tests/fixtures/fake-herdr.ts; pass `file` as FAKE_HERDR_STATE. */
