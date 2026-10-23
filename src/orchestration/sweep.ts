@@ -14,6 +14,11 @@ export function sweep(state: State, now: string, ctx: ReactorContext): { events:
   for (const s of liveSessions(state, undefined, "coordinator")) {
     if (s.status === "starting") continue;
     if (!s.pane) continue; // not attached yet: it cannot have seen a handoff request
+    const t0 = s.thread ? state.threads.get(s.thread) : undefined;
+    if (!s.rotation && t0 && liveSessions(state, t0.id, "coordinator")[0] === s && Date.parse(now) - Date.parse(s.createdAt) > durationMs(ctx.config.session.rotation.max_age)) {
+      events.push({ type: "session.rotation_requested", thread: t0.id, payload: { session: s.id, reason: "age" } });
+      continue;
+    }
     if (!s.rotation || Date.parse(now) - Date.parse(s.rotation.requestedAt) <= durationMs(timeout)) continue;
     const t = s.thread ? state.threads.get(s.thread) : undefined;
     if (!t || liveSessions(state, t.id, "coordinator")[0] !== s) continue; // only the thread's acting coordinator

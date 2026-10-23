@@ -64,6 +64,7 @@ export type EventBody =
   | { type: "log.appended"; thread: string; payload: { message: string } }
   | { type: "decision.recorded"; thread: string; payload: { message: string } }
   | { type: "note.recorded" | "progress.recorded" | "question.recorded"; thread: string; payload: { message: string } }
+  | { type: "checkpoint.reminded"; thread?: string; payload: { session: string } }
   | { type: "agent.blocked"; thread?: string; payload: { session: string } }
   | { type: "handoff.submitted"; thread: string; payload: { content: string; generated: boolean } }
   | {

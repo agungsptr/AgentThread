@@ -224,3 +224,26 @@ test("sweep skips a coordinator without a pane", () => {
   apply(s, "2026-10-11T10:01:00.000Z", { type: "session.rotation_requested", thread: "001", payload: { session: C, reason: "precompact" } });
   expect(sweep(s, "2026-10-11T11:00:00.000Z", ctx()).events).toEqual([]);
 });
+
+test("turns trigger rotation at exactly max_turns", () => {
+  const cfg = { ...DEFAULT_CONFIG, session: { ...DEFAULT_CONFIG.session, rotation: { ...DEFAULT_CONFIG.session.rotation, max_turns: 3 } }, checkpoint: { reminder_turns: 99, reminder_after: "999d" } };
+  const s = base();
+  const turn = (min: number) => {
+    apply(s, `2026-10-11T10:0${min}:00.000Z`, { type: "session.active", thread: "001", payload: { session: C } });
+    return react(s, apply(s, `2026-10-11T10:0${min}:00.000Z`, { type: "agent.idle", thread: "001", payload: { session: C } }), ctx(cfg)).events;
+  };
+  expect(turn(1)).toEqual([]);
+  expect(turn(2)).toEqual([]);
+  expect(turn(3)).toEqual([{ type: "session.rotation_requested", thread: "001", payload: { session: C, reason: "turns" } }]);
+});
+
+test("sweep requests rotation by age once", () => {
+  const s = base();
+  expect(sweep(s, "2026-10-11T17:59:00.000Z", ctx()).events).toEqual([]);
+  const r = sweep(s, "2026-10-11T18:01:00.000Z", ctx());
+  expect(r.events).toEqual([{ type: "session.rotation_requested", thread: "001", payload: { session: C, reason: "age" } }]);
+  apply(s, "2026-10-11T18:01:00.000Z", ...r.events);
+  expect(sweep(s, "2026-10-11T18:02:00.000Z", ctx()).events).toEqual([]);
+  const q = react(s, [{ ...r.events[0]!, seq: s.lastSeq, ts: "2026-10-11T18:01:00.000Z", actor: USER } as StoredEvent], ctx());
+  expect((q.events[0] as { payload: { text: string } }).payload.text.startsWith(HANDOFF_REQUEST_PREFIX)).toBe(true);
+});

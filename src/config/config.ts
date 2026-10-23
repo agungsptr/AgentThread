@@ -43,6 +43,8 @@ export const ConfigSchema = z
             context_threshold: z.number().gt(0).lt(1).default(0.7),
             idle_timeout: duration.default("24h"),
             context_window: z.number().int().min(1000).default(200_000),
+            max_turns: z.number().int().min(1).default(150),
+            max_age: duration.default("8h"),
           })
           .strict()
           .default({}),
@@ -51,6 +53,10 @@ export const ConfigSchema = z
           .strict()
           .default({}),
       })
+      .strict()
+      .default({}),
+    checkpoint: z
+      .object({ reminder_turns: z.number().int().min(1).default(8), reminder_after: duration.default("30m") })
       .strict()
       .default({}),
     herdr: z

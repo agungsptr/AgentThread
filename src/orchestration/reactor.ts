@@ -6,6 +6,9 @@ import { isLive, type Session, type State } from "../state/projection.ts";
 import { generateHandoff } from "./handoff.ts";
 import { liveSessions, rotateCoordinator, spawnCoordinator, spawnReplacement, spawnWorker, workerLimit } from "./sessions.ts";
 
+const CHECKPOINT_NOTICE = (thread: string | undefined) =>
+  `CHECKPOINT: record where you are with: agt progress ${thread ?? "<thread>"} "<what is done, what is next>"`;
+
 export interface ReactorContext {
   root: string;
   config: Config;
@@ -93,6 +96,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
     return true;
   };
   const requested = new Set<string>();
+  const reminded = new Set<string>();
   const requestRotation = (s: Session | undefined, reason: string) => {
     if (s && isLive(s) && s.role === "coordinator" && !s.rotation && !requested.has(s.id) && !rotated.has(s.id)) {
       requested.add(s.id);
@@ -253,6 +257,16 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         if (!finished) {
           if (s && s.role === "coordinator" && s.contextTokens !== undefined && s.contextTokens / rotation.context_window >= rotation.context_threshold) {
             requestRotation(s, "context");
+          } else if (s && s.role === "coordinator" && s.turns >= rotation.max_turns) {
+            requestRotation(s, "turns");
+          }
+          if (s && isLive(s) && s.role !== "main" && !s.rotation && !requested.has(s.id) && !rotated.has(s.id) && !reminded.has(s.id) && !s.remindedSinceProgress) {
+            const since = Date.parse(ev.ts) - Date.parse(s.lastProgressAt ?? s.createdAt);
+            if (s.turnsSinceProgress >= ctx.config.checkpoint.reminder_turns || since > durationMs(ctx.config.checkpoint.reminder_after)) {
+              reminded.add(s.id);
+              out.push({ type: "checkpoint.reminded", ...(s.thread ? { thread: s.thread } : {}), payload: { session: s.id } } as EventBody);
+              notify(s, CHECKPOINT_NOTICE(s.thread));
+            }
           }
           deliver(s);
         } else if (end(s) && ctx.config.herdr.close_worker_pane_on_end && s.pane) {

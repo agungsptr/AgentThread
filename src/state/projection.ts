@@ -24,6 +24,8 @@ export interface Session {
   lastProgressAt?: string;
   /** Turns finished since the last recorded progress. */
   turnsSinceProgress: number;
+  /** A checkpoint reminder was sent since the last progress (cleared by progress.recorded). */
+  remindedSinceProgress?: boolean;
   /** Finished turns (real active to idle transitions). */
   turns: number;
   /** When the session was created (session.created ts). */
@@ -232,6 +234,7 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       if (s) {
         s.lastProgressAt = ev.ts;
         s.turnsSinceProgress = 0;
+        delete s.remindedSinceProgress;
       }
       break;
     }
@@ -310,6 +313,11 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
         s.lastActiveAt = ev.ts;
         if (ev.payload.contextTokens !== undefined) s.contextTokens = ev.payload.contextTokens;
       }
+      return true;
+    }
+    case "checkpoint.reminded": {
+      const s = sessionOf(state, ev.seq, ev.payload.session);
+      if (isLive(s)) s.remindedSinceProgress = true;
       return true;
     }
     case "agent.blocked": {
