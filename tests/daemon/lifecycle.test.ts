@@ -72,21 +72,24 @@ test("reconcile probe → lost → a generated handoff and a fresh coordinator s
   expect(job.split!.env.AGT_SESSION).toBe(job.session);
 });
 
-test("a coordinator that exited normally is replaced by the next reconcile", async () => {
+test("a coordinator that exited normally is replaced at once; a later reconcile does nothing more", async () => {
   await boot();
   const c = await coordinator();
   await cmd({ cmd: "session.attached", session: c, pane: "w1:p1" });
-  await cmd({ cmd: "session.signal", session: c, signal: "ended" }, { role: "coordinator", thread: "001", session: c });
   const before = jobs.length;
-  expect(jobs.length).toBe(before); // SessionEnd alone does not respawn
-  await cmd({ cmd: "layout.reconcile" });
-  const all = await events();
-  expect(all.find((e) => e.type === "session.lost")).toMatchObject({ payload: { session: c, reason: "coordinator exited" } });
+  await cmd({ cmd: "session.signal", session: c, signal: "ended" }, { role: "coordinator", thread: "001", session: c });
   expect(jobs.length).toBe(before + 1);
   const job = jobs.at(-1)!;
   expect(job.session).not.toBe(c);
   expect(job.args).not.toContain("--resume");
+  expect(job.bootstrap.startsWith("You are the new coordinator of thread 001;")).toBe(true);
+  const all = await events();
   expect(job.split).toMatchObject({ pane: rootPane(all) });
+  expect(all.find((e) => e.type === "handoff.submitted")).toMatchObject({ payload: { generated: true } });
+  expect(all.some((e) => e.type === "session.lost")).toBe(false);
+  await cmd({ cmd: "layout.reconcile" });
+  expect(jobs.length).toBe(before + 1);
+  expect((await events()).some((e) => e.type === "session.lost")).toBe(false);
 });
 
 test("handoff timeout: the sweep generates a handoff and rotates", async () => {

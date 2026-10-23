@@ -41,13 +41,28 @@ test("busy poll and sweep with a git worktree: stop() resolves promptly", async 
     await cmd({ cmd: "session.attached", session, pane: "w1:p9" });
 
     // Flip the pane between working and idle; every flip is a signal, a render and a git trail.
+    let pane = "w1:p9";
     let working = false;
     const flip = setInterval(() => {
       working = !working;
-      fake.update(() => ({ status: { "w1:p9": working ? "working" : "idle" } }));
+      const p = pane;
+      fake.update((s) => ({ status: { ...s.status, [p]: working ? "working" : "idle" } }));
     }, 30);
-    await Bun.sleep(3000);
+    // Meanwhile the coordinator exits three times: each exit is replaced from the poll (AGENTS.md, brief, spawn).
+    const until = Date.now() + 3000;
+    for (let i = 0; i < 3; i++) {
+      await Bun.sleep(400);
+      const known = (await events()).filter((e) => e.type === "session.created").length;
+      fake.update(() => ({ agentPanes: [] }));
+      const next = await waitFor(async () => (await events()).filter((e) => e.type === "session.created").at(known), 5000);
+      pane = `w1:p${20 + i}`;
+      const p = pane;
+      fake.update((s) => ({ panes: [...s.panes, p], agentPanes: [p], status: { [p]: "idle" } }));
+      await cmd({ cmd: "session.attached", session: (next.payload as { session: string }).session, pane });
+    }
+    await Bun.sleep(Math.max(0, until - Date.now()));
     clearInterval(flip);
+    expect((await events()).filter((e) => e.type === "session.created" && (e.payload as { replaces?: string }).replaces)).toHaveLength(3);
     const idles = (await events()).filter((e) => e.type === "agent.idle").length;
     expect(idles).toBeGreaterThan(3);
 

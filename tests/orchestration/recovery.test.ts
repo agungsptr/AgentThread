@@ -262,3 +262,64 @@ test("a handoff older than the lost coordinator is replaced by a generated one; 
   const same = setup("2026-10-11T10:00:00.000Z");
   expect(react(same, at(same, "2026-10-11T12:00:00.000Z", { type: "session.lost", thread: "001", payload: { session: R, reason: "x" } }), ctx()).events.map((e) => e.type)).toEqual(["session.created"]);
 });
+
+const M = "mmmmmmmm-mmmm-4mmm-8mmm-mmmmmmmmmmmm";
+const withMain = (s: State) => {
+  apply(s, { type: "session.created", payload: { session: M, role: "main", agent: "claude-code", name: "m" } }, { type: "session.attached", payload: { session: M, pane: "w1:p0" } });
+  return s;
+};
+const EXITED = "Coordinator for thread 001 exited; a fresh coordinator is starting from brief.md.";
+
+test("an exited coordinator is replaced like a lost one: generated handoff, fresh split from the root pane, main told", () => {
+  const s = withMain(base());
+  const r = react(s, apply(s, { type: "session.ended", thread: "001", payload: { session: C } }), ctx());
+  expect(r.events.map((e) => e.type)).toEqual(["handoff.submitted", "session.created", "notice.queued"]);
+  expect(r.events[0]).toMatchObject({ payload: { generated: true, content: expect.stringContaining("exited") } });
+  const created = r.events[1]!;
+  const newId = created.type === "session.created" ? created.payload.session : "";
+  expect(created).toMatchObject({ payload: { role: "coordinator", replaces: C, retirePane: "w1:p2" } });
+  expect(r.events[2]).toEqual({ type: "notice.queued", payload: { session: M, text: EXITED } });
+  expect(r.effects).toEqual([expect.objectContaining({ kind: "agent.spawn", session: newId, splitFrom: "w1:p2", bootstrap: "handoff" })]);
+  // fed back, nothing more happens; a later reconcile sees a live coordinator and leaves the thread alone
+  apply(s, ...r.events);
+  const again = react(s, apply(s, { type: "session.ended", thread: "001", payload: { session: C } }), ctx());
+  expect(again.events.filter((e) => e.type === "session.created" || e.type === "handoff.submitted")).toEqual([]);
+});
+
+test("repeated ended or lost events for one coordinator in one batch replace it once", () => {
+  for (const second of ["session.ended", "session.lost"] as const) {
+    const s = withMain(base());
+    const evs = apply(
+      s,
+      { type: "session.ended", thread: "001", payload: { session: C } },
+      second === "session.ended" ? { type: "session.ended", thread: "001", payload: { session: C } } : { type: "session.lost", thread: "001", payload: { session: C, reason: "x" } },
+    );
+    const r = react(s, evs, ctx());
+    expect(r.events.filter((e) => e.type === "session.created")).toHaveLength(1);
+    expect(r.effects.filter((e) => e.kind === "agent.spawn")).toHaveLength(1);
+  }
+  const s = base();
+  const r = react(s, apply(s, { type: "session.lost", thread: "001", payload: { session: C, reason: "a" } }, { type: "session.lost", thread: "001", payload: { session: C, reason: "b" } }), ctx());
+  expect(r.events.filter((e) => e.type === "session.created")).toHaveLength(1);
+});
+
+test("an exited coordinator is not replaced when the thread is done, has no tab, or has another live coordinator", () => {
+  const done = withMain(base());
+  done.threads.get("001")!.status = "done";
+  expect(react(done, apply(done, { type: "session.ended", thread: "001", payload: { session: C } }), ctx()).events).toEqual([]);
+  const tabless = withMain(base());
+  delete tabless.threads.get("001")!.rootPane;
+  expect(react(tabless, apply(tabless, { type: "session.ended", thread: "001", payload: { session: C } }), ctx()).events).toEqual([]);
+  const other = withMain(base());
+  const O = "oooooooo-oooo-4ooo-8ooo-oooooooooooo";
+  apply(other, { type: "session.created", thread: "001", payload: { session: O, role: "coordinator", agent: "claude-code", name: "o" } });
+  expect(react(other, apply(other, { type: "session.ended", thread: "001", payload: { session: C } }), ctx()).events).toEqual([]);
+});
+
+test("a thread finishing ends its coordinator without replacing it", () => {
+  const s = withMain(base());
+  const r = react(s, apply(s, { type: "thread.status_changed", thread: "001", payload: { from: "in_progress", to: "done" } }), ctx());
+  const ended = r.events.filter((e) => e.type === "session.ended");
+  expect(ended.length).toBeGreaterThan(0);
+  expect(react(s, apply(s, ...ended), ctx()).events.filter((e) => e.type === "session.created")).toEqual([]);
+});

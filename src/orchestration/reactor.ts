@@ -2,7 +2,7 @@ import { handoffRequestPrompt } from "../agents/prompts.ts";
 import type { Effect } from "../commands/handler.ts";
 import { type Config, durationMs } from "../config/config.ts";
 import type { EventBody, StoredEvent } from "../domain/types.ts";
-import { isLive, type Session, type State } from "../state/projection.ts";
+import { isLive, type Session, type State, type Thread } from "../state/projection.ts";
 import { generateHandoff } from "./handoff.ts";
 import { liveSessions, rotateCoordinator, spawnCoordinator, spawnReplacement, spawnWorker, workerLimit } from "./sessions.ts";
 
@@ -111,6 +111,24 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
       out.push({ type: "session.lost", thread: s.thread, payload: { session: s.id, reason } } as EventBody);
     }
   };
+  /**
+   * Replaces a lost or exited coordinator with a fresh split from the thread's root pane, at most once: never when it
+   * was replaced earlier in this call or already has a replacement. Returns whether it did.
+   */
+  const replaceCoordinator = (s: Session, t: Thread, why: string): boolean => {
+    if (!t.rootPane || rotatedTo.has(s.id) || [...state.sessions.values()].some((x) => x.replaces === s.id)) return false;
+    // Never resumed: a fresh coordinator takes over from the handoff, generated when there is none or when it
+    // predates the session (a handoff its predecessor wrote, already consumed by that rotation).
+    if (!t.handoff || Date.parse(t.handoff.ts) < Date.parse(s.createdAt)) {
+      out.push({ type: "handoff.submitted", thread: t.id, payload: { content: generateHandoff(t, why), generated: true } });
+    }
+    // A split gets its own agent env; the root pane may carry the old session's AGT_SESSION. It is retired on attach.
+    const r = spawnReplacement(t, s, ctx, { splitFrom: t.rootPane, retirePane: t.rootPane, bootstrap: "handoff" });
+    const created = r.events.find((e) => e.type === "session.created");
+    if (created?.type === "session.created") redirect(s.id, created.payload.session);
+    take(r);
+    return true;
+  };
   /** Threads whose coordinator is lost in this batch; it will be replaced, so tab_opened must not spawn a fresh one. */
   const coordinatorLostIn = new Set(
     events
@@ -140,18 +158,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         // The projection ignores a loss of a session that already rotated, ended or failed.
         if (!s || s.status !== "lost" || !t || t.status === "done") break;
         if (s.role === "coordinator" && t.rootPane) {
-          // A repeated loss of a coordinator that already has a replacement must not spawn a second one.
-          if ([...state.sessions.values()].some((x) => x.replaces === s.id)) break;
-          // Never resumed: a fresh coordinator takes over from the handoff, generated when there is none or when it
-          // predates the lost session (a handoff its predecessor wrote, already consumed by that rotation).
-          if (!t.handoff || Date.parse(t.handoff.ts) < Date.parse(s.createdAt)) {
-            out.push({ type: "handoff.submitted", thread: t.id, payload: { content: generateHandoff(t, "the previous coordinator session was lost"), generated: true } });
-          }
-          // A split gets its own agent env; the root pane may carry the lost session's AGT_SESSION. It is retired on attach.
-          const r = spawnReplacement(t, s, ctx, { splitFrom: t.rootPane, retirePane: t.rootPane, bootstrap: "handoff" });
-          const created = r.events.find((e) => e.type === "session.created");
-          if (created?.type === "session.created") redirect(s.id, created.payload.session);
-          take(r);
+          replaceCoordinator(s, t, "the previous coordinator session was lost");
         } else if (s.role === "worker") {
           const k = t.tickets.find((x) => x.id === s.ticket);
           const release = k?.status === "in_progress" && k.assignee === s.id;
@@ -189,6 +196,13 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
       case "session.ended": {
         const s = state.sessions.get(ev.payload.session);
         const t = s?.thread ? state.threads.get(s.thread) : undefined;
+        // The thread's acting coordinator exited (any source: polled status or a hook): a fresh one takes over, as for
+        // a loss. One ended by a finished thread, or one that was rotated or lost first, is not replaced here.
+        if (s?.role === "coordinator" && s.status === "ended" && t && t.status !== "done" && !coordinatorOf(t.id)) {
+          if (replaceCoordinator(s, t, "the previous coordinator session exited")) {
+            notify(liveSessions(state, undefined, "main")[0], `Coordinator for thread ${t.id} exited; a fresh coordinator is starting from brief.md.`);
+          }
+        }
         if (s?.role === "worker" && t && t.status !== "done") {
           // A worker that exits on its own must not leave its ticket stuck; one ended by teardown has a done or blocked ticket.
           const k = t.tickets.find((x) => x.id === s.ticket);
