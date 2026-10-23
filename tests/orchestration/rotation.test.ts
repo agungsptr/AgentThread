@@ -237,8 +237,13 @@ test("turns trigger rotation at exactly max_turns", () => {
   expect(turn(3)).toEqual([{ type: "session.rotation_requested", thread: "001", payload: { session: C, reason: "turns" } }]);
 });
 
+/** One finished turn: active, then idle. */
+const oneTurn = (s: State, ts: string) =>
+  apply(s, ts, { type: "session.active", thread: "001", payload: { session: C } }, { type: "agent.idle", thread: "001", payload: { session: C } });
+
 test("sweep requests rotation by age once", () => {
   const s = base();
+  oneTurn(s, "2026-10-11T10:05:00.000Z");
   expect(sweep(s, "2026-10-11T17:59:00.000Z", ctx()).events).toEqual([]);
   const r = sweep(s, "2026-10-11T18:01:00.000Z", ctx());
   expect(r.events).toEqual([{ type: "session.rotation_requested", thread: "001", payload: { session: C, reason: "age" } }]);
@@ -246,4 +251,18 @@ test("sweep requests rotation by age once", () => {
   expect(sweep(s, "2026-10-11T18:02:00.000Z", ctx()).events).toEqual([]);
   const q = react(s, [{ ...r.events[0]!, seq: s.lastSeq, ts: "2026-10-11T18:01:00.000Z", actor: USER } as StoredEvent], ctx());
   expect((q.events[0] as { payload: { text: string } }).payload.text.startsWith(HANDOFF_REQUEST_PREFIX)).toBe(true);
+});
+
+test("sweep does not rotate by age a parked coordinator with 0 turns, nor one whose thread is in review or blocked", () => {
+  const s = base();
+  expect(s.sessions.get(C)!.turns).toBe(0);
+  expect(sweep(s, "2026-10-12T10:00:00.000Z", ctx()).events).toEqual([]);
+  oneTurn(s, "2026-10-11T10:05:00.000Z");
+  for (const to of ["review", "blocked"] as const) {
+    const t = s.threads.get("001")!;
+    apply(s, "2026-10-11T10:06:00.000Z", { type: "thread.status_changed", thread: "001", payload: { from: t.status, to } });
+    expect(sweep(s, "2026-10-12T10:00:00.000Z", ctx()).events).toEqual([]);
+  }
+  apply(s, "2026-10-11T10:07:00.000Z", { type: "thread.status_changed", thread: "001", payload: { from: "blocked", to: "in_progress" } });
+  expect(sweep(s, "2026-10-12T10:00:00.000Z", ctx()).events).toEqual([{ type: "session.rotation_requested", thread: "001", payload: { session: C, reason: "age" } }]);
 });

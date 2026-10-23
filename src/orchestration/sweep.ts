@@ -15,7 +15,10 @@ export function sweep(state: State, now: string, ctx: ReactorContext): { events:
     if (s.status === "starting") continue;
     if (!s.pane) continue; // not attached yet: it cannot have seen a handoff request
     const t0 = s.thread ? state.threads.get(s.thread) : undefined;
-    if (!s.rotation && t0 && liveSessions(state, t0.id, "coordinator")[0] === s && Date.parse(now) - Date.parse(s.createdAt) > durationMs(ctx.config.session.rotation.max_age)) {
+    // Age only matters for a coordinator that has worked; a parked one (0 turns) or one waiting on review or an
+    // unblock would just be replaced by another idle coordinator.
+    const working = s.turns > 0 && t0?.status !== "review" && t0?.status !== "blocked";
+    if (!s.rotation && t0 && working && liveSessions(state, t0.id, "coordinator")[0] === s && Date.parse(now) - Date.parse(s.createdAt) > durationMs(ctx.config.session.rotation.max_age)) {
       events.push({ type: "session.rotation_requested", thread: t0.id, payload: { session: s.id, reason: "age" } });
       continue;
     }
