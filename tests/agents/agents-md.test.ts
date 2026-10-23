@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, lstatSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { agentsMd, writeAgentsFiles } from "../../src/agents/agents-md.ts";
 import { DEFAULT_CONFIG } from "../../src/config/config.ts";
 import { createEffectRunner } from "../../src/daemon/effects.ts";
 import { addWorktree } from "../../src/project/git.ts";
 import type { Thread } from "../../src/state/projection.ts";
-import { tempRepo } from "../helpers.ts";
+import { isolatedConfigHome, tempRepo } from "../helpers.ts";
 
 function git(dir: string, ...args: string[]): string {
   const r = Bun.spawnSync(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" });
@@ -16,11 +16,22 @@ function git(dir: string, ...args: string[]): string {
 
 const SECTION = "# AgentThread\n\nsection body\n";
 
-function repoWith(files: Record<string, string>): { root: string; wt: string } {
+// Never read the developer's global git config or excludes.
+const HOME = isolatedConfigHome();
+const ENV = { ...process.env, HOME, XDG_CONFIG_HOME: join(HOME, "xdg"), GIT_CONFIG_GLOBAL: join(HOME, "gitconfig") };
+const write = (o: { root: string; worktree: string; content: string }, env: Record<string, string | undefined> = ENV) =>
+  writeAgentsFiles({ ...o, env });
+
+function repoWith(files: Record<string, string>, links: Record<string, string> = {}): { root: string; wt: string } {
   const root = tempRepo();
-  for (const [name, content] of Object.entries(files)) writeFileSync(join(root, name), content);
-  if (Object.keys(files).length) {
-    git(root, "add", ...Object.keys(files));
+  for (const [name, content] of Object.entries(files)) {
+    mkdirSync(join(root, name, ".."), { recursive: true });
+    writeFileSync(join(root, name), content);
+  }
+  for (const [name, target] of Object.entries(links)) symlinkSync(target, join(root, name));
+  const all = [...Object.keys(files), ...Object.keys(links)];
+  if (all.length) {
+    git(root, "add", ...all);
     git(root, "commit", "-q", "-m", "project files");
   }
   const wt = join(root, ".worktrees", "001-x");
@@ -53,7 +64,7 @@ describe("agentsMd", () => {
     const memory = s.slice(s.indexOf("## Working memory"), s.indexOf("## Coordinator"));
     for (const x of ["agt note 002", "agt progress 002", "agt question 002", "--summary", "Before ending a turn"]) expect(memory).toContain(x);
     const coord = s.slice(s.indexOf("## Coordinator"), s.indexOf("## Worker"));
-    for (const x of ["agt ticket add 002", "agt worker spawn 002 --ticket <T>", "agt ticket reopen 002/<T>", "HANDOFF REQUEST", "git commit", "agt thread status 002 review"]) {
+    for (const x of ["agt ticket add 002", "agt worker spawn 002 --ticket <T>", "agt ticket reopen 002/<T>", "HANDOFF REQUEST", "git commit", "agt thread status 002 review", "Never run git update-index --no-skip-worktree and never commit AGENTS.md or CLAUDE.md. If merging or rebasing main is blocked by them, ask with agt question."]) {
       expect(coord).toContain(x);
     }
     const worker = s.slice(s.indexOf("## Worker"));
@@ -66,18 +77,21 @@ describe("agentsMd", () => {
 describe("writeAgentsFiles", () => {
   test("project without AGENTS.md/CLAUDE.md: both written, symlinked, excluded", () => {
     const { root, wt } = repoWith({});
-    writeAgentsFiles({ root, worktree: wt, content: SECTION });
+    write({ root, worktree: wt, content: SECTION });
     expect(readFileSync(join(wt, "AGENTS.md"), "utf8")).toBe(SECTION);
     expectSymlink(wt);
     expect(status(wt)).toBe("");
-    const exclude = readFileSync(join(root, ".git", "info", "exclude"), "utf8").split("\n");
-    expect(exclude).toContain("/AGENTS.md");
-    expect(exclude).toContain("/CLAUDE.md");
+    const excludes = readFileSync(join(root, ".agentthread", "worktree-excludes"), "utf8").split("\n");
+    expect(excludes).toContain("/AGENTS.md");
+    expect(excludes).toContain("/CLAUDE.md");
+    expect(git(wt, "config", "--worktree", "--get", "core.excludesFile").trim()).toBe(join(root, ".agentthread", "worktree-excludes"));
+    // the shared info/exclude stays untouched, so the main checkout is unaffected
+    expect(readFileSync(join(root, ".git", "info", "exclude"), "utf8")).not.toContain("AGENTS.md");
   });
 
   test("project tracking AGENTS.md: project content first, then the section; skip-worktree", () => {
     const { root, wt } = repoWith({ "AGENTS.md": "# Project rules\n\nBe nice.\n" });
-    writeAgentsFiles({ root, worktree: wt, content: SECTION });
+    write({ root, worktree: wt, content: SECTION });
     expect(readFileSync(join(wt, "AGENTS.md"), "utf8")).toBe(`# Project rules\n\nBe nice.\n\n\n${SECTION}`);
     expectSymlink(wt);
     expect(status(wt)).toBe("");
@@ -87,7 +101,7 @@ describe("writeAgentsFiles", () => {
 
   test("project tracking only CLAUDE.md: it seeds AGENTS.md and becomes the symlink", () => {
     const { root, wt } = repoWith({ "CLAUDE.md": "Claude rules\n" });
-    writeAgentsFiles({ root, worktree: wt, content: SECTION });
+    write({ root, worktree: wt, content: SECTION });
     expect(readFileSync(join(wt, "AGENTS.md"), "utf8")).toBe(`Claude rules\n\n\n${SECTION}`);
     expectSymlink(wt);
     expect(status(wt)).toBe("");
@@ -96,7 +110,7 @@ describe("writeAgentsFiles", () => {
 
   test("project tracking both: AGENTS.md content wins, both skip-worktree", () => {
     const { root, wt } = repoWith({ "AGENTS.md": "A\n", "CLAUDE.md": "C\n" });
-    writeAgentsFiles({ root, worktree: wt, content: SECTION });
+    write({ root, worktree: wt, content: SECTION });
     expect(readFileSync(join(wt, "AGENTS.md"), "utf8")).toBe(`A\n\n\n${SECTION}`);
     expectSymlink(wt);
     expect(status(wt)).toBe("");
@@ -105,29 +119,29 @@ describe("writeAgentsFiles", () => {
   test("running twice is idempotent: same content, no duplicate exclude lines", () => {
     for (const files of [{}, { "AGENTS.md": "P\n" }, { "CLAUDE.md": "C\n" }] as Record<string, string>[]) {
       const { root, wt } = repoWith(files);
-      writeAgentsFiles({ root, worktree: wt, content: SECTION });
+      write({ root, worktree: wt, content: SECTION });
       const first = readFileSync(join(wt, "AGENTS.md"), "utf8");
-      writeAgentsFiles({ root, worktree: wt, content: SECTION });
+      write({ root, worktree: wt, content: SECTION });
       expect(readFileSync(join(wt, "AGENTS.md"), "utf8")).toBe(first);
       expectSymlink(wt);
       expect(status(wt)).toBe("");
-      const exclude = readFileSync(join(root, ".git", "info", "exclude"), "utf8").split("\n");
-      expect(exclude.filter((l) => l === "/AGENTS.md").length).toBeLessThanOrEqual(1);
-      expect(exclude.filter((l) => l === "/CLAUDE.md").length).toBeLessThanOrEqual(1);
+      const exclude = readFileSync(join(root, ".agentthread", "worktree-excludes"), "utf8").split("\n");
+      expect(exclude.filter((l) => l === "/AGENTS.md").length).toBe(1);
+      expect(exclude.filter((l) => l === "/CLAUDE.md").length).toBe(1);
     }
   });
 
   test("updated content replaces the old section", () => {
     const { root, wt } = repoWith({ "AGENTS.md": "P\n" });
-    writeAgentsFiles({ root, worktree: wt, content: SECTION });
-    writeAgentsFiles({ root, worktree: wt, content: "# AgentThread\n\nv2\n" });
+    write({ root, worktree: wt, content: SECTION });
+    write({ root, worktree: wt, content: "# AgentThread\n\nv2\n" });
     expect(readFileSync(join(wt, "AGENTS.md"), "utf8")).toBe("P\n\n\n# AgentThread\n\nv2\n");
   });
 
   test("git add -A && git commit never includes either file", () => {
     for (const files of [{}, { "AGENTS.md": "P\n" }, { "CLAUDE.md": "C\n" }] as Record<string, string>[]) {
       const { root, wt } = repoWith(files);
-      writeAgentsFiles({ root, worktree: wt, content: SECTION });
+      write({ root, worktree: wt, content: SECTION });
       writeFileSync(join(wt, "work.txt"), "work\n");
       git(wt, "add", "-A");
       git(wt, "commit", "-q", "-m", "work");
@@ -137,6 +151,98 @@ describe("writeAgentsFiles", () => {
       for (const [name, content] of Object.entries(files)) expect(git(wt, "show", `HEAD:${name}`)).toBe(content);
       expect(status(wt)).toBe("");
     }
+  });
+});
+
+describe("writeAgentsFiles: symlinks, excludes, git operations", () => {
+  test("tracked AGENTS.md -> CLAUDE.md: no write-through, no ELOOP, clean status, nothing committed", () => {
+    const { root, wt } = repoWith({ "CLAUDE.md": "C\n" }, { "AGENTS.md": "CLAUDE.md" });
+    for (let i = 0; i < 2; i++) {
+      write({ root, worktree: wt, content: SECTION });
+      expect(lstatSync(join(wt, "AGENTS.md")).isFile()).toBe(true);
+      expect(readFileSync(join(wt, "AGENTS.md"), "utf8")).toBe(`C\n\n\n${SECTION}`);
+      expectSymlink(wt);
+      expect(status(wt)).toBe("");
+    }
+    writeFileSync(join(wt, "work.txt"), "w\n");
+    git(wt, "add", "-A");
+    git(wt, "commit", "-q", "-m", "work");
+    expect(git(wt, "show", "--name-only", "--format=", "HEAD").trim()).toBe("work.txt");
+    expect(git(wt, "show", "HEAD:CLAUDE.md")).toBe("C\n");
+  });
+
+  test("tracked AGENTS.md -> docs/AGENTS.md: the target is never overwritten or committed", () => {
+    const { root, wt } = repoWith({ "docs/AGENTS.md": "Docs rules\n" }, { "AGENTS.md": "docs/AGENTS.md" });
+    write({ root, worktree: wt, content: SECTION });
+    write({ root, worktree: wt, content: SECTION });
+    expect(lstatSync(join(wt, "AGENTS.md")).isFile()).toBe(true);
+    expect(readFileSync(join(wt, "AGENTS.md"), "utf8")).toBe(`Docs rules\n\n\n${SECTION}`);
+    expect(readFileSync(join(wt, "docs", "AGENTS.md"), "utf8")).toBe("Docs rules\n");
+    expectSymlink(wt);
+    expect(status(wt)).toBe("");
+    writeFileSync(join(wt, "work.txt"), "w\n");
+    git(wt, "add", "-A");
+    git(wt, "commit", "-q", "-m", "work");
+    expect(git(wt, "show", "--name-only", "--format=", "HEAD").trim()).toBe("work.txt");
+  });
+
+  test("a symlink pointing outside the worktree contributes no project content", () => {
+    const { root, wt } = repoWith({}, { "AGENTS.md": "../outside.md" });
+    write({ root, worktree: wt, content: SECTION });
+    expect(readFileSync(join(wt, "AGENTS.md"), "utf8")).toBe(SECTION);
+    expect(existsSync(join(root, ".worktrees", "outside.md"))).toBe(false);
+    expect(status(wt)).toBe("");
+  });
+
+  test("the main checkout can still add its own AGENTS.md and CLAUDE.md", () => {
+    const { root, wt } = repoWith({});
+    write({ root, worktree: wt, content: SECTION });
+    writeFileSync(join(root, "AGENTS.md"), "mine\n");
+    writeFileSync(join(root, "CLAUDE.md"), "mine\n");
+    expect(git(root, "status", "--porcelain", "--", "AGENTS.md", "CLAUDE.md")).toBe("?? AGENTS.md\n?? CLAUDE.md\n");
+    git(root, "add", "AGENTS.md", "CLAUDE.md");
+    expect(git(root, "diff", "--cached", "--name-only")).toBe("AGENTS.md\nCLAUDE.md\n");
+    expect(status(wt)).toBe("");
+  });
+
+  test("removes lines earlier versions put in the shared info/exclude (CRLF-safe)", () => {
+    const { root, wt } = repoWith({});
+    const info = join(root, ".git", "info", "exclude");
+    writeFileSync(info, "# keep\r\n/AGENTS.md\r\n*.tmp\n/CLAUDE.md\n");
+    write({ root, worktree: wt, content: SECTION });
+    expect(readFileSync(info, "utf8")).toBe("# keep\r\n*.tmp\n");
+    expect(status(wt)).toBe("");
+  });
+
+  test("the user's global excludes keep applying in the worktree, deduplicated", () => {
+    const home = isolatedConfigHome();
+    const ignore = join(home, "global-ignore");
+    writeFileSync(ignore, "*.log\r\n/AGENTS.md\r\n");
+    writeFileSync(join(home, "gitconfig"), `[core]\n\texcludesFile = ${ignore}\n`);
+    const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, "xdg"), GIT_CONFIG_GLOBAL: join(home, "gitconfig") };
+    const { root, wt } = repoWith({});
+    write({ root, worktree: wt, content: SECTION }, env);
+    write({ root, worktree: wt, content: SECTION }, env);
+    expect(readFileSync(join(root, ".agentthread", "worktree-excludes"), "utf8")).toBe("*.log\n/AGENTS.md\n/CLAUDE.md\n");
+    writeFileSync(join(wt, "debug.log"), "x\n");
+    expect(status(wt)).toBe("");
+  });
+
+  test("skip-worktree survives git stash -u / pop and git reset --hard", () => {
+    const { root, wt } = repoWith({ "AGENTS.md": "P\n", "CLAUDE.md": "C\n" });
+    write({ root, worktree: wt, content: SECTION });
+    writeFileSync(join(wt, "scratch.txt"), "s\n");
+    git(wt, "stash", "-u");
+    expect(existsSync(join(wt, "scratch.txt"))).toBe(false);
+    expect(status(wt)).toBe("");
+    git(wt, "stash", "pop");
+    expect(status(wt)).toBe("?? scratch.txt\n");
+    rmSync(join(wt, "scratch.txt"));
+    git(wt, "reset", "-q", "--hard");
+    expect(status(wt)).toBe("");
+    expect(git(wt, "ls-files", "-v", "AGENTS.md", "CLAUDE.md")).toBe("S AGENTS.md\nS CLAUDE.md\n");
+    expect(readFileSync(join(wt, "AGENTS.md"), "utf8")).toBe(`P\n\n\n${SECTION}`);
+    expectSymlink(wt);
   });
 });
 

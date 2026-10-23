@@ -1,5 +1,5 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { spawnRunner } from "../herdr/bridge.ts";
 import { paths } from "../project/paths.ts";
 import { systemPrompt } from "./prompts.ts";
@@ -34,6 +34,7 @@ export function agentsMd(o: { root: string; thread: ThreadRef }): string {
     "## Coordinator",
     "",
     ...coordinator,
+    "- Never run git update-index --no-skip-worktree and never commit AGENTS.md or CLAUDE.md. If merging or rebasing main is blocked by them, ask with agt question.",
     `- The handoff request names the exact command (agt handoff ${t.id} --stdin) and the sections to fill. Read ${dir}/brief.md for the latest handoff when you take over.`,
     "",
     "## Worker",
@@ -46,55 +47,121 @@ export function agentsMd(o: { root: string; thread: ThreadRef }): string {
 
 const GIT_TIMEOUT_MS = 5000;
 
-function git(cwd: string, args: string[]): { ok: boolean; stdout: string } {
-  const r = spawnRunner("git", ["--no-optional-locks", "-C", cwd, ...args], process.env as Record<string, string>, GIT_TIMEOUT_MS);
+type Env = Record<string, string | undefined>;
+
+function git(cwd: string, args: string[], env: Env): { ok: boolean; stdout: string } {
+  const r = spawnRunner("git", ["--no-optional-locks", "-C", cwd, ...args], env, GIT_TIMEOUT_MS);
   if (r.timedOut) throw new Error(`git ${args.join(" ")} timed out in ${cwd}`);
   return { ok: r.exitCode === 0, stdout: r.stdout };
 }
 
-function mustGit(cwd: string, args: string[]): string {
-  const r = spawnRunner("git", ["-C", cwd, ...args], process.env as Record<string, string>, GIT_TIMEOUT_MS);
+function mustGit(cwd: string, args: string[], env: Env): string {
+  const r = spawnRunner("git", ["-C", cwd, ...args], env, GIT_TIMEOUT_MS);
   if (r.exitCode !== 0 || r.timedOut) throw new Error(`git ${args.join(" ")} failed in ${cwd}: ${r.timedOut ? "timed out" : r.stderr.trim()}`);
   return r.stdout;
 }
 
-const isTracked = (wt: string, file: string) => git(wt, ["ls-files", "--error-unmatch", "--", file]).ok;
+const FILES = ["AGENTS.md", "CLAUDE.md"] as const;
+const EXCLUDE_LINES = FILES.map((f) => `/${f}`);
+const lines = (text: string) => text.split("\n").map((l) => l.replace(/\r$/, ""));
 
-/** The file's content at the worktree's HEAD, if it is tracked there as a regular file (not a symlink). */
-function trackedContent(wt: string, file: string): string {
-  const entry = git(wt, ["ls-tree", "HEAD", "--", file]);
-  if (!entry.ok || !/^100(644|755) blob /.test(entry.stdout)) return "";
-  const show = git(wt, ["show", `HEAD:${file}`]);
-  return show.ok ? show.stdout : "";
+const isInside = (wt: string, p: string) => {
+  const rel = relative(wt, p);
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+};
+
+/** A HEAD tree entry: mode and blob content, or undefined if `file` is not in HEAD. */
+function headEntry(wt: string, file: string, env: Env): { mode: string; content: string } | undefined {
+  const entry = git(wt, ["ls-tree", "HEAD", "--", file], env);
+  const mode = entry.ok ? /^(\d+) blob /.exec(entry.stdout)?.[1] : undefined;
+  if (!mode) return undefined;
+  const show = git(wt, ["show", `HEAD:${file}`], env);
+  return show.ok ? { mode, content: show.stdout } : undefined;
 }
 
-function ensureExcluded(wt: string, line: string): void {
-  const common = resolve(wt, mustGit(wt, ["rev-parse", "--git-common-dir"]).trim());
-  const file = join(common, "info", "exclude");
-  const current = existsSync(file) ? readFileSync(file, "utf8") : "";
-  if (current.split("\n").includes(line)) return;
+/**
+ * The project's own instructions in `file` at HEAD. A tracked symlink counts when its target is a regular file inside
+ * the worktree that is tracked at HEAD (read from HEAD, so a rewritten worktree file never feeds back in).
+ */
+function projectContent(wt: string, file: string, env: Env): string {
+  const e = headEntry(wt, file, env);
+  if (!e) return "";
+  if (e.mode === "100644" || e.mode === "100755") return e.content;
+  if (e.mode !== "120000") return "";
+  const target = resolve(wt, e.content.trim());
+  if (!isInside(wt, target)) return "";
+  const t = headEntry(wt, relative(wt, target).split(sep).join("/"), env);
+  return t && (t.mode === "100644" || t.mode === "100755") ? t.content : "";
+}
+
+function removeIfPresent(p: string): void {
+  try {
+    lstatSync(p);
+  } catch {
+    return;
+  }
+  rmSync(p, { force: true, recursive: true });
+}
+
+/** The user's global excludes file, which a per-worktree core.excludesFile would otherwise replace. */
+function globalExcludes(env: Env): string {
+  const home = env.HOME ?? "";
+  const configured = spawnRunner("git", ["config", "--global", "--get", "core.excludesFile"], env, GIT_TIMEOUT_MS);
+  let file = configured.exitCode === 0 && !configured.timedOut ? configured.stdout.trim() : "";
+  if (file.startsWith("~/")) file = join(home, file.slice(2));
+  if (!file) file = env.XDG_CONFIG_HOME ? join(env.XDG_CONFIG_HOME, "git", "ignore") : join(home, ".config", "git", "ignore");
+  try {
+    return readFileSync(file, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Hides untracked AGENTS.md/CLAUDE.md in thread worktrees only: a per-worktree core.excludesFile, so the main
+ * checkout can still add its own. Also removes the lines that earlier versions put in the shared info/exclude.
+ */
+function excludeInWorktree(root: string, wt: string, env: Env): void {
+  const file = join(root, ".agentthread", "worktree-excludes");
+  const kept = lines(globalExcludes(env)).filter((l) => !EXCLUDE_LINES.includes(l));
+  while (kept.length && kept[kept.length - 1] === "") kept.pop();
+  const text = [...kept, ...EXCLUDE_LINES].join("\n") + "\n";
   mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, `${current}${current && !current.endsWith("\n") ? "\n" : ""}${line}\n`);
+  if (!existsSync(file) || readFileSync(file, "utf8") !== text) writeFileSync(file, text);
+  if (git(root, ["config", "--get", "extensions.worktreeConfig"], env).stdout.trim() !== "true") {
+    mustGit(root, ["config", "extensions.worktreeConfig", "true"], env);
+  }
+  if (git(wt, ["config", "--worktree", "--get", "core.excludesFile"], env).stdout.trim() !== file) {
+    mustGit(wt, ["config", "--worktree", "core.excludesFile", file], env);
+  }
+  const common = resolve(wt, mustGit(wt, ["rev-parse", "--git-common-dir"], env).trim());
+  const info = join(common, "info", "exclude");
+  if (!existsSync(info)) return;
+  const current = readFileSync(info, "utf8");
+  const filtered = current.split("\n").filter((l) => !EXCLUDE_LINES.includes(l.replace(/\r$/, "")));
+  if (filtered.length !== current.split("\n").length) writeFileSync(info, filtered.join("\n"));
 }
 
 /**
  * Writes `<worktree>/AGENTS.md` (the project's own instructions, then `content`) and makes `CLAUDE.md` a symlink to
- * it. Neither ever shows up in `git status` or a commit: tracked paths get skip-worktree, the others are excluded.
+ * it. Neither ever shows up in `git status` or a commit: tracked paths get skip-worktree, the others are excluded
+ * through a per-worktree excludes file. Never writes through a symlink.
  */
-export function writeAgentsFiles(o: { root: string; worktree: string; content: string }): void {
+export function writeAgentsFiles(o: { root: string; worktree: string; content: string; env?: Env }): void {
   const wt = o.worktree;
-  const project = trackedContent(wt, "AGENTS.md") || trackedContent(wt, "CLAUDE.md");
-  writeFileSync(join(wt, "AGENTS.md"), `${project}${project ? "\n\n" : ""}${o.content}`);
-  const claude = join(wt, "CLAUDE.md");
-  let exists = false;
+  const env = o.env ?? (process.env as Env);
+  const project = projectContent(wt, "AGENTS.md", env) || projectContent(wt, "CLAUDE.md", env);
+  const agents = join(wt, "AGENTS.md");
+  let regular = false;
   try {
-    lstatSync(claude);
-    exists = true;
+    regular = lstatSync(agents).isFile();
   } catch {}
-  if (exists) rmSync(claude, { force: true, recursive: true });
-  symlinkSync("AGENTS.md", claude);
-  for (const file of ["AGENTS.md", "CLAUDE.md"]) {
-    if (isTracked(wt, file)) mustGit(wt, ["update-index", "--skip-worktree", "--", file]);
-    else ensureExcluded(wt, `/${file}`);
+  if (!regular) removeIfPresent(agents);
+  writeFileSync(agents, `${project}${project ? "\n\n" : ""}${o.content}`);
+  removeIfPresent(join(wt, "CLAUDE.md"));
+  symlinkSync("AGENTS.md", join(wt, "CLAUDE.md"));
+  for (const file of FILES) {
+    if (git(wt, ["ls-files", "--error-unmatch", "--", file], env).ok) mustGit(wt, ["update-index", "--skip-worktree", "--", file], env);
   }
+  excludeInWorktree(o.root, wt, env);
 }
