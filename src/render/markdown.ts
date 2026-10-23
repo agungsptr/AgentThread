@@ -2,9 +2,9 @@ import { stringify } from "yaml";
 import { DEFAULT_CONFIG, type Config } from "../config/config.ts";
 import { displayStatus, isLive, type Session, type State, type Thread } from "../state/projection.ts";
 
-const oneLine = (s: string) => s.replace(/\r?\n+/g, " ").trim();
+export const oneLine = (s: string) => s.replace(/\r?\n+/g, " ").trim();
 const cell = (s: string) => oneLine(s).replace(/\|/g, "\\|");
-const clampHeadings = (s: string) => {
+export const clampHeadings = (s: string) => {
   const clamped = s.replace(/^ {0,3}#{1,2}(?=[ \t]|$)/gm, "###");
   const fences = clamped.split("\n").filter((l) => /^ {0,3}(```|~~~)/.test(l)).length;
   return fences % 2 ? `${clamped}\n\`\`\`` : clamped;
