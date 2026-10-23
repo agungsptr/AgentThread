@@ -170,13 +170,13 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
   const misses = new Map<string, number>();
   const pollTimer = setInterval(() => {
     if (shuttingDown) return;
-    void enqueue(() => {
+    void enqueue(async () => {
       const layout = state.layout;
       if (!layout) return;
       const log = opts.log ?? console.error;
       let listed;
       try {
-        listed = new HerdrCli({ bin: layout.herdrBin, env: { ...process.env, ...(layout.herdrSocket ? { HERDR_SOCKET_PATH: layout.herdrSocket } : {}) } }).agentList();
+        listed = await new HerdrCli({ bin: layout.herdrBin, env: { ...process.env, ...(layout.herdrSocket ? { HERDR_SOCKET_PATH: layout.herdrSocket } : {}) } }).agentListAsync();
       } catch (e) {
         log(`herdr poll failed: ${e instanceof Error ? e.message : String(e)}`);
         return;

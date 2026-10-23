@@ -137,16 +137,25 @@ export class HerdrCli implements HerdrBridge {
   }
 
   agentList(): AgentListing[] {
-    const result = this.call(["agent", "list"]);
-    const agents = typeof result === "object" && result !== null ? (result as { agents?: unknown }).agents : undefined;
-    if (!Array.isArray(agents)) throw new HerdrError("bad_output", "herdr agent list: response missing agents");
-    const known = ["idle", "working", "blocked", "done"];
-    return agents.flatMap((a: unknown) => {
-      const r = (typeof a === "object" && a !== null ? a : {}) as Record<string, unknown>;
-      if (typeof r.pane_id !== "string") return [];
-      const status = typeof r.agent_status === "string" && known.includes(r.agent_status) ? (r.agent_status as AgentStatus) : "unknown";
-      return [{ pane: r.pane_id, status, kind: typeof r.agent === "string" ? r.agent : "unknown" }];
-    });
+    return parseAgents(this.call(["agent", "list"]));
+  }
+
+  /** Same as agentList, but never blocks the daemon's event loop (the poller runs it every couple of seconds). */
+  async agentListAsync(timeoutMs = this.opts.timeoutMs ?? DEFAULT_TIMEOUT_MS): Promise<AgentListing[]> {
+    const proc = Bun.spawn([this.opts.bin, "agent", "list"], { env: this.opts.env ?? process.env, stdout: "pipe", stderr: "pipe" });
+    const timer = setTimeout(() => proc.kill(9), timeoutMs);
+    try {
+      const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+      if (code !== 0) throw new HerdrError("herdr_failed", `herdr agent list: ${stderr.trim() || `exited with ${code}`}`);
+      try {
+        return parseAgents((JSON.parse(stdout) as { result?: unknown }).result);
+      } catch (e) {
+        if (e instanceof HerdrError) throw e;
+        throw new HerdrError("bad_output", "herdr agent list: unparseable output");
+      }
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private call(args: string[], timeoutMs = this.opts.timeoutMs ?? DEFAULT_TIMEOUT_MS): unknown {
@@ -180,4 +189,16 @@ function field(args: string[], value: unknown, ...keys: string[]): string {
   for (const k of keys) cur = typeof cur === "object" && cur !== null ? (cur as Record<string, unknown>)[k] : undefined;
   if (typeof cur !== "string") throw new HerdrError("bad_output", `herdr ${args.slice(0, 2).join(" ")}: response missing ${keys.join(".")}`);
   return cur;
+}
+
+function parseAgents(result: unknown): AgentListing[] {
+  const agents = typeof result === "object" && result !== null ? (result as { agents?: unknown }).agents : undefined;
+  if (!Array.isArray(agents)) throw new HerdrError("bad_output", "herdr agent list: response missing agents");
+  const known = ["idle", "working", "blocked", "done"];
+  return agents.flatMap((a: unknown) => {
+    const r = (typeof a === "object" && a !== null ? a : {}) as Record<string, unknown>;
+    if (typeof r.pane_id !== "string") return [];
+    const status = typeof r.agent_status === "string" && known.includes(r.agent_status) ? (r.agent_status as AgentStatus) : "unknown";
+    return [{ pane: r.pane_id, status, kind: typeof r.agent === "string" ? r.agent : "unknown" }];
+  });
 }
