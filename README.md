@@ -54,4 +54,7 @@ The test suite never runs the real `herdr` or `claude` binaries. Run this once i
 3. Check that the coordinator can run `agt …` without a permission prompt (this confirms the `Bash(agt *)` allowlist pattern), and that `git commit` works for the coordinator but prompts for a worker.
 4. Close the main-manager pane and run `agt daemon status` from another pane. The daemon must still be running.
 5. In a coordinator pane, run `/compact`. The pane should get a HANDOFF REQUEST, the coordinator should submit it with `agt handoff … --stdin`, and a new coordinator pane should replace it.
-6. Quit a coordinator's Claude (`/exit`), then run `agt start` from the main tab. The coordinator should come back with `claude --resume` in the same pane.
+6. Quit a coordinator's Claude (`/exit`), then run `agt start` from the main tab. A fresh coordinator should start in a new pane (nothing is resumed).
+7. In a thread's worktree, check that `AGENTS.md` and `CLAUDE.md -> AGENTS.md` exist and that `git status` there is clean.
+8. Let a coordinator work, then kill its Claude (`/exit`) and run `agt start`. A fresh coordinator should start in a new pane and continue from `brief.md`.
+9. Remove the hooks from a coordinator's settings. It must still become idle and receive ticket notices (status comes from Herdr alone).
