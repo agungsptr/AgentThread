@@ -92,7 +92,8 @@ export interface Thread {
   /** Each worker's latest progress, by ticket. */
   workerProgress: Record<string, Progress>;
   log: Entry[];
-  handoff?: { content: string; generated: boolean; ts: string };
+  /** `by` is "generated" for a daemon-written handoff, else the author's role. */
+  handoff?: { content: string; generated: boolean; ts: string; by: string };
 }
 
 export interface State {
@@ -263,7 +264,7 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       break;
     }
     case "handoff.submitted":
-      t.handoff = { content: ev.payload.content, generated: ev.payload.generated, ts: ev.ts };
+      t.handoff = { content: ev.payload.content, generated: ev.payload.generated, ts: ev.ts, by: ev.payload.generated ? "generated" : (ev.actor.role ?? "coordinator") };
       note(t, ev, `handoff submitted${ev.payload.generated ? " (generated)" : ""}`);
       break;
   }

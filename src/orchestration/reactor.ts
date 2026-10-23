@@ -142,8 +142,9 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         if (s.role === "coordinator" && t.rootPane) {
           // A repeated loss of a coordinator that already has a replacement must not spawn a second one.
           if ([...state.sessions.values()].some((x) => x.replaces === s.id)) break;
-          // Never resumed: a fresh coordinator takes over from the handoff (generated when there is none).
-          if (!t.handoff) {
+          // Never resumed: a fresh coordinator takes over from the handoff, generated when there is none or when it
+          // predates the lost session (a handoff its predecessor wrote, already consumed by that rotation).
+          if (!t.handoff || Date.parse(t.handoff.ts) < Date.parse(s.createdAt)) {
             out.push({ type: "handoff.submitted", thread: t.id, payload: { content: generateHandoff(t, "the previous coordinator session was lost"), generated: true } });
           }
           // A split gets its own agent env; the root pane may carry the lost session's AGT_SESSION. It is retired on attach.

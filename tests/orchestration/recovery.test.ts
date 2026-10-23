@@ -231,3 +231,34 @@ test("a repeated loss of an already-replaced coordinator spawns no second replac
   apply(s, ...r.events);
   expect(react(s, apply(s, { type: "session.lost", thread: "001", payload: { session: C, reason: "again" } }), ctx())).toEqual({ events: [], effects: [] });
 });
+
+test("a handoff older than the lost coordinator is replaced by a generated one; a newer one is kept", () => {
+  const at = (s: State, ts: string, ...bodies: EventBody[]): StoredEvent[] =>
+    bodies.map((b) => {
+      const ev = { ...b, seq: s.lastSeq + 1, ts, actor: USER } as StoredEvent;
+      applyEvent(s, ev);
+      return ev;
+    });
+  const R = "rrrrrrrr-rrrr-4rrr-8rrr-rrrrrrrrrrrr";
+  const setup = (handoffTs: string) => {
+    n = 0;
+    const s = stateOf(INIT, threadCreated("001", { status: "in_progress" }), { type: "thread.tab_opened", thread: "001", payload: { tab: "w1:t2", rootPane: "w1:p2" } });
+    at(s, "2026-10-11T09:00:00.000Z", { type: "session.created", thread: "001", payload: { session: C, role: "coordinator", agent: "claude-code", name: "c" } });
+    at(s, handoffTs, { type: "handoff.submitted", thread: "001", payload: { content: "old", generated: false } });
+    at(
+      s,
+      "2026-10-11T10:00:00.000Z",
+      { type: "session.rotated", thread: "001", payload: { session: C, reason: "context" } },
+      { type: "session.created", thread: "001", payload: { session: R, role: "coordinator", agent: "claude-code", name: "r", replaces: C } },
+      { type: "session.attached", thread: "001", payload: { session: R, pane: "w1:p5" } },
+    );
+    return s;
+  };
+  const stale = setup("2026-10-11T09:30:00.000Z");
+  const r = react(stale, at(stale, "2026-10-11T12:00:00.000Z", { type: "session.lost", thread: "001", payload: { session: R, reason: "x" } }), ctx());
+  expect(r.events.map((e) => e.type)).toEqual(["handoff.submitted", "session.created"]);
+  expect(r.events[0]).toMatchObject({ payload: { generated: true } });
+  // written at the same time as the replacement was created (the rotation that consumed it): still current
+  const same = setup("2026-10-11T10:00:00.000Z");
+  expect(react(same, at(same, "2026-10-11T12:00:00.000Z", { type: "session.lost", thread: "001", payload: { session: R, reason: "x" } }), ctx()).events.map((e) => e.type)).toEqual(["session.created"]);
+});

@@ -30,7 +30,7 @@ test("records status, decisions, handoff and a log line per event", () => {
   ).threads.get("001")!;
   expect(t.status).toBe("in_progress");
   expect(t.decisions.map((d) => d.message)).toEqual(["use a mutex"]);
-  expect(t.handoff).toEqual({ content: "## Goal status\nok", generated: false, ts: "2026-10-09T10:00:05.000Z" });
+  expect(t.handoff).toEqual({ content: "## Goal status\nok", generated: false, ts: "2026-10-09T10:00:05.000Z", by: "user" });
   expect(t.log.map((e) => e.message)).toEqual([
     "thread created (open)",
     "status open → in_progress",
