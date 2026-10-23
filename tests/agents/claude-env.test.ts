@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { agentEnv, claudeArgs, claudeConfigDir, claudeSessionFile } from "../../src/agents/claude.ts";
+import { agentEnv, claudeConfigDir } from "../../src/agents/claude.ts";
 import { contextTokensFromTranscript } from "../../src/agents/transcript.ts";
 import { DEFAULT_CONFIG } from "../../src/config/config.ts";
 
@@ -13,14 +13,7 @@ test("config dir precedence", () => {
   expect(claudeConfigDir(DEFAULT_CONFIG, {})).toBe(join(homedir(), ".claude"));
 });
 
-test("session file path encodes every non-alphanumeric character", () => {
-  expect(claudeSessionFile({ configDir: "/c", cwd: "/repo/.worktrees/001-x", session: "s-1" })).toBe("/c/projects/-repo--worktrees-001-x/s-1.jsonl");
-});
-
-test("resume args and CLAUDE_CONFIG_DIR env", () => {
-  const args = claudeArgs({ session: "s-1", role: "coordinator", systemPrompt: "SP", config: DEFAULT_CONFIG, root: "/repo", resume: true });
-  expect(args.slice(0, 4)).toEqual(["--resume", "s-1", "--permission-mode", "acceptEdits"]);
-  expect(args).not.toContain("--session-id");
+test("CLAUDE_CONFIG_DIR env", () => {
   expect(agentEnv({ root: "/repo", role: "worker", session: "s", configDir: "/c" }).CLAUDE_CONFIG_DIR).toBe("/c");
   expect(agentEnv({ root: "/repo", role: "worker", session: "s" })).not.toHaveProperty("CLAUDE_CONFIG_DIR");
 });

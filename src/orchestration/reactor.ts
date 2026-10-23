@@ -37,8 +37,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
   const lostSet = new Set<string>();
   /**
    * Who receives notices meant for a thread's coordinator: the live one, else the latest lost one, else the latest
-   * one that was not rotated (e.g. failed or ended). Notices persist on such a session; a resume keeps its id and a
-   * replacement carries them over.
+   * one that was not rotated (e.g. failed or ended). Notices persist on such a session; a replacement carries them over.
    */
   const coordinatorToNotify = (thread: string | undefined): Session | undefined => {
     const live = coordinatorOf(thread);
@@ -108,7 +107,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
       out.push({ type: "session.lost", thread: s.thread, payload: { session: s.id, reason } } as EventBody);
     }
   };
-  /** Threads whose coordinator is lost in this batch; it will be resumed, so tab_opened must not spawn a fresh one. */
+  /** Threads whose coordinator is lost in this batch; it will be replaced, so tab_opened must not spawn a fresh one. */
   const coordinatorLostIn = new Set(
     events
       .filter((e) => e.type === "session.lost")
@@ -137,8 +136,17 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         // The projection ignores a loss of a session that already rotated, ended or failed.
         if (!s || s.status !== "lost" || !t || t.status === "done") break;
         if (s.role === "coordinator" && t.rootPane) {
-          out.push({ type: "session.resuming", thread: t.id, payload: { session: s.id } });
-          effects.push({ kind: "agent.spawn", session: s.id, role: "coordinator", name: s.name, thread: t.id, cwd: t.worktree, pane: t.rootPane, resume: true, bootstrap: "resume" });
+          // A repeated loss of a coordinator that already has a replacement must not spawn a second one.
+          if ([...state.sessions.values()].some((x) => x.replaces === s.id)) break;
+          // Never resumed: a fresh coordinator takes over from the handoff (generated when there is none).
+          if (!t.handoff) {
+            out.push({ type: "handoff.submitted", thread: t.id, payload: { content: generateHandoff(t, "the previous coordinator session was lost"), generated: true } });
+          }
+          // A split gets its own agent env; the root pane may carry the lost session's AGT_SESSION. It is retired on attach.
+          const r = spawnReplacement(t, s, ctx, { splitFrom: t.rootPane, retirePane: t.rootPane, bootstrap: "handoff" });
+          const created = r.events.find((e) => e.type === "session.created");
+          if (created?.type === "session.created") redirect(s.id, created.payload.session);
+          take(r);
         } else if (s.role === "worker") {
           const k = t.tickets.find((x) => x.id === s.ticket);
           const release = k?.status === "in_progress" && k.assignee === s.id;
@@ -147,20 +155,6 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
           // The released ticket is not open in `state` yet, so this only spawns other queued tickets; the coordinator decides on the released one.
           fillWorkers(t.id);
         }
-        break;
-      }
-      case "session.resume_failed": {
-        const s = state.sessions.get(ev.payload.session);
-        const t = s?.thread ? state.threads.get(s.thread) : undefined;
-        if (!s || s.role !== "coordinator" || !t || t.status === "done" || !t.rootPane) break;
-        if (!t.handoff) {
-          out.push({ type: "handoff.submitted", thread: t.id, payload: { content: generateHandoff(t, "the previous coordinator session could not be resumed"), generated: true } });
-        }
-        // A split gets its own agent env; the root pane may carry the lost session's AGT_SESSION. It is retired on attach.
-        const r = spawnReplacement(t, s, ctx, { splitFrom: t.rootPane, retirePane: t.rootPane, bootstrap: "handoff" });
-        const created = r.events.find((e) => e.type === "session.created");
-        if (created?.type === "session.created") redirect(s.id, created.payload.session);
-        take(r);
         break;
       }
       case "ticket.completed":
@@ -218,7 +212,9 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         const s = state.sessions.get(ev.payload.session);
         const old = s?.replaces ? state.sessions.get(s.replaces) : undefined;
         const t = s?.thread ? state.threads.get(s.thread) : undefined;
-        const retire = old?.pane ?? s?.retirePane;
+        // An explicit retirePane (the thread's root pane when the replacement was made) wins: after a tab reopen the
+        // lost session's pane is gone with its old tab, and the new tab's root pane is the one to close.
+        const retire = s?.retirePane ?? old?.pane;
         if (retire && retire !== ev.payload.pane) effects.push({ kind: "pane.close", pane: retire });
         if ((s?.replaces || s?.retirePane) && t && t.rootPane !== ev.payload.pane) out.push({ type: "thread.root_pane_changed", thread: t.id, payload: { pane: ev.payload.pane } });
         deliver(s);

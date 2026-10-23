@@ -182,7 +182,7 @@ describe("layout.reconcile recovers threads without a live coordinator", () => {
   const reconcile = (...bodies: EventBody[]) =>
     handle(stateOf(INIT, REGISTERED, ...bodies), CommandSchema.parse({ cmd: "layout.reconcile" }), USER, { root: "/repo", config: DEFAULT_CONFIG, newId: () => NEW });
 
-  test("an ended coordinator is reported lost (so the reactor resumes it), after the tab effects", () => {
+  test("an ended coordinator is reported lost (so the reactor replaces it), after the tab effects", () => {
     const r = reconcile(threadCreated("001"), opened, created, attached, { type: "session.ended", thread: "001", payload: { session: C } });
     expect(r.ok && r.events).toEqual([{ type: "session.lost", thread: "001", payload: { session: C, reason: "coordinator exited" } }]);
     expect(r.ok && r.effects.map((e) => e.kind)).toEqual(["herdr.tab.ensure"]);

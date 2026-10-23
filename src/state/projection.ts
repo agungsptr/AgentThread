@@ -18,7 +18,7 @@ export interface Session {
   replaces?: string;
   /** A pane to close once this session attaches elsewhere (the pane of a session it takes over from). */
   retirePane?: string;
-  /** When the last resume of this session started; the sweep fails a resume that never completes. */
+  /** When the last resume of this session started (old logs only: sessions are no longer resumed). */
   resumingAt?: string;
 }
 
@@ -288,7 +288,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
     }
     case "session.lost": {
       const s = sessionOf(state, ev.seq, ev.payload.session);
-      // A coordinator that exited normally is reported lost by `agt start`, so it gets resumed.
+      // A coordinator that exited normally is reported lost by `agt start`, so it gets replaced.
       if (isLive(s) || (s.status === "ended" && s.role === "coordinator")) {
         s.status = "lost";
         threadNote(state, ev, `session ${short(s.id)} lost: ${ev.payload.reason}`);

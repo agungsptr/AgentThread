@@ -73,12 +73,11 @@ export function handoffRequestPrompt(o: { root: string; thread: { id: string; ti
   ].join("\n");
 }
 
-export function bootstrapPrompt(o: PromptInput, kind: "start" | "handoff" | "resume" = "start"): string {
+export function bootstrapPrompt(o: PromptInput, kind: "start" | "handoff" = "start"): string {
   if (o.role === "main") return "";
   const dir = threadDir(o);
   const id = o.thread!.id;
   if (o.role === "worker") return `Start ticket ${o.ticket} of thread ${id} now.`;
   if (kind === "handoff") return `Continue coordinating thread ${id} as its new coordinator. Read the Handoff section of ${dir}/sub.thread.md first, then ${dir}/board.md.`;
-  if (kind === "resume") return `You were resumed after an interruption. Re-read ${dir}/sub.thread.md and ${dir}/board.md, then continue coordinating thread ${id}.`;
   return `Start coordinating thread ${id}. Read ${dir}/sub.thread.md and ${dir}/board.md now.`;
 }

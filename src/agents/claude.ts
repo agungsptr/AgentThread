@@ -28,11 +28,6 @@ export function claudeConfigDir(config: Config, env: Record<string, string | und
   return config.agents.claude.config_dir ?? env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude");
 }
 
-/** Claude Code stores each session's transcript under projects/<cwd with every non-alphanumeric character as "-">. */
-export function claudeSessionFile(o: { configDir: string; cwd: string; session: string }): string {
-  return join(o.configDir, "projects", o.cwd.replace(/[^a-zA-Z0-9]/g, "-"), `${o.session}.jsonl`);
-}
-
 const READ_TOOLS = ["Bash(agt *)", "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)"];
 
 /** The thread files live under <root>/.agentthread, outside the agent's worktree cwd; `//abs/path` is Claude's absolute-path rule form. */
@@ -42,10 +37,10 @@ export function allowedTools(role: SessionRole, config: Config, root?: string): 
   return [...base, ...stateFiles, ...config.agents.claude.extra_allowed_tools];
 }
 
-export function claudeArgs(o: { session: string; role: SessionRole; systemPrompt: string; config: Config; root: string; resume?: boolean }): string[] {
+export function claudeArgs(o: { session: string; role: SessionRole; systemPrompt: string; config: Config; root: string }): string[] {
   const claude = o.config.agents.claude;
   return [
-    ...(o.resume ? ["--resume", o.session] : ["--session-id", o.session]),
+    "--session-id", o.session,
     "--permission-mode", claude.permission_mode,
     "--allowed-tools", allowedTools(o.role, o.config, o.root).join(","),
     "--settings", JSON.stringify(hookSettings()),

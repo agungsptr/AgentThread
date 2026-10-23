@@ -51,9 +51,6 @@ test("handoff request and bootstrap kinds", () => {
   expect(bootstrapPrompt(o, "handoff")).toBe(
     `Continue coordinating thread 002 as its new coordinator. Read the Handoff section of ${DIR}/sub.thread.md first, then ${DIR}/board.md.`,
   );
-  expect(bootstrapPrompt(o, "resume")).toBe(
-    `You were resumed after an interruption. Re-read ${DIR}/sub.thread.md and ${DIR}/board.md, then continue coordinating thread 002.`,
-  );
 });
 
 test("the handoff request's heredoc template, filled in, passes validateHandoff", () => {

@@ -22,8 +22,7 @@ export type Effect =
       pane?: string;
       splitFrom?: string;
       direction?: "right" | "down";
-      bootstrap?: "start" | "handoff" | "resume";
-      resume?: boolean;
+      bootstrap?: "start" | "handoff";
     }
   | { kind: "notice.deliver"; session: string; thread?: string; pane: string; text: string; count: number }
   | { kind: "pane.close"; pane: string }
@@ -224,7 +223,7 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
 
 /**
  * Threads with a tab but no live coordinator (it exited, or it or its spawn failed) get one back on reconcile:
- * an ended coordinator is reported lost, so the reactor resumes it; otherwise a fresh one is split from the root pane.
+ * an ended coordinator is reported lost, so the reactor replaces it; otherwise a fresh one is split from the root pane.
  */
 function recoverCoordinators(state: State, open: Thread[], ctx: HandlerContext): Decision & { effects: Effect[] } {
   const events: EventBody[] = [];

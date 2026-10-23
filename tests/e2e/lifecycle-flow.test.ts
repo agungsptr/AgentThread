@@ -1,8 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
-import { claudeSessionFile } from "../../src/agents/claude.ts";
 import { initProject } from "../../src/project/init.ts";
 import { FAKE_CLAUDE, FAKE_HERDR, fakeHerdrState, isolatedConfigHome, tempRepo, waitFor } from "../helpers.ts";
 
@@ -54,7 +53,7 @@ afterAll(() => {
   }
 });
 
-test("rotation on precompact, then recovery by resume", async () => {
+test("rotation on precompact, then recovery by replacement", async () => {
   agt(["start", "--no-manager"]);
   agt(["thread", "new", "Login", "--type", "feature"]);
   const c1 = await waitFor(() => liveCoordinator(), 10_000);
@@ -79,31 +78,34 @@ test("rotation on precompact, then recovery by resume", async () => {
   expect(prompts().some((p) => p.startsWith("Continue coordinating thread 001 as its new coordinator."))).toBe(true);
   expect(readFileSync(join(root, ".agentthread/threads/001-login/sub.thread.md"), "utf8")).toContain("Goal status written by the coordinator");
 
-  // the agent in c2's pane disappears; its transcript exists → agt start resumes it with --resume
+  // the agent in c2's pane disappears → agt start replaces it with a fresh coordinator in a new split (never --resume)
   const s = fake.read();
   writeFileSync(fake.file, JSON.stringify({ ...s, agentPanes: (s.agentPanes ?? []).filter((p) => p !== c2.pane) }));
-  const file = claudeSessionFile({ configDir: claudeDir, cwd: join(root, ".worktrees", "001-login"), session: c2.id });
-  mkdirSync(join(file, ".."), { recursive: true });
-  writeFileSync(file, "{}\n");
   const before = fake.read().calls.length;
   agt(["start", "--no-manager"]);
-  const resumed = await waitFor(() => {
+  const started = await waitFor(() => {
     const calls = fake.read().calls.slice(before);
-    return calls.find((x) => x[0] === "agent" && x[1] === "start" && x.includes("--resume"));
+    return calls.find((x) => x[0] === "agent" && x[1] === "start");
   }, 10_000);
-  expect(resumed).toContain(c2.id);
-  expect(resumed[resumed.indexOf("--pane") + 1]).toBe(c2.pane);
+  expect(started).not.toContain("--resume");
+  expect(started).not.toContain(c2.id);
+  const c3 = await waitFor(() => {
+    const c = liveCoordinator();
+    return c && c.id !== c2.id ? c : undefined;
+  }, 10_000);
+  expect(c3.pane).not.toBe(c2.pane);
+  expect(fake.read().calls.slice(before).some((x) => x[0] === "pane" && x[1] === "split" && x.includes(c2.pane!))).toBe(true);
+  expect(sessions().find((x) => x.id === c2.id)!.status).toBe("lost");
 
-  // the resumed agent got the resume bootstrap, and its hooks (carrying its own AGT_SESSION) are accepted
-  await waitFor(() => prompts().some((p) => p.startsWith("You were resumed after an interruption.")), 10_000);
-  await waitFor(() => sessions().find((x) => x.id === c2.id && x.pane === c2.pane), 10_000);
-  hook("started", c2.id, c2.id);
-  expect(sessions().find((x) => x.id === c2.id)!.status).toBe("idle");
-  hook("active", c2.id, c2.id);
-  expect(sessions().find((x) => x.id === c2.id)!.status).toBe("active");
+  // the replacement got the replacement bootstrap, and its hooks (carrying its own AGT_SESSION) are accepted
+  await waitFor(() => prompts().filter((p) => p.startsWith("Continue coordinating thread 001 as its new coordinator.")).length >= 2, 10_000);
+  hook("started", c3.id, c3.id);
+  expect(sessions().find((x) => x.id === c3.id)!.status).toBe("idle");
+  hook("active", c3.id, c3.id);
+  expect(sessions().find((x) => x.id === c3.id)!.status).toBe("active");
 
-  // exactly one live coordinator for the thread: the resumed c2
+  // exactly one live coordinator for the thread: the replacement c3
   const live = sessions().filter((x) => x.role === "coordinator" && !DEAD.includes(x.status));
-  expect(live.map((x) => x.id)).toEqual([c2.id]);
-  expect(agt(["logs"]).split("\n").some((l) => l.split(" ")[2] === "session.resuming")).toBe(true);
+  expect(live.map((x) => x.id)).toEqual([c3.id]);
+  expect(agt(["logs"]).split("\n").some((l) => l.split(" ")[2] === "session.resuming")).toBe(false);
 });

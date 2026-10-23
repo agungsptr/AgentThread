@@ -1,6 +1,5 @@
-import { existsSync } from "node:fs";
 import { dirname } from "node:path";
-import { AGT_BIN, agentEnv, claudeArgs, claudeConfigDir, claudeSessionFile } from "../agents/claude.ts";
+import { AGT_BIN, agentEnv, claudeArgs, claudeConfigDir } from "../agents/claude.ts";
 import { bootstrapPrompt, systemPrompt } from "../agents/prompts.ts";
 import { launchSpawnJob, type SpawnJob } from "../agents/spawn-job.ts";
 import type { Effect } from "../commands/handler.ts";
@@ -21,7 +20,6 @@ export function createEffectRunner(opts: {
   launch?: (job: SpawnJob) => void;
   bridge?: (layout: Layout) => HerdrBridge;
   log?: (message: string) => void;
-  sessionFileExists?: (path: string) => boolean;
 }): (effect: Effect) => EventBody[] {
   const log = opts.log ?? ((m: string) => console.error(m));
   const launch = opts.launch ?? ((job: SpawnJob) => launchSpawnJob(job, { logFile: paths(opts.root).daemonLog }));
@@ -56,12 +54,6 @@ export function createEffectRunner(opts: {
         if (!layout) return failed("no Herdr layout registered");
         if (!t) return failed(`unknown thread ${effect.thread}`);
         const prompt = { root: opts.root, role: effect.role, thread: t, ticket: effect.ticket };
-        if (effect.resume) {
-          const file = claudeSessionFile({ configDir, cwd: effect.cwd, session: effect.session });
-          if (!(opts.sessionFileExists ?? existsSync)(file)) {
-            return [{ type: "session.resume_failed", thread: effect.thread, payload: { session: effect.session, reason: `no saved Claude session at ${file}` } }];
-          }
-        }
         try {
           launch({
             root: opts.root,
@@ -81,7 +73,7 @@ export function createEffectRunner(opts: {
                   },
                 }
               : {}),
-            args: claudeArgs({ session: effect.session, role: effect.role, systemPrompt: systemPrompt(prompt), config: opts.config, root: opts.root, resume: effect.resume }),
+            args: claudeArgs({ session: effect.session, role: effect.role, systemPrompt: systemPrompt(prompt), config: opts.config, root: opts.root }),
             bootstrap: bootstrapPrompt(prompt, effect.bootstrap ?? "start"),
           });
           return [];

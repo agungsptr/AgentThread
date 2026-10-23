@@ -203,7 +203,7 @@ test("rotateCoordinator does nothing for a done thread or one without a root pan
   expect(rotateCoordinator(s, c, "context", ctx())).toEqual({ events: [], effects: [] });
 });
 
-test("resuming restarts a pending rotation's clock and records resumingAt; the sweep skips the resuming coordinator", () => {
+test("old-log resuming restarts a pending rotation's clock and records resumingAt; the sweep skips the starting coordinator", () => {
   const s = base();
   apply(s, "2026-10-11T10:01:00.000Z", { type: "session.rotation_requested", thread: "001", payload: { session: C, reason: "precompact" } });
   apply(s, "2026-10-11T10:09:00.000Z", { type: "session.lost", thread: "001", payload: { session: C, reason: "x" } }, { type: "session.resuming", thread: "001", payload: { session: C } });
@@ -216,17 +216,6 @@ test("resuming restarts a pending rotation's clock and records resumingAt; the s
   apply(s, "2026-10-11T10:10:00.000Z", { type: "session.attached", thread: "001", payload: { session: C, pane: "w1:p2" } }, { type: "session.started", thread: "001", payload: { session: C } });
   expect(sweep(s, "2026-10-11T10:13:00.000Z", ctx()).events).toEqual([]);
   expect(sweep(s, "2026-10-11T10:15:00.000Z", ctx()).events.map((e) => e.type)).toEqual(["handoff.submitted"]);
-});
-
-test("sweep: a resume that has not completed within 3m fails, and only then", () => {
-  const s = base();
-  apply(s, "2026-10-11T10:01:00.000Z", { type: "session.lost", thread: "001", payload: { session: C, reason: "x" } }, { type: "session.resuming", thread: "001", payload: { session: C } });
-  expect(sweep(s, "2026-10-11T10:04:00.000Z", ctx()).events).toEqual([]);
-  expect(sweep(s, "2026-10-11T10:04:01.000Z", ctx()).events).toEqual([
-    { type: "session.resume_failed", thread: "001", payload: { session: C, reason: "resume did not complete within 3m" } },
-  ]);
-  apply(s, "2026-10-11T10:02:00.000Z", { type: "session.attached", thread: "001", payload: { session: C, pane: "w1:p2" } }, { type: "session.started", thread: "001", payload: { session: C } });
-  expect(sweep(s, "2026-10-11T10:30:00.000Z", ctx()).events).toEqual([]);
 });
 
 test("sweep skips a coordinator without a pane", () => {

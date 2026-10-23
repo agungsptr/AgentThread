@@ -94,7 +94,7 @@ export function spawnReplacement(
   t: Thread,
   old: Session,
   ctx: SpawnContext,
-  how: { splitFrom?: string; retirePane?: string; bootstrap: "start" | "handoff" | "resume" },
+  how: { splitFrom?: string; retirePane?: string; bootstrap: "start" | "handoff" },
 ): { events: EventBody[]; effects: Effect[] } {
   const session = ctx.newId();
   const name = agentName(ctx.root, "coordinator", t.id, undefined, session);
