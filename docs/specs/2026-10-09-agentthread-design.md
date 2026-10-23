@@ -1,7 +1,7 @@
 # AgentThread — Design Spec
 
 **Date:** 2026-10-09
-**Status:** Draft
+**Status:** Draft — revised 2026-10-23 (see §11: agent-agnostic sessions; §11 supersedes the resume parts of §5.4, §6.4 and §7)
 
 ## 1. Overview
 
@@ -375,3 +375,81 @@ herdr:
 2. **Cross-subthread communication** beyond `depends_on`: needed or not?
 3. OpenCode adapter details (all TBD rows in §7).
 4. How to measure **context usage** for the 70% rotation threshold (both agents).
+
+## 11. Revision 2026-10-23 — Agent-agnostic sessions
+
+**Decision:** sessions are disposable and vendor-neutral. The thread holds the memory, and any supported agent (Claude Code, OpenCode, Codex, Gemini CLI, …) can continue a thread by reading files. **Vendor session resume is removed entirely.** There is one path: a fresh session plus a brief.
+
+### 11.1 What supersedes what
+
+| Earlier | Now |
+|---|---|
+| §6.4 resume with `claude --resume`, the `lost` fallback | A lost or exited agent is always replaced by a **fresh session** that reads `brief.md` |
+| §7 Claude-specific adapter (hooks, `--session-id`, transcripts) | **Thin generic adapter**; vendor features are optional capabilities |
+| Hooks as the primary event source | **Herdr agent status** (`events.subscribe`: `pane.agent_status_changed`, `pane.agent_detected`, `pane.exited`, `pane.closed`, `tab.closed`) is the primary source. Vendor hooks only enrich it (e.g. context size, pre-compact). |
+| Role prompt via `--append-system-prompt` | **`AGENTS.md`** in the worktree, with `CLAUDE.md` always a symlink to it (identical content) |
+| Rotation triggers: compaction, context %, idle timeout | Neutral triggers (turn count, session age, tickets completed), plus vendor triggers when the adapter supports them |
+
+### 11.2 Thread memory (three layers)
+
+1. **Automatic facts (daemon):** events (tickets, statuses, decisions, sessions) and git (commits on the thread branch, `git diff --stat` of the worktree). Nobody has to write these.
+2. **Working notes (agents), checkpoint policy "B":**
+   - `agt note <thread> "<finding>"` records findings, `agt progress <thread> "<where I am>"` records the current position (latest wins), and `agt question <thread> "<open question>"` records doubts.
+   - These are rendered into `sub.thread.md` sections **Findings**, **Progress**, **Open questions**.
+   - Mandatory checkpoints:
+     - `agt ticket done` requires `--summary`;
+     - when an agent goes idle with no `progress` for N turns or M minutes, the daemon sends a short reminder (both thresholds configurable);
+     - rotation still requires a handoff (or generates one).
+3. **Context pack `brief.md` (daemon, deterministic):** one file per thread that a fresh agent reads first. It holds:
+   - goal, criteria and decisions;
+   - the board;
+   - progress, findings and open questions;
+   - the latest handoff;
+   - git trail;
+   - a "how to continue" section.
+
+   It is re-rendered on every change and doubles as the thread's metadata.
+
+### 11.3 `AGENTS.md` / `CLAUDE.md`
+
+- The daemon writes `AGENTS.md` at the **worktree root** when the worktree is created and before every spawn. `CLAUDE.md` is always a symlink to `AGENTS.md`.
+- Content: common rules (how to use `agt`, where state lives, checkpoint policy), then a **Coordinator** section and a **Worker** section. Coordinator and workers share one worktree, so one file serves both roles. The bootstrap prompt states the role, and `AGT_ROLE` confirms it.
+- **Never committed:**
+  - If the project has no `AGENTS.md`/`CLAUDE.md`, both are added to the repo's `.git/info/exclude`.
+  - If the project already tracks one or both, the generated file is the project's content followed by the AgentThread section, and the tracked paths are marked `git update-index --skip-worktree`. If the project only has a plain `CLAUDE.md`, its content seeds `AGENTS.md`, and `CLAUDE.md` becomes the symlink in the worktree.
+
+### 11.4 Generic adapter
+
+```ts
+interface AgentAdapter {
+  kind: string;                                  // herdr --kind value: "claude", "opencode", "codex", ...
+  startArgs(o: { role; config; root }): string[]; // permissions, model; no session or prompt flags required
+  setupWorktree?(worktree: string, role): void;   // vendor-specific permission/config files, if any
+  capabilities: { contextSize?: boolean; preCompact?: boolean; hooks?: boolean };
+}
+```
+
+- Agents start in Herdr panes with `herdr agent start --kind <kind>`. The bootstrap prompt is delivered with `herdr agent prompt`.
+- The session identity is AgentThread's own id plus the Herdr pane, not a vendor session id.
+
+### 11.5 Development-only memory evaluation
+
+During development, a repeatable recovery scenario checks that saving and transferring memory works:
+1. Run a thread to mid-work.
+2. Kill the agent.
+3. Spawn a fresh agent, possibly of another vendor, from `brief.md` only.
+4. Record:
+   - whether it continued from the right point;
+   - how much work it repeated;
+   - how many questions it asked that were already recorded;
+   - the time or tokens it took to become productive.
+
+This is a dev tool, not a product feature.
+
+### 11.6 Open items for the plan
+
+- The Herdr socket protocol for `events.subscribe` (framing, reconnect), with polling `herdr agent list` as a fallback.
+- OpenCode specifics: permission config and how it loads `AGENTS.md`. Herdr already reports OpenCode session ids.
+- Defaults for N turns and M minutes in the progress reminder.
+- Which Plan 4 parts are removed (resume path, transcript lookup, `--resume`) and which stay (rotation, handoff, recovery via replacement, worker release).
+
