@@ -22,7 +22,7 @@ const full = () =>
 
 test("brief has the sections in order", () => {
   const t = full().threads.get("001")!;
-  const md = renderBrief({ thread: t, sessions: [], trail: { commits: ["abc1234 add a"], diffStat: "1 file changed" }, dir: "/d" });
+  const md = renderBrief({ thread: t, sessions: [], trail: { commits: ["abc1234 add a"], diffStat: "1 file changed", untracked: 2 }, dir: "/d" });
   const heads = md.match(/^#{1,2} .*$/gm)!;
   expect(heads).toEqual([
     "# Brief — thread 001: OAuth",
@@ -43,6 +43,7 @@ test("brief has the sections in order", () => {
   expect(md).toContain("### Risks");
   expect(md).toContain("- abc1234 add a");
   expect(md).toContain("Uncommitted: 1 file changed");
+  expect(md).toContain("Untracked files: 2");
   expect(md).toContain('3. Record progress with agt progress <id> "<…>", findings with agt note, doubts with agt question.');
 });
 
@@ -51,15 +52,19 @@ test("brief fallbacks", () => {
   const md = renderBrief({ thread: t, sessions: [], dir: "/d" });
   expect(md).toContain("No progress recorded yet.");
   expect(md).toContain("None yet.");
-  expect(md).toContain("No commits on this thread yet.");
+  expect(md).toContain("Git trail unavailable.");
   expect(md).not.toContain("Uncommitted:");
+  const withTrail = renderBrief({ thread: t, sessions: [], trail: { commits: [], diffStat: "", untracked: 0 }, dir: "/d" });
+  expect(withTrail).toContain("No commits on this thread yet.");
+  const done = stateOf(INIT, threadCreated("003", { status: "done" })).threads.get("003")!;
+  expect(renderBrief({ thread: done, sessions: [], dir: "/d" })).toContain("No commits on this thread yet.");
 });
 
 test("brief truncates findings to 20 and commits to 20", () => {
   const notes = Array.from({ length: 30 }, (_, i) => ({ type: "note.recorded" as const, thread: "001", payload: { message: `finding-${i}` } }));
   const t = stateOf(INIT, threadCreated("001"), ...notes).threads.get("001")!;
   const commits = Array.from({ length: 30 }, (_, i) => `c${i} msg`);
-  const md = renderBrief({ thread: t, sessions: [], trail: { commits, diffStat: "" }, dir: "/d" });
+  const md = renderBrief({ thread: t, sessions: [], trail: { commits, diffStat: "", untracked: 0 }, dir: "/d" });
   expect(md).not.toContain("finding-9\n");
   expect(md).toContain("finding-10");
   expect(md).toContain("finding-29");
@@ -70,8 +75,30 @@ test("brief truncates findings to 20 and commits to 20", () => {
 test("writeAll writes brief.md using the injected trail", () => {
   const root = mkdtempSync(join(tmpdir(), "agt-w-"));
   const state = full();
-  writeAll(root, state, undefined, () => ({ commits: ["zzz9999 stub"], diffStat: "" }));
+  writeAll(root, state, undefined, () => ({ commits: ["zzz9999 stub"], diffStat: "", untracked: 0 }));
   const f = join(root, ".agentthread", "threads", "001-thread-001", "brief.md");
   expect(existsSync(f)).toBe(true);
   expect(readFileSync(f, "utf8")).toContain("zzz9999 stub");
+});
+
+test("brief stays under 16 KiB with oversized inputs", () => {
+  const big = "x".repeat(5000);
+  const bodies = [
+    INIT,
+    threadCreated("001", { goal: big, criteria: Array.from({ length: 50 }, () => big) }),
+    ...Array.from({ length: 200 }, (_, i) => ({ type: "ticket.created" as const, thread: "001", payload: { ticket: `T${i}`, title: big, scope: [big] } })),
+    ...Array.from({ length: 100 }, () => ({ type: "note.recorded" as const, thread: "001", payload: { message: big } })),
+    ...Array.from({ length: 100 }, () => ({ type: "question.recorded" as const, thread: "001", payload: { message: big } })),
+    ...Array.from({ length: 100 }, () => ({ type: "decision.recorded" as const, thread: "001", payload: { message: big } })),
+    { type: "progress.recorded" as const, thread: "001", payload: { message: "PROGRESS-MARK" } },
+    { type: "handoff.submitted" as const, thread: "001", payload: { content: big.repeat(10), generated: false } },
+  ];
+  const t = stateOf(...bodies).threads.get("001")!;
+  const commits = Array.from({ length: 20 }, () => big);
+  const md = renderBrief({ thread: t, sessions: [], trail: { commits, diffStat: "d", untracked: 0 }, dir: "/d" });
+  expect(Buffer.byteLength(md)).toBeLessThan(16384);
+  expect(md).toContain("PROGRESS-MARK");
+  expect(md).toContain("## Open questions");
+  expect(md).toContain("## How to continue");
+  expect(md).toContain("(truncated — see sub.thread.md)");
 });

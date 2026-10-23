@@ -8,6 +8,7 @@ import type { Actor, EventBody, StoredEvent } from "../domain/types.ts";
 import { react } from "../orchestration/reactor.ts";
 import { sweep } from "../orchestration/sweep.ts";
 import { paths } from "../project/paths.ts";
+import { memoizedTrail } from "../project/gittrail.ts";
 import { writeAll } from "../render/write.ts";
 import { applyEvent, project } from "../state/projection.ts";
 import { EventStore } from "../store/event-store.ts";
@@ -32,6 +33,7 @@ export function runFollowUps(fresh: StoredEvent[], round: (events: StoredEvent[]
 export async function startDaemon(root: string, opts: { log?: (message: string) => void; launch?: (job: SpawnJob) => void; sweepIntervalMs?: number } = {}): Promise<Daemon> {
   const p = paths(root);
   // Taking the exclusive store lock first makes "one daemon per project" a property of state.db, not of the socket path.
+  const trail = memoizedTrail(root, 3000);
   const store = new EventStore(p.db, { exclusive: true });
   let state: ReturnType<typeof project>;
   let config: Config;
@@ -44,7 +46,7 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
     }
     ensureSocketDir(p.socketDir);
     rmSync(p.socket, { force: true });
-    writeAll(root, state, config);
+    writeAll(root, state, config, trail);
   } catch (e) {
     store.close();
     throw e;
@@ -84,7 +86,7 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
       opts.log ?? console.error,
     );
     try {
-      writeAll(root, state, config);
+      writeAll(root, state, config, trail);
     } catch (e) {
       // Events are already committed; failing here would make the client retry and duplicate the command.
       (opts.log ?? console.error)(`render failed after commit: ${e instanceof Error ? e.message : String(e)}`);
