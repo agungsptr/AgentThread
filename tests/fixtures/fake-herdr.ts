@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // Test double for the herdr CLI. State lives in the JSON file named by $FAKE_HERDR_STATE.
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 
 interface FakeState {
   next: number;
@@ -23,6 +23,25 @@ if (!file) {
   console.error(JSON.stringify({ error: { code: "fake_misconfigured", message: "FAKE_HERDR_STATE not set" } }));
   process.exit(1);
 }
+// Calls run concurrently (the poller, spawn jobs, the test itself): every read-modify-write holds a lock, and writes
+// are atomic, so no call loses another's change and no reader sees a half-written file. See withFakeLock in helpers.ts.
+const lock = `${file}.lock`;
+for (let i = 0; ; i++) {
+  try {
+    mkdirSync(lock);
+    break;
+  } catch {
+    try {
+      if (Date.now() - statSync(lock).mtimeMs > 5000) rmSync(lock, { recursive: true, force: true }); // a killed holder
+    } catch {}
+    Bun.sleepSync(2);
+  }
+}
+const save = (s: FakeState) => {
+  writeFileSync(`${file}.${process.pid}.tmp`, JSON.stringify(s));
+  renameSync(`${file}.${process.pid}.tmp`, file);
+  rmSync(lock, { recursive: true, force: true });
+};
 const state: FakeState = existsSync(file)
   ? { next: 0, tabs: [], panes: [], calls: [], envs: [], ...JSON.parse(readFileSync(file, "utf8")) }
   : { next: 0, tabs: [], panes: [], calls: [], envs: [] };
@@ -31,13 +50,13 @@ state.calls.push(args);
 state.envs.push(process.env.HERDR_SOCKET_PATH ?? null);
 
 function ok(result: unknown): never {
-  writeFileSync(file!, JSON.stringify(state));
+  save(state);
   console.log(JSON.stringify({ id: "fake", result }));
   process.exit(0);
 }
 
 function fail(code: string, message: string): never {
-  writeFileSync(file!, JSON.stringify(state));
+  save(state);
   console.error(JSON.stringify({ error: { code, message } }));
   process.exit(1);
 }
@@ -45,7 +64,7 @@ function fail(code: string, message: string): never {
 const [group, sub, target] = args;
 
 if (state.hang?.includes(`${group} ${sub}`)) {
-  writeFileSync(file, JSON.stringify(state));
+  save(state);
   await Bun.sleep(1e9);
 }
 if (state.fail?.includes(`${group} ${sub}`)) {

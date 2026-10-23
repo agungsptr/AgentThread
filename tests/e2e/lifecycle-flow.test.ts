@@ -79,8 +79,7 @@ test("rotation on precompact, then recovery by replacement", async () => {
   expect(readFileSync(join(root, ".agentthread/threads/001-login/sub.thread.md"), "utf8")).toContain("Goal status written by the coordinator");
 
   // the agent in c2's pane disappears → agt start replaces it with a fresh coordinator in a new split (never --resume)
-  const s = fake.read();
-  writeFileSync(fake.file, JSON.stringify({ ...s, agentPanes: (s.agentPanes ?? []).filter((p) => p !== c2.pane) }));
+  fake.update((s) => ({ agentPanes: (s.agentPanes ?? []).filter((p) => p !== c2.pane) }));
   const before = fake.read().calls.length;
   agt(["start", "--no-manager"]);
   const started = await waitFor(() => {

@@ -36,29 +36,10 @@ const worker = () => fm().sessions.find((s) => s.role === "worker" && s.ticket =
 const coordEnv = { AGT_ROLE: "coordinator", AGT_THREAD: "001" };
 const prompts = (pane?: string) =>
   readState().calls.filter((x) => x[0] === "agent" && x[1] === "prompt" && (!pane || x[2] === pane)).map((x) => x[3] ?? "");
-// The fake herdr rewrites the whole state file on every call (the poller calls it every 100ms), so a read can
-// catch a half-written file and a write can be lost. Read with retry; write until the change sticks.
-type State = ReturnType<typeof fake.read>;
-const readState = (): State => {
-  for (let i = 0; i < 50; i++) {
-    try {
-      return fake.read();
-    } catch {
-      Bun.sleepSync(10);
-    }
-  }
-  return fake.read();
-};
-const patch = async (change: (s: State) => Partial<State>, stuck: (s: State) => boolean) => {
-  for (let i = 0; i < 20; i++) {
-    writeFileSync(fake.file, JSON.stringify({ ...readState(), ...change(readState()) }));
-    await Bun.sleep(250);
-    if (stuck(readState())) return;
-  }
-  throw new Error("fake herdr state edit did not stick");
-};
-const setStatus = (pane: string, st: string) => patch((s) => ({ status: { ...s.status, [pane]: st } }), (s) => s.status?.[pane] === st);
-const dropPane = (pane: string) => patch((s) => ({ agentPanes: (s.agentPanes ?? []).filter((p) => p !== pane) }), (s) => !(s.agentPanes ?? []).includes(pane));
+// The fake herdr and fake.update share a lock and write atomically, so edits are never lost and reads never torn.
+const readState = () => fake.read();
+const setStatus = async (pane: string, st: string) => fake.update((s) => ({ status: { ...s.status, [pane]: st } }));
+const dropPane = async (pane: string) => fake.update((s) => ({ agentPanes: (s.agentPanes ?? []).filter((p) => p !== pane) }));
 const git = (cwd: string, ...a: string[]) => {
   const r = Bun.spawnSync(["git", ...a], { cwd, stdout: "pipe", stderr: "pipe" });
   if (r.exitCode !== 0) throw new Error(`git ${a.join(" ")}: ${r.stderr.toString()}`);

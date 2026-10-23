@@ -29,7 +29,7 @@ const events = async () => {
   return r.ok ? (r.result as StoredEvent[]) : [];
 };
 const count = async (type: string) => (await events()).filter((e) => e.type === type).length;
-const patch = (f: (s: ReturnType<typeof fake.read>) => object) => writeFileSync(fake.file, JSON.stringify({ ...fake.read(), ...f(fake.read()) }));
+const patch = (f: (s: ReturnType<typeof fake.read>) => object) => fake.update(f);
 
 async function boot() {
   root = tempRepo();

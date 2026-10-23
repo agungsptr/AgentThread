@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Actor, EventBody, StoredEvent } from "../src/domain/types.ts";
@@ -89,9 +89,38 @@ export interface FakeHerdrState {
   kinds?: Record<string, string>;
 }
 
-/** A state file for tests/fixtures/fake-herdr.ts; pass `file` as FAKE_HERDR_STATE. */
-export function fakeHerdrState(seed: Partial<FakeHerdrState> = {}): { file: string; read(): FakeHerdrState } {
+/**
+ * A state file for tests/fixtures/fake-herdr.ts; pass `file` as FAKE_HERDR_STATE. `update` changes it under the same
+ * lock the fake takes, so a concurrent fake call (the daemon polls it) never overwrites the change.
+ */
+export function fakeHerdrState(seed: Partial<FakeHerdrState> = {}): {
+  file: string;
+  read(): FakeHerdrState;
+  update(change: (s: FakeHerdrState) => Partial<FakeHerdrState>): void;
+} {
   const file = join(realpathSync(mkdtempSync(join(tmpdir(), "agt-herdr-"))), "herdr.json");
   writeFileSync(file, JSON.stringify({ next: 0, tabs: [], panes: [], calls: [], envs: [], ...seed }));
-  return { file, read: () => JSON.parse(readFileSync(file, "utf8")) as FakeHerdrState };
+  const read = () => JSON.parse(readFileSync(file, "utf8")) as FakeHerdrState;
+  const update = (change: (s: FakeHerdrState) => Partial<FakeHerdrState>) => {
+    const lock = `${file}.lock`;
+    for (;;) {
+      try {
+        mkdirSync(lock);
+        break;
+      } catch {
+        try {
+          if (Date.now() - statSync(lock).mtimeMs > 5000) rmSync(lock, { recursive: true, force: true });
+        } catch {}
+        Bun.sleepSync(2);
+      }
+    }
+    try {
+      const s = read();
+      writeFileSync(`${file}.test.tmp`, JSON.stringify({ ...s, ...change(s) }));
+      renameSync(`${file}.test.tmp`, file);
+    } finally {
+      rmSync(lock, { recursive: true, force: true });
+    }
+  };
+  return { file, read, update };
 }

@@ -105,8 +105,7 @@ test("reconcile reopens only tabs that were closed by hand", async () => {
   await register();
   await cmd({ cmd: "thread.new", title: "A", type: "bug" });
   await cmd({ cmd: "thread.new", title: "B", type: "bug" });
-  const state = fake.read();
-  writeFileSync(fake.file, JSON.stringify({ ...state, tabs: state.tabs.filter((t) => t !== "w1:t2") }));
+  fake.update((s) => ({ tabs: s.tabs.filter((t) => t !== "w1:t2") }));
   await cmd({ cmd: "layout.reconcile" });
   expect(fake.read().tabs.sort()).toEqual(["w1:t1", "w1:t3"]);
   expect(fake.read().calls.filter((c) => c[1] === "create")).toHaveLength(3);
@@ -124,7 +123,7 @@ test("an invalid config stops the daemon from starting", async () => {
 test("a herdr error other than not-found neither closes nor records the close", async () => {
   await register();
   await cmd({ cmd: "thread.new", title: "X", type: "bug" });
-  writeFileSync(fake.file, JSON.stringify({ ...fake.read(), fail: ["tab get"] }));
+  fake.update(() => ({ fail: ["tab get"] }));
   for (const status of ["in_progress", "review", "done"]) expect(await cmd({ cmd: "thread.status", thread: "001", status })).toMatchObject({ ok: true });
   expect(fake.read().tabs).toContain("w1:t1");
   expect(frontmatter("001-x")).toMatchObject({ status: "done", tab: "w1:t1" });
@@ -135,7 +134,7 @@ test("a herdr error other than not-found neither closes nor records the close", 
 test("reconcile does not create a duplicate tab while herdr errors", async () => {
   await register();
   await cmd({ cmd: "thread.new", title: "X", type: "bug" });
-  writeFileSync(fake.file, JSON.stringify({ ...fake.read(), fail: ["tab get"] }));
+  fake.update(() => ({ fail: ["tab get"] }));
   await cmd({ cmd: "layout.reconcile" });
   expect(fake.read().calls.filter((c) => c[1] === "create")).toHaveLength(1);
 });

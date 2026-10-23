@@ -113,8 +113,7 @@ test("the daemon's herdr calls carry HERDR_SOCKET_PATH", () => {
 
 test("rebuilds a stale layout after Herdr restarted with a new main tab", () => {
   agt(["start", "--no-manager"]);
-  const stale = fake.read();
-  writeFileSync(fake.file, JSON.stringify({ ...stale, tabs: ["w1:t9"], panes: ["w1:p9"], calls: [] }));
+  fake.update(() => ({ tabs: ["w1:t9"], panes: ["w1:p9"], calls: [] }));
   const r = agt(["start", "--no-manager"], { HERDR_TAB_ID: "w1:t9", HERDR_PANE_ID: "w1:p9" });
   expect(r.code).toBe(0);
   const calls = fake.read().calls;

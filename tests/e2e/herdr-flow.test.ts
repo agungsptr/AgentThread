@@ -60,8 +60,7 @@ test("start → tabs per thread → manual close recovered → done closes tab",
   expect(tabOf("002-fix-session-race")).toBe("w1:t3");
 
   // The user closes 002's tab by hand; the next start reopens exactly that one.
-  const s = fake.read();
-  writeFileSync(fake.file, JSON.stringify({ ...s, tabs: s.tabs.filter((t) => t !== "w1:t3") }));
+  fake.update((s) => ({ tabs: s.tabs.filter((t) => t !== "w1:t3") }));
   expect(agt(["start", "--no-manager"]).split("\n")).toEqual([
     "layout already set up (main tab w1:t0)",
     "subthread tabs reconciled (2 open threads)",

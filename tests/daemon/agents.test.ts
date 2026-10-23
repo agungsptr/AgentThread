@@ -69,8 +69,7 @@ test("worker capacity: queue, finish, next worker spawns; coordinator gets notif
   const w1 = (await sessionOf("worker", "T1"))!.session;
   expect(jobs.at(-1)).toMatchObject({ name: expect.stringMatching(/-w001-t1-[0-9a-f]{4}$/), split: { pane: "w1:p1", direction: "right", env: expect.objectContaining({ AGT_SESSION: w1, AGT_TICKET: "T1" }) } });
   // attach the worker pane in the fake so pane.close can find it
-  const s = fake.read();
-  writeFileSync(fake.file, JSON.stringify({ ...s, panes: [...s.panes, "w1:p7"] }));
+  fake.update((s) => ({ panes: [...s.panes, "w1:p7"] }));
   await cmd({ cmd: "session.attached", session: w1, pane: "w1:p7" });
   const worker: Actor = { role: "worker", thread: "001", session: w1, ticket: "T1" };
   await cmd({ cmd: "ticket.claim", thread: "001", ticket: "T1" }, worker);
@@ -91,8 +90,7 @@ test("spawn failure: session failed, coordinator notified, slot freed", async ()
   await waitFor(async () => (await events()).some((e) => e.type === "session.attached"), 10_000);
   for (const t of ["A", "B"]) await cmd({ cmd: "ticket.add", thread: "001", title: t, scope: [t] }, coord);
   // make every later `agent start` fail in the fake
-  const s = fake.read();
-  writeFileSync(fake.file, JSON.stringify({ ...s, fail: ["agent start"] }));
+  fake.update(() => ({ fail: ["agent start"] }));
   await cmd({ cmd: "worker.spawn", thread: "001", ticket: "T1" }, coord);
   await cmd({ cmd: "worker.spawn", thread: "001", ticket: "T2" }, coord);
   await waitFor(async () => (await events()).filter((e) => e.type === "session.failed").length >= 2, 10_000);
@@ -111,8 +109,7 @@ test("a coordinator blocked at a startup dialog is attached and gets its bootstr
   const c = (await sessionOf("coordinator"))!.session;
   expect(all.find((e) => e.type === "notice.queued")?.payload).toEqual({ session: c, text: expect.stringMatching(/^You are the coordinator of thread 001\. /) });
   // the dialog is dismissed; SessionStart fires at the empty prompt and delivers the bootstrap
-  const s = fake.read();
-  writeFileSync(fake.file, JSON.stringify({ ...s, fail: [] }));
+  fake.update(() => ({ fail: [] }));
   await cmd({ cmd: "session.signal", session: c, signal: "started" });
   expect((await events()).at(-1)!.type).toBe("notice.delivered");
   expect(fake.read().calls.filter((x) => x[0] === "agent" && x[1] === "prompt" && x[2] === "w1:p1").map((x) => x[3]!.slice(0, 28))).toEqual(["You are the coordinator of t"]);
