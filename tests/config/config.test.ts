@@ -80,7 +80,16 @@ test("wrong types and ranges are rejected with their path", () => {
   const { root, env } = setup({ project: "session:\n  rotation:\n    context_threshold: 7\n" });
   expect(() => loadConfig(root, env)).toThrow(/session\.rotation\.context_threshold/);
   const bad = setup({ user: "session:\n  handoff:\n    timeout: soon\n" });
-  expect(() => loadConfig(bad.root, bad.env)).toThrow(/session\.handoff\.timeout: duration must look like 30s, 5m, 24h or 2d/);
+  expect(() => loadConfig(bad.root, bad.env)).toThrow(/session\.handoff\.timeout: duration must look like 500ms, 30s, 5m, 24h or 2d/);
+});
+
+test("herdr.poll_interval must be at least 100ms", () => {
+  const fast = setup({ project: "herdr:\n  poll_interval: 50ms\n" });
+  expect(() => loadConfig(fast.root, fast.env)).toThrow(/herdr\.poll_interval: must be at least 100ms/);
+  const soon = setup({ project: "herdr:\n  poll_interval: soon\n" });
+  expect(() => loadConfig(soon.root, soon.env)).toThrow(/herdr\.poll_interval: duration must look like 500ms/);
+  const ok = setup({ project: "herdr:\n  poll_interval: 100ms\n" });
+  expect(loadConfig(ok.root, ok.env).herdr.poll_interval).toBe("100ms");
 });
 
 test("non-mapping and unparseable files are rejected", () => {

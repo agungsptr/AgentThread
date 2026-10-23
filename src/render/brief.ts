@@ -122,7 +122,7 @@ function build(t: Thread, trail: GitTrail | undefined, lim: Limits): string {
     "",
     "1. Read AGENTS.md in your working directory for your role's rules.",
     "2. Check the board and progress above; continue from the latest progress.",
-    '3. Record progress with agt progress <id> "<…>", findings with agt note, doubts with agt question.',
+    `3. Record progress with agt progress ${t.id} "<…>", findings with agt note ${t.id}, doubts with agt question ${t.id}.`,
     "",
   ].join("\n");
 }

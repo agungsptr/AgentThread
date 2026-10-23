@@ -7,7 +7,10 @@ import { AGENT_KINDS } from "../domain/types.ts";
 
 type Env = Record<string, string | undefined>;
 
-const duration = z.string().regex(/^\d+(ms|[smhd])$/, "duration must look like 30s, 5m, 24h or 2d");
+const DURATION = /^\d+(ms|[smhd])$/;
+const duration = z.string().regex(DURATION, "duration must look like 500ms, 30s, 5m, 24h or 2d");
+/** A duration of at least `min` (written the same way, e.g. "100ms"). */
+const durationAtLeast = (min: string) => duration.refine((d) => !DURATION.test(d) || durationMs(d) >= durationMs(min), `must be at least ${min}`);
 const agent = z.enum(AGENT_KINDS);
 export const PERMISSION_MODES = ["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"] as const;
 
@@ -64,7 +67,7 @@ export const ConfigSchema = z
         main_tab_label: z.string().trim().min(1).default("main"),
         close_tab_on_done: z.boolean().default(true),
         close_worker_pane_on_end: z.boolean().default(true),
-        poll_interval: duration.default("2s"),
+        poll_interval: durationAtLeast("100ms").default("2s"),
       })
       .strict()
       .default({}),

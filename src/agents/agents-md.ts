@@ -98,6 +98,20 @@ function projectContent(c: Ctx, wt: string, file: string): string {
   return t && (t.mode === "100644" || t.mode === "100755") ? t.content : "";
 }
 
+/**
+ * What the project itself says, from HEAD: AGENTS.md, else CLAUDE.md. When both are tracked and CLAUDE.md is a regular
+ * file with other content, the worktree's CLAUDE.md becomes our symlink, so its content is kept under a heading.
+ */
+function projectInstructions(c: Ctx, wt: string): string {
+  const agents = projectContent(c, wt, "AGENTS.md");
+  const claude = projectContent(c, wt, "CLAUDE.md");
+  if (!agents) return claude;
+  const claudeMode = headEntry(c, wt, "CLAUDE.md")?.mode;
+  const regular = claudeMode === "100644" || claudeMode === "100755";
+  if (!claude || !regular || claude.trim() === agents.trim()) return agents;
+  return `${agents}\n\n# From the project's CLAUDE.md\n\n${claude}`;
+}
+
 function removeIfPresent(p: string): void {
   try {
     lstatSync(p);
@@ -193,7 +207,7 @@ export function writeAgentsFiles(o: {
   const wt = o.worktree;
   const c: Ctx = { env: o.env ?? (process.env as Env), run: o.runner ?? spawnRunner };
   excludeInWorktree(c, o.root, wt, o.log ?? ((m) => console.error(m)));
-  const project = projectContent(c, wt, "AGENTS.md") || projectContent(c, wt, "CLAUDE.md");
+  const project = projectInstructions(c, wt);
   const agents = join(wt, "AGENTS.md");
   let regular = false;
   try {

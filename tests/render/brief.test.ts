@@ -44,7 +44,8 @@ test("brief has the sections in order", () => {
   expect(md).toContain("- abc1234 add a");
   expect(md).toContain("Uncommitted: 1 file changed");
   expect(md).toContain("Untracked files: 2");
-  expect(md).toContain('3. Record progress with agt progress <id> "<…>", findings with agt note, doubts with agt question.');
+  expect(md).toContain('3. Record progress with agt progress 001 "<…>", findings with agt note 001, doubts with agt question 001.');
+  expect(md).not.toContain("<id>");
 });
 
 test("brief fallbacks", () => {

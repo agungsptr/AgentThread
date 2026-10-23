@@ -112,8 +112,25 @@ describe("writeAgentsFiles", () => {
     expect(lstatSync(join(root, "CLAUDE.md")).isSymbolicLink()).toBe(false);
   });
 
-  test("project tracking both: AGENTS.md content wins, both skip-worktree", () => {
+  test("project tracking both with different content: AGENTS.md, then CLAUDE.md under a heading; both skip-worktree", () => {
     const { root, wt } = repoWith({ "AGENTS.md": "A\n", "CLAUDE.md": "C\n" });
+    write({ root, worktree: wt, content: SECTION });
+    expect(readFileSync(join(wt, "AGENTS.md"), "utf8")).toBe(`A\n\n\n# From the project's CLAUDE.md\n\nC\n\n\n${SECTION}`);
+    expectSymlink(wt);
+    expect(status(wt)).toBe("");
+    // running again reads HEAD, not the rewritten file: nothing doubles up
+    write({ root, worktree: wt, content: SECTION });
+    expect(readFileSync(join(wt, "AGENTS.md"), "utf8")).toBe(`A\n\n\n# From the project's CLAUDE.md\n\nC\n\n\n${SECTION}`);
+  });
+
+  test("project tracking both with the same content: it is included once", () => {
+    const { root, wt } = repoWith({ "AGENTS.md": "Same\n", "CLAUDE.md": "Same\n" });
+    write({ root, worktree: wt, content: SECTION });
+    expect(readFileSync(join(wt, "AGENTS.md"), "utf8")).toBe(`Same\n\n\n${SECTION}`);
+  });
+
+  test("project tracking AGENTS.md and a CLAUDE.md symlink to it: included once", () => {
+    const { root, wt } = repoWith({ "AGENTS.md": "A\n" }, { "CLAUDE.md": "AGENTS.md" });
     write({ root, worktree: wt, content: SECTION });
     expect(readFileSync(join(wt, "AGENTS.md"), "utf8")).toBe(`A\n\n\n${SECTION}`);
     expectSymlink(wt);
@@ -290,7 +307,7 @@ describe("writeAgentsFiles: symlinks, excludes, git operations", () => {
     git(wt, "reset", "-q", "--hard");
     expect(status(wt)).toBe("");
     expect(git(wt, "ls-files", "-v", "AGENTS.md", "CLAUDE.md")).toBe("S AGENTS.md\nS CLAUDE.md\n");
-    expect(readFileSync(join(wt, "AGENTS.md"), "utf8")).toBe(`P\n\n\n${SECTION}`);
+    expect(readFileSync(join(wt, "AGENTS.md"), "utf8")).toBe(`P\n\n\n# From the project's CLAUDE.md\n\nC\n\n\n${SECTION}`);
     expectSymlink(wt);
   });
 });
