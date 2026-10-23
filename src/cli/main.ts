@@ -29,10 +29,13 @@ const USAGE = `usage: agt <command>
   thread status <id> <status> [--reason <text>]
   ticket add <thread> <title...> --scope <path> [--scope <path>]...
   ticket claim|reopen <thread>/<ticket>
-  ticket done <thread>/<ticket> [--summary <text>]
+  ticket done <thread>/<ticket> --summary <text>
   ticket block <thread>/<ticket> --reason <text>
   log <thread> <message...>
   decide <thread> <message...>
+  note <thread> <message...>
+  progress <thread> <message...>
+  question <thread> <message...>
   handoff <thread> (--file <path> | --stdin)
   worker spawn <thread> --ticket <T>
   tell <thread|main> <message...>
@@ -117,7 +120,10 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
     case "ticket":
       return ticket(sub, rest, findRoot(cwd, env), env);
     case "log":
-    case "decide": {
+    case "decide":
+    case "note":
+    case "progress":
+    case "question": {
       const [threadId, ...words] = argv.slice(1);
       if (!threadId || !words.length) throw new UsageError(`${group} needs <thread> <message>`);
       return send(findRoot(cwd, env), env, { cmd: group, thread: threadId, message: words.join(" ") });
@@ -215,6 +221,7 @@ async function ticket(sub: string | undefined, args: string[], root: string, env
       return send(root, env, { cmd: `ticket.${sub}`, ...parseTicketRef(args[0]) });
     case "done": {
       const { values, positionals } = parse(args, { summary: { type: "string" } });
+      if (!values.summary) throw new UsageError("ticket done needs <thread>/<ticket> --summary <text>");
       return send(root, env, { cmd: "ticket.done", ...parseTicketRef(positionals[0]), summary: values.summary });
     }
     case "block": {

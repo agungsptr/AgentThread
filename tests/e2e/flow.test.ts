@@ -45,8 +45,8 @@ test("feature → dependent bugfix → review → done unblocks dependent", () =
   agt(["ticket", "add", "001", "Button", "--scope", "src/ui/login.tsx"], coord("001"));
   agt(["ticket", "claim", "001/T1"], worker("001", "w1"));
   agt(["ticket", "claim", "001/T2"], worker("001", "w2"));
-  agt(["ticket", "done", "001/T1"], worker("001", "w1"));
-  agt(["ticket", "done", "001/T2"], worker("001", "w2"));
+  agt(["ticket", "done", "001/T1", "--summary", "ok"], worker("001", "w1"));
+  agt(["ticket", "done", "001/T2", "--summary", "ok"], worker("001", "w2"));
   agt(["decide", "001", "use PKCE"], coord("001"));
 
   const handoff = join(root, "h.md");

@@ -87,7 +87,7 @@ describe("tickets", () => {
       "worker commands require AGT_SESSION",
     );
     exec(s, { cmd: "ticket.claim", thread: "001", ticket: "T1" }, worker("w1"));
-    expect(errorOf(run(s, { cmd: "ticket.done", thread: "001", ticket: "T1" }, sessionless))).toBe(
+    expect(errorOf(run(s, { cmd: "ticket.done", thread: "001", ticket: "T1", summary: "ok" }, sessionless))).toBe(
       "worker commands require AGT_SESSION",
     );
   });
@@ -116,15 +116,15 @@ describe("tickets", () => {
   test("only the assignee can complete a ticket", () => {
     const s = withTickets();
     exec(s, { cmd: "ticket.claim", thread: "001", ticket: "T1" }, worker("w1"));
-    expect(errorOf(run(s, { cmd: "ticket.done", thread: "001", ticket: "T1" }, worker("w2")))).toBe(
+    expect(errorOf(run(s, { cmd: "ticket.done", thread: "001", ticket: "T1", summary: "ok" }, worker("w2")))).toBe(
       "ticket T1 is assigned to w1",
     );
-    expect(errorOf(exec(s, { cmd: "ticket.done", thread: "001", ticket: "T1" }, worker("w1")))).toBe("accepted");
+    expect(errorOf(exec(s, { cmd: "ticket.done", thread: "001", ticket: "T1", summary: "ok" }, worker("w1")))).toBe("accepted");
   });
 
   test("illegal ticket transition is rejected", () => {
     const s = withTickets();
-    expect(errorOf(run(s, { cmd: "ticket.done", thread: "001", ticket: "T1" }, worker("w1")))).toBe(
+    expect(errorOf(run(s, { cmd: "ticket.done", thread: "001", ticket: "T1", summary: "ok" }, worker("w1")))).toBe(
       "ticket T1 cannot go open → done",
     );
   });

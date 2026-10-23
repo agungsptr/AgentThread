@@ -54,6 +54,9 @@ const ALLOWED: Record<CommandName, readonly Role[]> = {
   "ticket.reopen": ["coordinator"],
   log: ROLES,
   decide: ["coordinator"],
+  note: ROLES,
+  progress: ROLES,
+  question: ROLES,
   handoff: ["main", "coordinator", "worker"],
   "layout.register": ["user"],
   "layout.reconcile": ["user"],
@@ -213,6 +216,12 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
       return { events: [{ type: "log.appended", thread: t.id, payload: { message: cmd.message } }] };
     case "decide":
       return { events: [{ type: "decision.recorded", thread: t.id, payload: { message: cmd.message } }] };
+    case "note":
+      return { events: [{ type: "note.recorded", thread: t.id, payload: { message: cmd.message } }] };
+    case "progress":
+      return { events: [{ type: "progress.recorded", thread: t.id, payload: { message: cmd.message } }] };
+    case "question":
+      return { events: [{ type: "question.recorded", thread: t.id, payload: { message: cmd.message } }] };
     case "handoff": {
       const v = validateHandoff(cmd.content);
       if (!v.ok) reject(`handoff missing sections: ${v.missing.join(", ")}`);

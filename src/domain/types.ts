@@ -63,6 +63,7 @@ export type EventBody =
   | { type: "ticket.reopened"; thread: string; payload: { ticket: string } }
   | { type: "log.appended"; thread: string; payload: { message: string } }
   | { type: "decision.recorded"; thread: string; payload: { message: string } }
+  | { type: "note.recorded" | "progress.recorded" | "question.recorded"; thread: string; payload: { message: string } }
   | { type: "handoff.submitted"; thread: string; payload: { content: string; generated: boolean } }
   | {
       type: "session.created";

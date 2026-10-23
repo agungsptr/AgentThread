@@ -20,6 +20,10 @@ export interface Session {
   retirePane?: string;
   /** When the last resume of this session started (old logs only: sessions are no longer resumed). */
   resumingAt?: string;
+  /** When the agent last recorded progress (set by progress.recorded). */
+  lastProgressAt?: string;
+  /** Turns finished since the last recorded progress. */
+  turnsSinceProgress?: number;
 }
 
 export function isLive(s: Session): boolean {
@@ -61,6 +65,9 @@ export interface Thread {
   workerQueue: string[];
   tickets: Ticket[];
   decisions: Entry[];
+  findings: Entry[];
+  questions: Entry[];
+  progress?: { message: string; ts: string; actor: Actor };
   log: Entry[];
   handoff?: { content: string; generated: boolean; ts: string };
 }
@@ -115,6 +122,8 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       workerQueue: [],
       tickets: [],
       decisions: [],
+      findings: [],
+      questions: [],
       log: [],
     };
     state.threads.set(ev.thread, thread);
@@ -199,6 +208,29 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       t.decisions.push({ ts: ev.ts, actor: ev.actor, message: ev.payload.message });
       note(t, ev, `decision: ${ev.payload.message}`);
       break;
+    case "note.recorded":
+      t.findings.push({ ts: ev.ts, actor: ev.actor, message: ev.payload.message });
+      note(t, ev, `note: ${ev.payload.message}`);
+      break;
+    case "question.recorded":
+      t.questions.push({ ts: ev.ts, actor: ev.actor, message: ev.payload.message });
+      note(t, ev, `question: ${ev.payload.message}`);
+      break;
+    case "progress.recorded": {
+      t.progress = { message: ev.payload.message, ts: ev.ts, actor: ev.actor };
+      note(t, ev, `progress: ${ev.payload.message}`);
+      const sid =
+        ev.actor.session ??
+        (ev.actor.role === "coordinator"
+          ? [...state.sessions.values()].find((s) => s.thread === t.id && s.role === "coordinator" && isLive(s))?.id
+          : undefined);
+      const s = sid ? state.sessions.get(sid) : undefined;
+      if (s) {
+        s.lastProgressAt = ev.ts;
+        s.turnsSinceProgress = 0;
+      }
+      break;
+    }
     case "handoff.submitted":
       t.handoff = { content: ev.payload.content, generated: ev.payload.generated, ts: ev.ts };
       note(t, ev, `handoff submitted${ev.payload.generated ? " (generated)" : ""}`);

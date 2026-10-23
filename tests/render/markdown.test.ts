@@ -35,7 +35,7 @@ test("sub thread has parseable frontmatter and fixed sections", () => {
 test("handoff headings are demoted so they cannot break sub.thread.md sections", () => {
   const md = renderSub(state().threads.get("001")!);
   expect(md).toContain("### Goal status");
-  expect(md.match(/^## /gm)).toHaveLength(4);
+  expect(md.match(/^## /gm)).toHaveLength(7);
 });
 
 test("board escapes newlines and pipes in cells", () => {
@@ -57,20 +57,20 @@ test("top-level handoff headings are clamped below the section level", () => {
   );
   const md = renderSub(s.threads.get("001")!);
   expect(md).toContain("### Summary");
-  expect(md.match(/^## /gm)).toHaveLength(4);
+  expect(md.match(/^## /gm)).toHaveLength(7);
 });
 
 test("goal headings are clamped so they cannot inject sections", () => {
   const s = stateOf(INIT, threadCreated("001", { goal: "Do it\n## Injected" }));
   const md = renderSub(s.threads.get("001")!);
   expect(md).toContain("### Injected");
-  expect(md.match(/^## /gm)).toHaveLength(4);
+  expect(md.match(/^## /gm)).toHaveLength(7);
 });
 
 test("CommonMark h1/h2 forms (indented, tab, bare) are clamped", () => {
   const s = stateOf(INIT, threadCreated("001", { goal: "Do it\n   ## Indented\n##\ttab\n##" }));
   const md = renderSub(s.threads.get("001")!);
-  expect(md.match(/^## /gm)).toHaveLength(4);
+  expect(md.match(/^## /gm)).toHaveLength(7);
   expect(md).toContain("### Indented");
   expect(md).toContain("###\ttab");
   expect(md).toMatch(/^###$/m);
@@ -80,7 +80,7 @@ test("an unclosed code fence in the goal cannot swallow later sections", () => {
   const s = stateOf(INIT, threadCreated("001", { goal: "Do it\n```js\ncode" }));
   const md = renderSub(s.threads.get("001")!);
   expect(md.split("\n").filter((l) => /^```/.test(l)).length % 2).toBe(0);
-  expect(md.match(/^## /gm)).toHaveLength(4);
+  expect(md.match(/^## /gm)).toHaveLength(7);
   expect(md.indexOf("```", md.indexOf("code"))).toBeLessThan(md.indexOf("## Acceptance criteria"));
 });
 
