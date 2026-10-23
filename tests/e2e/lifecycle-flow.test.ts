@@ -33,7 +33,7 @@ const sessions = () =>
 const liveCoordinator = () => sessions().find((s) => s.role === "coordinator" && s.pane && !["rotated", "lost", "ended", "failed"].includes(s.status));
 /** `agtSession`: the AGT_SESSION a split-born (replacement) coordinator's pane carries; a tab's root pane has none. */
 const hook = (signal: string, id: string, agtSession?: string) =>
-  agt(["event", signal], { AGT_ROLE: "coordinator", AGT_THREAD: "001", ...(agtSession ? { AGT_SESSION: agtSession } : {}) }, JSON.stringify({ session_id: id }));
+  agt(["event", signal], { AGT_ROLE: "coordinator", AGT_THREAD: "001", AGT_SESSION: agtSession ?? id }, JSON.stringify({ session_id: "vendor-id" }));
 const DEAD = ["rotated", "lost", "ended", "failed"];
 const HANDOFF = ["Goal status", "Work done", "Decisions", "Next steps", "Risks"].map((s) => `## ${s}\n${s} written by the coordinator`).join("\n");
 

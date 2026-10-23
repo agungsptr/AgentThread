@@ -238,6 +238,13 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         if (c?.rotation && (ev.actor.role === "coordinator" || ev.payload.generated)) rotate(c, c.rotation.reason);
         break;
       }
+      case "agent.blocked": {
+        const s = state.sessions.get(ev.payload.session);
+        if (s && isLive(s) && s.role !== "main") {
+          notify(liveSessions(state, undefined, "main")[0], `${s.role} for thread ${s.thread} is waiting for approval in pane ${s.pane ?? "unknown"}.`);
+        }
+        break;
+      }
       case "agent.idle": {
         const s = state.sessions.get(ev.payload.session);
         const ticketStatus = s?.thread ? state.threads.get(s.thread)?.tickets.find((k) => k.id === s.ticket)?.status : undefined;

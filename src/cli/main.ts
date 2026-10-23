@@ -335,20 +335,21 @@ async function hookEvent(signal: string | undefined, env: Env, cwd: string): Pro
     if (!signal || !(SESSION_SIGNALS as readonly string[]).includes(signal)) throw new Error(`unknown signal '${signal ?? ""}'`);
     // A hook runner may leave stdin open; never wait on it for long.
     const input = process.stdin.isTTY ? "" : ((await Promise.race([Bun.stdin.text(), Bun.sleep(1_500).then(() => "")])) as string).trim();
-    let session = env.AGT_SESSION;
+    const session = env.AGT_SESSION;
     let transcript: unknown;
     let source: unknown;
     if (input) {
-      const parsed = JSON.parse(input) as { session_id?: unknown; transcript_path?: unknown; source?: unknown };
-      if (typeof parsed.session_id === "string") session = parsed.session_id;
+      const parsed = JSON.parse(input) as { transcript_path?: unknown; source?: unknown };
       transcript = parsed.transcript_path;
       source = parsed.source;
     }
-    if (!session) throw new Error("no session id (hook stdin session_id or AGT_SESSION)");
+    // The vendor's own session_id is never ours; identify by AGT_SESSION, else by the Herdr pane.
+    const pane = env.HERDR_PANE_ID;
+    if (!session && !pane) throw new Error("no session (AGT_SESSION or HERDR_PANE_ID)");
     const contextTokens = signal === "idle" && typeof transcript === "string" ? contextTokensFromTranscript(transcript) : undefined;
     const command = {
       cmd: "session.signal",
-      session,
+      ...(session ? { session } : { pane }),
       signal,
       ...(contextTokens !== undefined ? { contextTokens } : {}),
       ...(signal === "started" && typeof source === "string" ? { source: source.slice(0, 32) } : {}),

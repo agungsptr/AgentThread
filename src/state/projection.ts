@@ -23,7 +23,11 @@ export interface Session {
   /** When the agent last recorded progress (set by progress.recorded). */
   lastProgressAt?: string;
   /** Turns finished since the last recorded progress. */
-  turnsSinceProgress?: number;
+  turnsSinceProgress: number;
+  /** Finished turns (real active to idle transitions). */
+  turns: number;
+  /** When the session was created (session.created ts). */
+  createdAt: string;
 }
 
 export function isLive(s: Session): boolean {
@@ -269,6 +273,9 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
         ...(p.ticket ? { ticket: p.ticket } : {}),
         status: "starting",
         notices: [],
+        turns: 0,
+        turnsSinceProgress: 0,
+        createdAt: ev.ts,
         ...(p.replaces ? { replaces: p.replaces } : {}),
         ...(p.retirePane ? { retirePane: p.retirePane } : {}),
       });
@@ -295,10 +302,19 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
     case "agent.idle": {
       const s = sessionOf(state, ev.seq, ev.payload.session);
       if (isLive(s)) {
+        if (s.status === "active") {
+          s.turns++;
+          s.turnsSinceProgress++;
+        }
         s.status = "idle";
         s.lastActiveAt = ev.ts;
         if (ev.payload.contextTokens !== undefined) s.contextTokens = ev.payload.contextTokens;
       }
+      return true;
+    }
+    case "agent.blocked": {
+      const s = sessionOf(state, ev.seq, ev.payload.session);
+      if (isLive(s)) threadNote(state, ev, `session ${short(s.id)} is waiting for approval`);
       return true;
     }
     case "session.rotation_requested": {

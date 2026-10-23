@@ -33,7 +33,7 @@ const spawned = (role: string, ticket?: string) => {
   const s = session(role, ticket);
   return s?.pane ? s : undefined;
 };
-const hook = (signal: string, id: string, env: Record<string, string> = {}) => agt(["event", signal], env, JSON.stringify({ session_id: id }));
+const hook = (signal: string, id: string, env: Record<string, string> = {}) => agt(["event", signal], { ...env, AGT_SESSION: id }, JSON.stringify({ session_id: "vendor-id" }));
 const coordEnv = { AGT_ROLE: "coordinator", AGT_THREAD: "001" };
 
 beforeAll(() => {

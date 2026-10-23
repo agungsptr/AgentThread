@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { parse } from "yaml";
 import { systemPrompt } from "../../src/agents/prompts.ts";
 import { initProject } from "../../src/project/init.ts";
-import { FAKE_CLAUDE, FAKE_HERDR, fakeHerdrState, isolatedConfigHome, tempRepo } from "../helpers.ts";
+import { FAKE_CLAUDE, FAKE_HERDR, fakeHerdrState, isolatedConfigHome, tempRepo, waitFor } from "../helpers.ts";
 
 const BIN = join(import.meta.dir, "../../bin/agt");
 let root: string;
@@ -139,21 +139,43 @@ test("agt event idle reports context tokens from the hook transcript", () => {
   const status = () => (fm().sessions.find((s) => s.id === c.id) as { status?: string }).status;
   const transcript = join(xdg, "t.jsonl");
   writeFileSync(transcript, `${JSON.stringify({ type: "assistant", message: { usage: { input_tokens: 5, cache_read_input_tokens: 50, cache_creation_input_tokens: 0 } } })}\n`);
-  expect(agt(["event", "idle"], { AGT_ROLE: "coordinator", AGT_THREAD: "001" }, JSON.stringify({ session_id: c.id, transcript_path: transcript })).code).toBe(0);
+  expect(agt(["event", "idle"], { AGT_ROLE: "coordinator", AGT_THREAD: "001", AGT_SESSION: c.id }, JSON.stringify({ session_id: "00000000-0000-4000-8000-000000000000", transcript_path: transcript })).code).toBe(0);
   expect(fm().sessions.find((s) => s.id === c.id)!.context_tokens).toBe(55);
   // a huge garbage transcript still exits 0 quickly
   writeFileSync(transcript, "y".repeat(5_000_000));
   const t0 = Date.now();
-  expect(agt(["event", "idle"], { AGT_ROLE: "coordinator", AGT_THREAD: "001" }, JSON.stringify({ session_id: c.id, transcript_path: transcript })).code).toBe(0);
+  expect(agt(["event", "idle"], { AGT_ROLE: "coordinator", AGT_THREAD: "001", AGT_SESSION: c.id }, JSON.stringify({ session_id: "00000000-0000-4000-8000-000000000000", transcript_path: transcript })).code).toBe(0);
   expect(Date.now() - t0).toBeLessThan(3000);
   expect(fm().sessions.find((s) => s.id === c.id)!.context_tokens).toBe(55);
   expect(status()).toBe("idle");
   // malformed usage must not drop the idle signal
-  const hook = (sig: string) => agt(["event", sig], { AGT_ROLE: "coordinator", AGT_THREAD: "001" }, JSON.stringify({ session_id: c.id, transcript_path: transcript }));
+  const hook = (sig: string) => agt(["event", sig], { AGT_ROLE: "coordinator", AGT_THREAD: "001", AGT_SESSION: c.id }, JSON.stringify({ session_id: "00000000-0000-4000-8000-000000000000", transcript_path: transcript }));
   expect(hook("active").code).toBe(0);
   expect(status()).toBe("active");
   writeFileSync(transcript, `${JSON.stringify({ type: "assistant", message: { usage: { input_tokens: 5, cache_read_input_tokens: "x" } } })}\n`);
   expect(hook("idle").code).toBe(0);
   expect(status()).toBe("idle");
   expect(fm().sessions.find((s) => s.id === c.id)!.context_tokens).toBe(55);
+});
+
+test("agt event identifies the session by AGT_SESSION or pane, never by the vendor session_id", async () => {
+  agt(["start", "--no-manager"]);
+  agt(["thread", "new", "X", "--type", "bug"]);
+  const fm = () => parse(readFileSync(join(root, ".agentthread/threads/001-x/sub.thread.md"), "utf8").split("---\n")[1]!) as { sessions: { id: string; role: string; pane?: string; status?: string; turns?: number }[] };
+  const c = await waitFor(() => fm().sessions.find((s) => s.role === "coordinator" && s.pane));
+  expect(c.pane).toBeTruthy();
+  const vendor = JSON.stringify({ session_id: "00000000-0000-4000-8000-000000000000" });
+  const env = (extra: Record<string, string>) => ({ AGT_ROLE: "coordinator", AGT_THREAD: "001", ...extra });
+  const status = () => fm().sessions.find((s) => s.id === c.id)!.status;
+  // by AGT_SESSION, with a different vendor session_id on stdin
+  expect(agt(["event", "active"], env({ AGT_SESSION: c.id }), vendor)).toMatchObject({ code: 0, err: "" });
+  expect(status()).toBe("active");
+  // by pane only
+  expect(agt(["event", "idle"], { HERDR_PANE_ID: c.pane! }, vendor)).toMatchObject({ code: 0, err: "" });
+  expect(status()).toBe("idle");
+  // an unknown pane reports on stderr and still exits 0
+  const bad = agt(["event", "active"], { HERDR_PANE_ID: "w9:p9" }, vendor);
+  expect(bad.code).toBe(0);
+  expect(bad.err).toContain("no live session in pane w9:p9");
+  expect(status()).toBe("idle");
 });

@@ -40,7 +40,7 @@ test("progress resets the checkpoint counters of the actor's session or live coo
   const viaSession = run({ role: "worker", thread: "001", session: "w1" });
   expect(viaSession.sessions.get("w1")!.turnsSinceProgress).toBe(0);
   expect(viaSession.sessions.get("w1")!.lastProgressAt).toBeDefined();
-  expect(viaSession.sessions.get("c1")!.turnsSinceProgress).toBeUndefined();
+  expect(viaSession.sessions.get("c1")!.turnsSinceProgress).toBe(0);
   const viaRole = run({ role: "coordinator", thread: "001" });
   expect(viaRole.sessions.get("c1")!.turnsSinceProgress).toBe(0);
 });

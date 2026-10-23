@@ -6,7 +6,7 @@ export type AgentKind = (typeof AGENT_KINDS)[number];
 
 export type SessionRole = "main" | "coordinator" | "worker";
 
-export const SESSION_SIGNALS = ["started", "active", "idle", "compacting", "ended"] as const;
+export const SESSION_SIGNALS = ["started", "active", "idle", "compacting", "ended", "blocked"] as const;
 export type SessionSignal = (typeof SESSION_SIGNALS)[number];
 
 export const THREAD_TYPES = ["feature", "bug", "chore"] as const;
@@ -64,6 +64,7 @@ export type EventBody =
   | { type: "log.appended"; thread: string; payload: { message: string } }
   | { type: "decision.recorded"; thread: string; payload: { message: string } }
   | { type: "note.recorded" | "progress.recorded" | "question.recorded"; thread: string; payload: { message: string } }
+  | { type: "agent.blocked"; thread?: string; payload: { session: string } }
   | { type: "handoff.submitted"; thread: string; payload: { content: string; generated: boolean } }
   | {
       type: "session.created";

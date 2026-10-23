@@ -24,7 +24,7 @@ test("session lifecycle and notices", () => {
     { type: "notice.delivered", thread: "001", payload: { session: S1, count: 1 } },
   );
   expect(s.sessions.get(S1)).toEqual({
-    id: S1, role: "coordinator", agent: "claude-code", name: "n-1111", thread: "001", pane: "w1:p2", status: "active", notices: ["b"], lastActiveAt: "2026-10-09T10:00:08.000Z",
+    id: S1, role: "coordinator", agent: "claude-code", name: "n-1111", thread: "001", pane: "w1:p2", status: "active", notices: ["b"], turns: 0, turnsSinceProgress: 0, createdAt: "2026-10-09T10:00:02.000Z", lastActiveAt: "2026-10-09T10:00:08.000Z",
   });
   expect(s.threads.get("001")!.maxWorkers).toBe(2);
 });

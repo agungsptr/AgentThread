@@ -74,6 +74,7 @@ const SIGNAL_EVENT = {
   idle: "agent.idle",
   compacting: "session.compacting",
   ended: "session.ended",
+  blocked: "agent.blocked",
 } as const;
 
 class Rejection extends Error {}
@@ -123,7 +124,10 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
     };
   }
   if (cmd.cmd === "session.signal") {
-    const s = state.sessions.get(cmd.session) ?? reject(`unknown session ${cmd.session}`);
+    if (!cmd.session && !cmd.pane) reject("session or pane is required");
+    const s = cmd.session
+      ? (state.sessions.get(cmd.session) ?? reject(`unknown session ${cmd.session}`))
+      : ([...state.sessions.values()].find((x) => isLive(x) && x.pane === cmd.pane) ?? reject(`no live session in pane ${cmd.pane}`));
     if (actor.session && actor.session !== s.id) reject(`actor session ${actor.session} cannot signal ${s.id}`);
     if (!isLive(s)) return { events: [] };
     const payload = {
