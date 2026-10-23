@@ -41,18 +41,53 @@ export const spawnAsync: AsyncRunner = async (bin, args, env, timeoutMs) => {
   } catch (e) {
     return { exitCode: 127, stdout: "", stderr: e instanceof Error ? e.message : String(e) };
   }
+  // Collected as it arrives: a grandchild that inherited the pipes can keep them open after the child is killed.
+  const out = collect(proc.stdout);
+  const err = collect(proc.stderr);
   let timedOut = false;
+  let killed!: () => void;
+  const afterKill = new Promise<void>((r) => (killed = r));
   const timer = setTimeout(() => {
     timedOut = true;
     proc.kill(9);
+    killed();
   }, timeoutMs);
   try {
-    const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
-    return { exitCode: code, stdout, stderr, timedOut };
+    const all = Promise.all([out.done, err.done, proc.exited]).then(() => {});
+    // After a kill, wait for the exit and a short grace for the pipes, never for a grandchild to close them.
+    await Promise.race([all, afterKill.then(() => Promise.race([all, proc.exited.then(() => Bun.sleep(KILL_GRACE_MS))]))]);
+    return { exitCode: proc.exitCode ?? (timedOut ? 137 : 1), stdout: out.text(), stderr: err.text(), timedOut };
   } finally {
     clearTimeout(timer);
+    if (timedOut) {
+      out.cancel();
+      err.cancel();
+    }
   }
 };
+
+const KILL_GRACE_MS = 200;
+
+function collect(stream: ReadableStream<Uint8Array>): { done: Promise<void>; text(): string; cancel(): void } {
+  const chunks: Uint8Array[] = [];
+  const reader = stream.getReader();
+  const done = (async () => {
+    try {
+      for (;;) {
+        const { done: end, value } = await reader.read();
+        if (end) return;
+        chunks.push(value);
+      }
+    } catch {
+      // cancelled after a timeout
+    }
+  })();
+  return {
+    done,
+    text: () => Buffer.concat(chunks).toString(),
+    cancel: () => void reader.cancel().catch(() => {}),
+  };
+}
 
 export class HerdrError extends Error {
   constructor(

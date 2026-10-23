@@ -323,3 +323,48 @@ test("a thread finishing ends its coordinator without replacing it", () => {
   expect(ended.length).toBeGreaterThan(0);
   expect(react(s, apply(s, ...ended), ctx()).events.filter((e) => e.type === "session.created")).toEqual([]);
 });
+
+test("an exiting coordinator is not replaced a 4th time within 10 minutes; main is told once; a reconcile loss still replaces", () => {
+  const at = (s: State, ts: string, ...bodies: EventBody[]): StoredEvent[] =>
+    bodies.map((b) => {
+      const ev = { ...b, seq: s.lastSeq + 1, ts, actor: USER } as StoredEvent;
+      applyEvent(s, ev);
+      return ev;
+    });
+  const ids = ["11111111-aaaa-4aaa-8aaa-000000000001", "11111111-aaaa-4aaa-8aaa-000000000002", "11111111-aaaa-4aaa-8aaa-000000000003"];
+  /** C, then three replacements; the first one created at `firstTs`. The last one is live in pane w1:p9. */
+  const setup = (firstTs: string) => {
+    const s = withMain(base());
+    let prev = C;
+    ids.forEach((id, i) => {
+      const ts = i === 0 ? firstTs : `2026-10-11T10:0${i}:00.000Z`;
+      at(
+        s,
+        ts,
+        { type: "session.ended", thread: "001", payload: { session: prev } },
+        { type: "session.created", thread: "001", payload: { session: id, role: "coordinator", agent: "claude-code", name: `r${i}`, replaces: prev } },
+        { type: "session.attached", thread: "001", payload: { session: id, pane: `w1:p${7 + i}` } },
+      );
+      prev = id;
+    });
+    return s;
+  };
+  const last = ids[2]!;
+  const KEEPS = "Coordinator for thread 001 keeps exiting (3 replacements in 10m); not replacing. Fix the cause, then run agt start.";
+
+  const s = setup("2026-10-11T10:00:00.000Z");
+  const evs = at(s, "2026-10-11T10:05:00.000Z", { type: "session.ended", thread: "001", payload: { session: last } }, { type: "session.ended", thread: "001", payload: { session: last } });
+  const r = react(s, evs, ctx());
+  expect(r.events).toEqual([{ type: "notice.queued", payload: { session: M, text: KEEPS } }]);
+  expect(r.effects).toEqual([]);
+
+  // the user's explicit retry: agt start reports the exited coordinator lost, and that still replaces it
+  const retry = react(s, at(s, "2026-10-11T10:06:00.000Z", { type: "session.lost", thread: "001", payload: { session: last, reason: "coordinator exited" } }), ctx());
+  expect(retry.events.filter((e) => e.type === "session.created")).toEqual([expect.objectContaining({ payload: expect.objectContaining({ replaces: last }) })]);
+
+  // replacements older than 10 minutes do not count
+  const old = setup("2026-10-11T09:50:00.000Z");
+  const ok = react(old, at(old, "2026-10-11T10:05:00.000Z", { type: "session.ended", thread: "001", payload: { session: last } }), ctx());
+  expect(ok.events.filter((e) => e.type === "session.created")).toHaveLength(1);
+  expect(ok.events.some((e) => e.type === "notice.queued" && e.payload.text === KEEPS)).toBe(false);
+});

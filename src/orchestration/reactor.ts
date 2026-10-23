@@ -9,6 +9,10 @@ import { liveSessions, rotateCoordinator, spawnCoordinator, spawnReplacement, sp
 const CHECKPOINT_NOTICE = (thread: string | undefined) =>
   `CHECKPOINT: record where you are with: agt progress ${thread ?? "<thread>"} "<what is done, what is next>"`;
 
+/** At most this many automatic coordinator replacements per thread within AUTO_REPLACE_WINDOW_MS. */
+const MAX_AUTO_REPLACEMENTS = 3;
+const AUTO_REPLACE_WINDOW_MS = 10 * 60_000;
+
 export interface ReactorContext {
   root: string;
   config: Config;
@@ -129,6 +133,15 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
     take(r);
     return true;
   };
+  /**
+   * Coordinator replacements (and rotations) of a thread in the 10 minutes up to `ts`, from session.created events
+   * with `replaces`: derived from the log, so the brake survives a daemon restart.
+   */
+  const recentReplacements = (thread: string, ts: string) =>
+    [...state.sessions.values()].filter(
+      (x) => x.thread === thread && x.role === "coordinator" && x.replaces && Date.parse(ts) - Date.parse(x.createdAt) <= AUTO_REPLACE_WINDOW_MS,
+    ).length;
+  const braked = new Set<string>();
   /** Threads whose coordinator is lost in this batch; it will be replaced, so tab_opened must not spawn a fresh one. */
   const coordinatorLostIn = new Set(
     events
@@ -199,7 +212,13 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         // The thread's acting coordinator exited (any source: polled status or a hook): a fresh one takes over, as for
         // a loss. One ended by a finished thread, or one that was rotated or lost first, is not replaced here.
         if (s?.role === "coordinator" && s.status === "ended" && t && t.status !== "done" && !coordinatorOf(t.id)) {
-          if (replaceCoordinator(s, t, "the previous coordinator session exited")) {
+          if (recentReplacements(t.id, ev.ts) >= MAX_AUTO_REPLACEMENTS) {
+            // A replacement that keeps exiting (bad auth, a crash) would respawn forever. Only `agt start` retries now.
+            if (!braked.has(t.id) && !rotatedTo.has(s.id) && t.rootPane) {
+              braked.add(t.id);
+              notify(liveSessions(state, undefined, "main")[0], `Coordinator for thread ${t.id} keeps exiting (${MAX_AUTO_REPLACEMENTS} replacements in 10m); not replacing. Fix the cause, then run agt start.`);
+            }
+          } else if (replaceCoordinator(s, t, "the previous coordinator session exited")) {
             notify(liveSessions(state, undefined, "main")[0], `Coordinator for thread ${t.id} exited; a fresh coordinator is starting from brief.md.`);
           }
         }

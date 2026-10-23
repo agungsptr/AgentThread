@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { HerdrCli, HerdrError, shellQuote, spawnRunner, type Runner } from "../../src/herdr/bridge.ts";
+import { HerdrCli, HerdrError, shellQuote, spawnAsync, spawnRunner, type Runner } from "../../src/herdr/bridge.ts";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { FAKE_HERDR, fakeHerdrState } from "../helpers.ts";
 
 function recording(reply: { exitCode?: number; stdout?: string; stderr?: string } = {}) {
@@ -94,6 +97,26 @@ describe("HerdrCli against the fake herdr executable", () => {
 });
 
 describe("herdr timeouts", () => {
+  test("spawnAsync: a grandchild holding stdout after the timeout kill does not keep it waiting", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "agt-bin-"));
+    const bin = join(dir, "holder");
+    // prints, then leaves a sleeping background child that inherited stdout, and hangs itself
+    writeFileSync(bin, `#!/bin/sh\necho started\nsleep 5 &\necho $! > ${join(dir, "pid")}\nsleep 5\n`);
+    chmodSync(bin, 0o755);
+    const t0 = Date.now();
+    // the timeout leaves room for the shell to start and print under a busy test runner
+    const r = await spawnAsync(bin, [], process.env, 1000);
+    try {
+      expect(Date.now() - t0).toBeLessThan(2_500); // not the grandchild's 5s
+      expect(r.timedOut).toBe(true);
+      expect(r.stdout).toContain("started");
+    } finally {
+      try {
+        process.kill(Number(readFileSync(join(dir, "pid"), "utf8").trim()), "SIGKILL");
+      } catch {}
+    }
+  });
+
   test("a hung herdr is killed and reported as a timeout", () => {
     const fake = fakeHerdrState({ hang: ["tab get"] });
     const h = new HerdrCli({ bin: FAKE_HERDR, env: { ...process.env, FAKE_HERDR_STATE: fake.file }, timeoutMs: 300 });
