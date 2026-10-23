@@ -453,3 +453,140 @@ This is a dev tool, not a product feature.
 - Defaults for N turns and M minutes in the progress reminder.
 - Which Plan 4 parts are removed (resume path, transcript lookup, `--resume`) and which stay (rotation, handoff, recovery via replacement, worker release).
 
+
+## 12. Revision 2026-10-24: Multi-agent adapters, role models, release e2e
+
+**Why.** The user splits models by role. Main and coordinator need strong reasoning (for example Claude Code with Opus 5.5, medium effort). Workers run a cheaper model (for example OpenCode with Gemini Flash 3.8, high effort). OpenCode is chosen for workers because switching models there is easy and the user routes API keys through myrouter; Claude Code would also work. A single vendor for every role must keep working. The aim is **autonomy without needless stops**. The coordinator must use the right tools by itself: read docs, run the stack and the tests, install dependencies in the worktree, and commit. The failure the user would be most disappointed by is a process that stops or blocks where it could have run smoothly.
+
+### 12.1 Goals
+1. **Adapters for four agents:** Claude Code (`claude`), OpenCode (`opencode`), Codex (`codex`) and omp / oh-my-pi (`omp`). Values in parentheses are Herdr `--kind` values; Herdr 0.9.3 supports 24 kinds. Any of the four can fill any role. More agents follow later through the same adapter pattern.
+2. **Role defaults per project.** Each role (main, coordinator, worker) has a default `{ agent, model, effort }`. Workers always use the worker default.
+3. **Complexity tiers for the coordinator.** The user defines a list of named tiers, each `{ agent, model, effort }`. For every new thread, main judges the complexity and proposes a tier with a reason. If the user does not answer within a timeout (default 10s), the proposal is used. Main may only pick from the configured tiers.
+4. **Interactive project setup.** `agt init`, or the first `agt start` in a project without a config, does the following:
+   - detects which of the four agent binaries are installed;
+   - asks for the three role defaults and the complexity tiers;
+   - writes them to `.agentthread/config.yaml`, where they can be edited by hand later.
+   - Setup is per project. There is no global config.
+5. **No permission stops.** Every role runs its agent in that agent's autonomous or auto-approve mode.
+   - Only main and the coordinator ever talk to the user, and only for decisions about the thread or feature, never for tool permission.
+   - Workers never wait for the user. They are the coordinator's responsibility, and they ask the coordinator with `agt question`.
+   - A blocked worker (a dialog, a stuck prompt) is reported to the **coordinator**. Today it is reported to main. The coordinator waits, replaces the worker, or escalates to the user.
+   - Safety comes from three things: each thread works in its own worktree; only the coordinator commits; and the `AGENTS.md` rules (no push, nothing outside the worktree, never commit `AGENTS.md`/`CLAUDE.md`).
+6. **Remove the `claude-code` hard-code** from the daemon (`server.ts`, which rejects non-Claude agents) and from the runner. `agt worker spawn --agent <kind>` stays available as an explicit override.
+7. **Release e2e** against real Herdr with real agents and real models. It is not part of `bun test`. It runs only when a release is final, and it must pass before the release. It checks **artifacts**, never LLM wording:
+   - events in the log,
+   - `brief.md`,
+   - `AGENTS.md` and the `CLAUDE.md` symlink present and uncommitted,
+   - commits on the thread branch,
+   - panes opened and closed as expected,
+   - tickets done.
+   A second purpose is to find gaps between `tests/fixtures/fake-herdr.ts` and real Herdr and fix the fake; each mismatch found becomes a fix to the fake plus a regression test in the fast suite.
+
+### 12.2 Non-goals
+- Choosing a model per ticket. Workers always use the worker default.
+- A global or user-level config.
+- Managing API keys or routers such as myrouter. These stay in each agent's own config.
+- Switching vendor in the middle of a thread for daily use. A replacement coordinator uses the same tier as the session it replaces. Cross-vendor continuation is only exercised by the memory eval (§11.5).
+- Agents beyond the four above.
+- Running the release e2e in the normal development loop.
+
+### 12.3 Anti-goals
+These would count as failure even if everything technically works:
+- An agent stops on a permission prompt during normal work.
+- A worker waits for the user.
+- Main invents a model that is not in the configured tiers.
+
+### 12.4 Config shape (builder may refine names)
+```yaml
+agents:
+  roles:
+    main:        { agent: claude-code, model: claude-opus-5-5, effort: medium }
+    coordinator: { agent: claude-code, model: claude-opus-5-5, effort: medium }   # used when no tier is chosen
+    worker:      { agent: opencode,    model: myrouter/gemini-flash, effort: high }
+  complexity:
+    timeout: 10s
+    tiers:
+      high:   { agent: claude-code, model: claude-opus-5-5,   effort: high }
+      medium: { agent: claude-code, model: claude-opus-5-5,   effort: medium }
+      low:    { agent: claude-code, model: claude-sonnet-5-5, effort: medium }
+  claude:   { config_dir: ... }   # per-vendor extras; existing keys keep working where sensible
+```
+- `model` and `effort` are optional. When they are absent, the agent's own default applies.
+- `effort` is passed in each agent's own form. Values a given agent does not support are rejected at config load with a clear message.
+- Existing configs (`main_manager`, `default_coordinator`, `default_worker`, `claude.model`, `claude.permission_mode`, `claude.extra_allowed_tools`) must still load. Map them onto the new shape, or migrate with a warning.
+
+### 12.5 Adapter contract
+This extends §11.4. Each adapter declares, honestly:
+- the Herdr `kind`;
+- start args for the role, model and effort;
+- its autonomous mode (args, env, and any config file written into the worktree);
+- how it reads instructions. Native `AGENTS.md` readers: OpenCode, Codex, omp. Claude needs the `CLAUDE.md` symlink. An agent that needs another file name gets it the same way, as a symlink to `AGENTS.md`;
+- how the bootstrap prompt is delivered: a positional argument, `--prompt`, or `herdr agent prompt`;
+- optional capabilities: hooks, context size, pre-compact.
+
+Required for an adapter to ship:
+- autonomous start,
+- model selection,
+- reading `AGENTS.md`, natively or through a symlink.
+
+Known facts, still to be verified in the plan's research step:
+- **OpenCode v2.0.27** (installed):
+  - The TUI takes `--auto` and `--prompt`.
+  - `opencode run` and `mini` take `-m provider/model` (run: `provider/model#variant`). The TUI has no `--model`.
+  - A config can set `model` and `"permission": "allow"`. It can be overridden per process with `OPENCODE_CONFIG_CONTENT` / `OPENCODE_CONFIG`.
+  - `doom_loop`, `external_directory` and `.env` reads default to "ask", so they must be set explicitly.
+- **Codex** (not installed on the dev machine):
+  - `-m`;
+  - `-c model_reasoning_effort=<low|medium|high>`;
+  - `--dangerously-bypass-approvals-and-sandbox` / `--yolo`, or `-s workspace-write -a never`;
+  - a positional initial prompt;
+  - `-C <dir>`;
+  - native `AGENTS.md`.
+- **omp** (not installed):
+  - Model roles are set in `~/.omp/agent/config.yml`. `--model` likely exists.
+  - It reads `AGENTS.md`.
+  - The approval behavior and how to seed the first prompt are unknown, so this is the most research.
+- **Claude Code** (installed, 2.1.296):
+  - `--model`;
+  - `--permission-mode` values include `bypassPermissions`/`auto`/`dontAsk`;
+  - effort is set through settings or the env;
+  - hooks already exist.
+
+### 12.6 Complexity proposal flow (my call, the builder may refine)
+1. The user asks main for a feature. Main runs `agt thread new <title> --tier <name> --reason "<why>"` (plus the existing flags). This records the thread as **proposed** and returns at once. Main tells the user the proposed tier and reason, says it starts in 10s unless they change it, and ends its turn.
+2. The daemon starts the thread with the proposed tier after `complexity.timeout`, unless an explicit choice arrives first. Main relays the user's answer with `agt thread choose <id> --tier <name>` or `agt thread cancel <id>`.
+3. `agt thread new … --tier <name> --now` skips the wait. Use it when the user named a tier themselves.
+4. The chosen tier, the reason, and whether it was auto-accepted are recorded as events and shown in `brief.md`.
+5. A replacement or rotated coordinator keeps its thread's tier.
+
+### 12.7 Release e2e matrix
+- **Happy flow, for each of the four agents in both the coordinator and the worker role:**
+  1. `agt start` in a scratch repo.
+  2. Main proposes a tier, and the timeout auto-accepts it.
+  3. The coordinator splits a small feature into 2–3 tickets.
+  4. Workers finish with `--summary` and are torn down.
+  5. The coordinator commits and requests review.
+- **Possible usage, run with the user's daily combination** (Claude Code for main and coordinator, OpenCode for workers):
+  - a single vendor for all roles;
+  - two concurrent threads with `max-workers`;
+  - the user overrides the proposed tier;
+  - a worker asks the coordinator, and the coordinator answers;
+  - the coordinator asks the user.
+- **Edge cases, run with the daily combination:**
+  - the coordinator is killed mid-work, and the automatic replacement continues from `brief.md`;
+  - a coordinator keeps exiting, and the brake fires;
+  - a worker is killed, and its ticket is released with the coordinator notified;
+  - a worker is blocked, and the coordinator is notified;
+  - rotation by turns and by age, the latter with lowered limits;
+  - a daemon restart;
+  - a Herdr restart, or a thread tab is closed;
+  - a missing agent binary or a bad model name fails clearly and fast.
+- Agents that are not installed are reported as skipped, not as passed. A release needs every matrix row run.
+- Runs are driven by one command, for example `bun run e2e:release [--only …]`, and produce a pass/fail report per scenario under `.agentthread/e2e-reports/`.
+
+### 12.8 Left to the builder
+- Exact config key names, migration details, and the setup wizard UX.
+- Per-agent autonomous-mode details, after verification.
+- How the e2e drives a "user" reply, for example by sending the reply to main's pane with `herdr agent prompt`.
+- The scratch-repo task design.
+- The release report format.
