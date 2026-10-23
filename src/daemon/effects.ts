@@ -1,6 +1,7 @@
 import { dirname } from "node:path";
 import { AGT_BIN, agentEnv, claudeArgs, claudeConfigDir } from "../agents/claude.ts";
 import { bootstrapPrompt, systemPrompt } from "../agents/prompts.ts";
+import { agentsMd, writeAgentsFiles } from "../agents/agents-md.ts";
 import { launchSpawnJob, type SpawnJob } from "../agents/spawn-job.ts";
 import type { Effect } from "../commands/handler.ts";
 import type { Config } from "../config/config.ts";
@@ -30,10 +31,20 @@ export function createEffectRunner(opts: {
 
   const configDir = claudeConfigDir(opts.config);
 
+  // AGENTS.md carries the role rules; a failure to write it is logged and never blocks the worktree or a spawn.
+  const writeAgents = (thread: { id: string; title: string; slug: string }, worktree: string) => {
+    try {
+      writeAgentsFiles({ root: opts.root, worktree, content: agentsMd({ root: opts.root, thread: { ...thread, worktree } }) });
+    } catch (e) {
+      log(`writing AGENTS.md for thread ${thread.id} failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
   return (effect) => {
     switch (effect.kind) {
       case "git.worktree.add":
         addWorktree(opts.root, effect.branch, effect.path);
+        writeAgents(effect.thread, effect.path);
         return [];
       case "herdr.tab.ensure":
       case "herdr.tab.close": {
@@ -53,6 +64,7 @@ export function createEffectRunner(opts: {
         const failed = (reason: string): EventBody[] => [{ type: "session.failed", thread: effect.thread, payload: { session: effect.session, reason } }];
         if (!layout) return failed("no Herdr layout registered");
         if (!t) return failed(`unknown thread ${effect.thread}`);
+        writeAgents(t, t.worktree);
         const prompt = { root: opts.root, role: effect.role, thread: t, ticket: effect.ticket };
         try {
           launch({

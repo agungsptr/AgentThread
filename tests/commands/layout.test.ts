@@ -35,7 +35,7 @@ describe("thread.new with and without a layout", () => {
   test("with a layout: worktree, then tab ensure labelled <id>-<slug> in the worktree", () => {
     const r = run([INIT, REGISTERED], { cmd: "thread.new", title: "Fix race", type: "bug" });
     expect(r.ok && r.effects).toEqual([
-      { kind: "git.worktree.add", branch: "thread/001-fix-race", path: "/repo/.worktrees/001-fix-race" },
+      { kind: "git.worktree.add", branch: "thread/001-fix-race", path: "/repo/.worktrees/001-fix-race", thread: { id: "001", title: "Fix race", slug: "fix-race" } },
       { kind: "herdr.tab.ensure", thread: "001", label: "001-fix-race", cwd: "/repo/.worktrees/001-fix-race" },
     ]);
   });

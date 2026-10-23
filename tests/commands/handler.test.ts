@@ -43,7 +43,7 @@ describe("thread.new", () => {
     if (!r.ok) throw new Error(r.error);
     expect(r.result).toEqual({ thread: "001", worktree: "/repo/.worktrees/001-fix-checkout-race" });
     expect(r.effects).toEqual([
-      { kind: "git.worktree.add", branch: "thread/001-fix-checkout-race", path: "/repo/.worktrees/001-fix-checkout-race" },
+      { kind: "git.worktree.add", branch: "thread/001-fix-checkout-race", path: "/repo/.worktrees/001-fix-checkout-race", thread: { id: "001", title: "Fix checkout race", slug: "fix-checkout-race" } },
     ]);
     expect(r.events[0]).toMatchObject({ type: "thread.created", thread: "001", payload: { status: "open", goal: "no double charge" } });
   });

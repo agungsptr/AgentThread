@@ -8,7 +8,7 @@ import { isLive, type State, type Thread, type Ticket } from "../state/projectio
 import type { Command, CommandName } from "./schema.ts";
 
 export type Effect =
-  | { kind: "git.worktree.add"; branch: string; path: string }
+  | { kind: "git.worktree.add"; branch: string; path: string; thread: { id: string; title: string; slug: string } }
   | { kind: "herdr.tab.ensure"; thread: string; label: string; cwd: string; tab?: string }
   | { kind: "herdr.tab.close"; thread: string; tab: string }
   | {
@@ -287,7 +287,7 @@ function newThread(state: State, cmd: Extract<Command, { cmd: "thread.new" }>, c
       },
     ],
     effects: [
-      { kind: "git.worktree.add", branch, path: worktree },
+      { kind: "git.worktree.add", branch, path: worktree, thread: { id, title: cmd.title, slug } },
       ...(state.layout ? [tabEnsure({ id, slug, worktree })] : []),
     ],
     result: { thread: id, worktree },
