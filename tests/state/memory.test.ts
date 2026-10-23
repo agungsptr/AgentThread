@@ -63,7 +63,7 @@ test("sub.thread.md renders Progress, Findings, Open questions after decisions",
   expect(at("## Progress")).toBeLessThan(at("## Findings"));
   expect(at("## Findings")).toBeLessThan(at("## Open questions"));
   expect(at("## Open questions")).toBeLessThan(at("## Handoff"));
-  expect(md).toMatch(/## Progress\n\n\S+ half way/);
+  expect(md).toMatch(/## Progress\n\n\S+ \(user\) half way/);
   expect(md).toMatch(/- \S+ found it/);
   expect(md).toMatch(/- \S+ why\?/);
 });
@@ -83,4 +83,34 @@ test("note, progress and question are open to all roles but bound to the actor's
     expect(handle(s, parsed, { role: "main" }, { root: "/repo" })).toMatchObject({ ok: true });
     expect(handle(s, parsed, { role: "worker", thread: "002", session: "w1" }, { root: "/repo" })).toMatchObject({ ok: false });
   }
+});
+
+test("progress is attributed: the coordinator's is the thread position, a worker's is kept per ticket", () => {
+  const bodies = [
+    INIT,
+    threadCreated("001"),
+    { type: "session.created", thread: "001", payload: { session: "w1", role: "worker", agent: "claude-code", name: "m", ticket: "T1" } },
+    { type: "progress.recorded", thread: "001", payload: { message: "plan made" } },
+    { type: "progress.recorded", thread: "001", payload: { message: "T1 half way" } },
+    { type: "progress.recorded", thread: "001", payload: { message: "T2 started" } },
+    { type: "progress.recorded", thread: "001", payload: { message: "old event" } },
+  ] as EventBody[];
+  const evs = stored(bodies);
+  evs[3]!.actor = COORD;
+  evs[4]!.actor = { role: "worker", thread: "001", session: "w1" }; // ticket from the session
+  evs[5]!.actor = { role: "worker", thread: "001", session: "w2", ticket: "T2" }; // ticket from the actor
+  const t = project(evs.slice(0, 6)).threads.get("001")!;
+  expect(t.progress).toMatchObject({ message: "plan made", role: "coordinator" });
+  expect(t.workerProgress).toEqual({
+    T1: expect.objectContaining({ message: "T1 half way", role: "worker", ticket: "T1" }),
+    T2: expect.objectContaining({ message: "T2 started", role: "worker", ticket: "T2" }),
+  });
+  // an old event whose actor carries no role is the coordinator's
+  evs[6]!.actor = {} as Actor;
+  const old = project(evs).threads.get("001")!;
+  expect(old.progress).toMatchObject({ message: "old event", role: "coordinator" });
+  expect(old.workerProgress.T1).toMatchObject({ message: "T1 half way" });
+
+  const md = renderSub(old);
+  expect(md).toMatch(/## Progress\n\n\S+ \(coordinator\) old event\n- T1 \S+ \(worker T1\) T1 half way\n- T2 \S+ \(worker T2\) T2 started\n/);
 });

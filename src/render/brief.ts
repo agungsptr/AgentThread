@@ -1,5 +1,5 @@
 import type { GitTrail } from "../project/gittrail.ts";
-import type { Session, Thread } from "../state/projection.ts";
+import { progressBy, type Session, type Thread } from "../state/projection.ts";
 import { clampHeadings, oneLine } from "./markdown.ts";
 
 const MAX_BYTES = 16384;
@@ -50,13 +50,14 @@ function build(t: Thread, trail: GitTrail | undefined, lim: Limits): string {
       ...(lim.handoff === 0 ? [TRUNC] : body.length > lim.handoff ? [clampHeadings(body.slice(0, lim.handoff)), "", TRUNC] : [body]),
     ];
   }
-  const boardAll = t.tickets.map(
-    (k) =>
-      cap(
-        `- ${k.id} [${k.status}] ${oneLine(k.title)} — scope: ${k.scope.join(", ")}${k.assignee ? ` (assignee: ${k.assignee.slice(0, 8)})` : ""}`,
-        300,
-      ),
-  );
+  const boardAll = t.tickets.map((k) => {
+    const line = cap(
+      `- ${k.id} [${k.status}] ${oneLine(k.title)} — scope: ${k.scope.join(", ")}${k.assignee ? ` (assignee: ${k.assignee.slice(0, 8)})` : ""}`,
+      300,
+    );
+    const p = t.workerProgress[k.id];
+    return p ? `${line}\n${cap(`  - progress ${p.ts} ${progressBy(p)} ${oneLine(p.message)}`, 300)}` : line;
+  });
   const board =
     boardAll.length <= lim.board
       ? boardAll
@@ -78,7 +79,7 @@ function build(t: Thread, trail: GitTrail | undefined, lim: Limits): string {
     "## Where things stand",
     "",
     `Status: ${t.status}`,
-    t.progress ? `Latest progress: ${t.progress.ts} ${cap(oneLine(t.progress.message), 1000)}` : "No progress recorded yet.",
+    t.progress ? `Latest progress: ${t.progress.ts} ${progressBy(t.progress)} ${cap(oneLine(t.progress.message), 1000)}` : "No progress recorded yet.",
     "",
     "## Goal",
     "",

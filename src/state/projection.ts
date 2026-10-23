@@ -1,4 +1,4 @@
-import type { Actor, AgentKind, Layout, SessionRole, StoredEvent, ThreadStatus, ThreadType, TicketStatus } from "../domain/types.ts";
+import type { Actor, AgentKind, Layout, Role, SessionRole, StoredEvent, ThreadStatus, ThreadType, TicketStatus } from "../domain/types.ts";
 
 export type SessionStatus = "starting" | "active" | "idle" | "rotated" | "ended" | "failed" | "lost";
 
@@ -54,6 +54,20 @@ export interface Entry {
   message: string;
 }
 
+/** A recorded progress line and who wrote it. */
+export interface Progress {
+  message: string;
+  ts: string;
+  actor: Actor;
+  role: Role;
+  ticket?: string;
+}
+
+/** `(coordinator)`, `(worker T1)`, `(main)`: who a progress line is from. */
+export function progressBy(p: Progress): string {
+  return p.role === "worker" && p.ticket ? `(worker ${p.ticket})` : `(${p.role})`;
+}
+
 export interface Thread {
   id: string;
   tab?: string;
@@ -73,7 +87,10 @@ export interface Thread {
   decisions: Entry[];
   findings: Entry[];
   questions: Entry[];
-  progress?: { message: string; ts: string; actor: Actor };
+  /** The thread's position: the coordinator's (or main's, or the user's) latest progress. */
+  progress?: Progress;
+  /** Each worker's latest progress, by ticket. */
+  workerProgress: Record<string, Progress>;
   log: Entry[];
   handoff?: { content: string; generated: boolean; ts: string };
 }
@@ -130,6 +147,7 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       decisions: [],
       findings: [],
       questions: [],
+      workerProgress: {},
       log: [],
     };
     state.threads.set(ev.thread, thread);
@@ -223,11 +241,17 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       note(t, ev, `question: ${ev.payload.message}`);
       break;
     case "progress.recorded": {
-      t.progress = { message: ev.payload.message, ts: ev.ts, actor: ev.actor };
+      const by = ev.actor.session ? state.sessions.get(ev.actor.session) : undefined;
+      // Old events may carry no role: they are the coordinator's.
+      const role: Role = by?.role ?? ev.actor.role ?? "coordinator";
+      const ticketId = ev.actor.ticket ?? by?.ticket;
+      const p: Progress = { message: ev.payload.message, ts: ev.ts, actor: ev.actor, role, ...(ticketId ? { ticket: ticketId } : {}) };
+      if (role === "worker" && ticketId) t.workerProgress[ticketId] = p;
+      else t.progress = p;
       note(t, ev, `progress: ${ev.payload.message}`);
       const sid =
         ev.actor.session ??
-        (ev.actor.role === "coordinator"
+        (role === "coordinator"
           ? [...state.sessions.values()].find((s) => s.thread === t.id && s.role === "coordinator" && isLive(s))?.id
           : undefined);
       const s = sid ? state.sessions.get(sid) : undefined;

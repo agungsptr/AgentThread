@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { renderBrief } from "../../src/render/brief.ts";
 import { writeAll } from "../../src/render/write.ts";
-import { INIT, stateOf, threadCreated } from "../helpers.ts";
+import { project } from "../../src/state/projection.ts";
+import { INIT, stateOf, stored, threadCreated } from "../helpers.ts";
 
 const full = () =>
   stateOf(
@@ -94,7 +95,10 @@ test("brief stays under 16 KiB with oversized inputs", () => {
     { type: "progress.recorded" as const, thread: "001", payload: { message: "PROGRESS-MARK" } },
     { type: "handoff.submitted" as const, thread: "001", payload: { content: big.repeat(10), generated: false } },
   ];
-  const t = stateOf(...bodies).threads.get("001")!;
+  const evs = stored([...bodies, ...Array.from({ length: 200 }, (_, i) => ({ type: "progress.recorded" as const, thread: "001", payload: { message: big } }))]);
+  for (const [i, e] of evs.slice(bodies.length).entries()) e.actor = { role: "worker", thread: "001", session: `w${i}`, ticket: `T${i}` };
+  const t = project(evs).threads.get("001")!;
+  expect(Object.keys(t.workerProgress)).toHaveLength(200);
   const commits = Array.from({ length: 20 }, () => big);
   const md = renderBrief({ thread: t, sessions: [], trail: { commits, diffStat: "d", untracked: 0 }, dir: "/d" });
   expect(Buffer.byteLength(md)).toBeLessThan(16384);
@@ -102,4 +106,29 @@ test("brief stays under 16 KiB with oversized inputs", () => {
   expect(md).toContain("## Open questions");
   expect(md).toContain("## How to continue");
   expect(md).toContain("(truncated — see sub.thread.md)");
+});
+
+test("brief: latest progress is the coordinator's position; each worker's latest is under its ticket", () => {
+  const evs = stored([
+    INIT,
+    threadCreated("001"),
+    { type: "ticket.created", thread: "001", payload: { ticket: "T1", title: "Button", scope: ["src/ui"] } },
+    { type: "ticket.created", thread: "001", payload: { ticket: "T2", title: "API", scope: ["src/api"] } },
+    { type: "progress.recorded", thread: "001", payload: { message: "plan made" } },
+    { type: "progress.recorded", thread: "001", payload: { message: "button drawn" } },
+  ]);
+  evs[4]!.actor = { role: "coordinator", thread: "001" };
+  evs[5]!.actor = { role: "worker", thread: "001", session: "w1", ticket: "T1" };
+  const md = renderBrief({ thread: project(evs).threads.get("001")!, sessions: [], dir: "/d" });
+  expect(md).toMatch(/Latest progress: \S+ \(coordinator\) plan made/);
+  expect(md).toMatch(/- T1 \[open\] Button — scope: src\/ui\n  - progress \S+ \(worker T1\) button drawn\n- T2 \[open\] API/);
+  expect(md).not.toMatch(/Latest progress: .*button drawn/);
+});
+
+test("brief: only worker progress so far means no position yet", () => {
+  const evs = stored([INIT, threadCreated("001"), { type: "ticket.created", thread: "001", payload: { ticket: "T1", title: "B", scope: ["a"] } }, { type: "progress.recorded", thread: "001", payload: { message: "w" } }]);
+  evs[3]!.actor = { role: "worker", thread: "001", session: "w1", ticket: "T1" };
+  const md = renderBrief({ thread: project(evs).threads.get("001")!, sessions: [], dir: "/d" });
+  expect(md).toContain("No progress recorded yet.");
+  expect(md).toContain("  - progress ");
 });

@@ -19,7 +19,7 @@ function agt(args: string[], env: Record<string, string> = {}) {
 }
 
 const COORD = { AGT_ROLE: "coordinator", AGT_THREAD: "001", AGT_SESSION: "c1" };
-const WORKER = { AGT_ROLE: "worker", AGT_THREAD: "001", AGT_SESSION: "w1" };
+const WORKER = { AGT_ROLE: "worker", AGT_THREAD: "001", AGT_SESSION: "w1", AGT_TICKET: "T1" };
 
 beforeEach(() => {
   xdg = isolatedConfigHome();
@@ -38,7 +38,10 @@ test("note, progress and question round-trip into sub.thread.md", () => {
   expect(agt(["progress", "001", "fix", "done,", "tests", "next"], WORKER).out).toBe("ok");
   expect(agt(["question", "001", "keep", "the", "old", "API?"], COORD).out).toBe("ok");
   const md = readFileSync(join(root, ".agentthread/threads/001-fix/sub.thread.md"), "utf8");
-  expect(md).toMatch(/## Progress\n\n\S+ fix done, tests next/);
+  expect(agt(["progress", "001", "plan", "made"], COORD).out).toBe("ok");
+  const after = readFileSync(join(root, ".agentthread/threads/001-fix/sub.thread.md"), "utf8");
+  expect(md).toMatch(/## Progress\n\n_None yet._\n- T1 \S+ \(worker T1\) fix done, tests next/);
+  expect(after).toMatch(/## Progress\n\n\S+ \(coordinator\) plan made\n- T1 \S+ \(worker T1\) fix done, tests next/);
   expect(md).toMatch(/## Findings\n\n- \S+ root cause is the lock/);
   expect(md).toMatch(/## Open questions\n\n- \S+ keep the old API\?/);
 });

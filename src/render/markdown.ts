@@ -1,6 +1,6 @@
 import { stringify } from "yaml";
 import { DEFAULT_CONFIG, type Config } from "../config/config.ts";
-import { displayStatus, isLive, type Session, type State, type Thread } from "../state/projection.ts";
+import { displayStatus, isLive, progressBy, type Session, type State, type Thread } from "../state/projection.ts";
 
 export const oneLine = (s: string) => s.replace(/\r?\n+/g, " ").trim();
 const cell = (s: string) => oneLine(s).replace(/\|/g, "\\|");
@@ -82,7 +82,8 @@ export function renderSub(t: Thread, sessions: Session[] = []): string {
     "",
     "## Progress",
     "",
-    ...(t.progress ? [`${t.progress.ts} ${oneLine(t.progress.message)}`] : ["_None yet._"]),
+    ...(t.progress ? [`${t.progress.ts} ${progressBy(t.progress)} ${oneLine(t.progress.message)}`] : ["_None yet._"]),
+    ...Object.entries(t.workerProgress).map(([k, p]) => `- ${k} ${p.ts} ${progressBy(p)} ${oneLine(p.message)}`),
     "",
     "## Findings",
     "",
