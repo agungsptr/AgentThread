@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { type Runner, spawnRunner } from "../herdr/bridge.ts";
+import { type AsyncRunner, type RunResult, type Runner, spawnAsync, spawnRunner } from "../herdr/bridge.ts";
 import { paths } from "../project/paths.ts";
 import { systemPrompt } from "./prompts.ts";
 
@@ -50,19 +50,38 @@ const GIT_TIMEOUT_MS = 5000;
 type Env = Record<string, string | undefined>;
 interface Ctx {
   env: Env;
-  run: Runner;
 }
 
-function git(c: Ctx, cwd: string, args: string[]): { ok: boolean; stdout: string } {
-  const r = c.run("git", ["--no-optional-locks", "-C", cwd, ...args], c.env, GIT_TIMEOUT_MS);
+/** One git invocation the steps below need; a driver runs it (synchronously or not) and sends back the result. */
+type GitCall = { args: string[] };
+type Steps<T> = Generator<GitCall, T, RunResult>;
+
+function* run(cwd: string, args: string[], optionalLocks: boolean): Steps<RunResult> {
+  return yield { args: [...(optionalLocks ? [] : ["--no-optional-locks"]), "-C", cwd, ...args] };
+}
+
+function* git(_c: Ctx, cwd: string, args: string[]): Steps<{ ok: boolean; stdout: string }> {
+  const r = yield* run(cwd, args, false);
   if (r.timedOut) throw new Error(`git ${args.join(" ")} timed out in ${cwd}`);
   return { ok: r.exitCode === 0, stdout: r.stdout };
 }
 
-function mustGit(c: Ctx, cwd: string, args: string[]): string {
-  const r = c.run("git", ["-C", cwd, ...args], c.env, GIT_TIMEOUT_MS);
+function* mustGit(_c: Ctx, cwd: string, args: string[]): Steps<string> {
+  const r = yield* run(cwd, args, true);
   if (r.exitCode !== 0 || r.timedOut) throw new Error(`git ${args.join(" ")} failed in ${cwd}: ${r.timedOut ? "timed out" : r.stderr.trim()}`);
   return r.stdout;
+}
+
+function driveSync<T>(steps: Steps<T>, runner: Runner, env: Env): T {
+  let next = steps.next();
+  while (!next.done) next = steps.next(runner("git", next.value.args, env, GIT_TIMEOUT_MS));
+  return next.value;
+}
+
+async function driveAsync<T>(steps: Steps<T>, runner: AsyncRunner, env: Env): Promise<T> {
+  let next = steps.next();
+  while (!next.done) next = steps.next(await runner("git", next.value.args, env, GIT_TIMEOUT_MS));
+  return next.value;
 }
 
 const FILES = ["AGENTS.md", "CLAUDE.md"] as const;
@@ -75,11 +94,11 @@ const isInside = (wt: string, p: string) => {
 };
 
 /** A HEAD tree entry: mode and blob content, or undefined if `file` is not in HEAD. */
-function headEntry(c: Ctx, wt: string, file: string): { mode: string; content: string } | undefined {
-  const entry = git(c, wt, ["ls-tree", "HEAD", "--", file]);
+function* headEntry(c: Ctx, wt: string, file: string): Steps<{ mode: string; content: string } | undefined> {
+  const entry = (yield* git(c, wt, ["ls-tree", "HEAD", "--", file]));
   const mode = entry.ok ? /^(\d+) blob /.exec(entry.stdout)?.[1] : undefined;
   if (!mode) return undefined;
-  const show = git(c, wt, ["show", `HEAD:${file}`]);
+  const show = (yield* git(c, wt, ["show", `HEAD:${file}`]));
   return show.ok ? { mode, content: show.stdout } : undefined;
 }
 
@@ -87,14 +106,14 @@ function headEntry(c: Ctx, wt: string, file: string): { mode: string; content: s
  * The project's own instructions in `file` at HEAD. A tracked symlink counts when its target is a regular file inside
  * the worktree that is tracked at HEAD (read from HEAD, so a rewritten worktree file never feeds back in).
  */
-function projectContent(c: Ctx, wt: string, file: string): string {
-  const e = headEntry(c, wt, file);
+function* projectContent(c: Ctx, wt: string, file: string): Steps<string> {
+  const e = (yield* headEntry(c, wt, file));
   if (!e) return "";
   if (e.mode === "100644" || e.mode === "100755") return e.content;
   if (e.mode !== "120000") return "";
   const target = resolve(wt, e.content.trim());
   if (!isInside(wt, target)) return "";
-  const t = headEntry(c, wt, relative(wt, target).split(sep).join("/"));
+  const t = (yield* headEntry(c, wt, relative(wt, target).split(sep).join("/")));
   return t && (t.mode === "100644" || t.mode === "100755") ? t.content : "";
 }
 
@@ -102,11 +121,11 @@ function projectContent(c: Ctx, wt: string, file: string): string {
  * What the project itself says, from HEAD: AGENTS.md, else CLAUDE.md. When both are tracked and CLAUDE.md is a regular
  * file with other content, the worktree's CLAUDE.md becomes our symlink, so its content is kept under a heading.
  */
-function projectInstructions(c: Ctx, wt: string): string {
-  const agents = projectContent(c, wt, "AGENTS.md");
-  const claude = projectContent(c, wt, "CLAUDE.md");
+function* projectInstructions(c: Ctx, wt: string): Steps<string> {
+  const agents = (yield* projectContent(c, wt, "AGENTS.md"));
+  const claude = (yield* projectContent(c, wt, "CLAUDE.md"));
   if (!agents) return claude;
-  const claudeMode = headEntry(c, wt, "CLAUDE.md")?.mode;
+  const claudeMode = (yield* headEntry(c, wt, "CLAUDE.md"))?.mode;
   const regular = claudeMode === "100644" || claudeMode === "100755";
   if (!claude || !regular || claude.trim() === agents.trim()) return agents;
   return `${agents}\n\n# From the project's CLAUDE.md\n\n${claude}`;
@@ -126,8 +145,8 @@ function removeIfPresent(p: string): void {
  * default). A per-worktree core.excludesFile replaces it, so its patterns are copied in. Read from the main checkout,
  * never from a thread worktree, so our own per-worktree value is never read back.
  */
-function effectiveExcludes(c: Ctx, root: string, ours: string): string {
-  const configured = git(c, root, ["config", "--path", "--get", "core.excludesFile"]);
+function* effectiveExcludes(c: Ctx, root: string, ours: string): Steps<string> {
+  const configured = (yield* git(c, root, ["config", "--path", "--get", "core.excludesFile"]));
   let file = configured.ok ? configured.stdout.trim() : "";
   if (file) file = resolve(root, file);
   if (file === ours) file = "";
@@ -142,13 +161,13 @@ function effectiveExcludes(c: Ctx, root: string, ours: string): string {
   }
 }
 
-function commonInfoExclude(c: Ctx, wt: string): string {
-  return join(resolve(wt, mustGit(c, wt, ["rev-parse", "--git-common-dir"]).trim()), "info", "exclude");
+function* commonInfoExclude(c: Ctx, wt: string): Steps<string> {
+  return join(resolve(wt, (yield* mustGit(c, wt, ["rev-parse", "--git-common-dir"])).trim()), "info", "exclude");
 }
 
 /** Old git without per-worktree config: the shared info/exclude, which also hides the main checkout's files. */
-function excludeInCommon(c: Ctx, wt: string): void {
-  const info = commonInfoExclude(c, wt);
+function* excludeInCommon(c: Ctx, wt: string): Steps<void> {
+  const info = (yield* commonInfoExclude(c, wt));
   let current = existsSync(info) ? readFileSync(info, "utf8") : "";
   const have = lines(current);
   for (const line of EXCLUDE_LINES) {
@@ -163,28 +182,28 @@ function excludeInCommon(c: Ctx, wt: string): void {
  * Hides untracked AGENTS.md/CLAUDE.md in thread worktrees only: a per-worktree core.excludesFile, so the main
  * checkout can still add its own. Also removes the lines that earlier versions put in the shared info/exclude.
  */
-function excludeInWorktree(c: Ctx, root: string, wt: string, log: (m: string) => void): void {
+function* excludeInWorktree(c: Ctx, root: string, wt: string, log: (m: string) => void): Steps<void> {
   const file = join(root, ".agentthread", "worktree-excludes");
-  const kept = lines(effectiveExcludes(c, root, file)).filter((l) => !EXCLUDE_LINES.includes(l));
+  const kept = lines((yield* effectiveExcludes(c, root, file))).filter((l) => !EXCLUDE_LINES.includes(l));
   while (kept.length && kept[kept.length - 1] === "") kept.pop();
   const text = [...kept, ...EXCLUDE_LINES].join("\n") + "\n";
   mkdirSync(dirname(file), { recursive: true });
   if (!existsSync(file) || readFileSync(file, "utf8") !== text) writeFileSync(file, text);
 
-  const wasEnabled = git(c, root, ["config", "--get", "extensions.worktreeConfig"]).stdout.trim() === "true";
+  const wasEnabled = (yield* git(c, root, ["config", "--get", "extensions.worktreeConfig"])).stdout.trim() === "true";
   try {
-    if (!wasEnabled) mustGit(c, root, ["config", "extensions.worktreeConfig", "true"]);
-    if (git(c, wt, ["config", "--worktree", "--get", "core.excludesFile"]).stdout.trim() !== file) {
-      mustGit(c, wt, ["config", "--worktree", "core.excludesFile", file]);
+    if (!wasEnabled) (yield* mustGit(c, root, ["config", "extensions.worktreeConfig", "true"]));
+    if ((yield* git(c, wt, ["config", "--worktree", "--get", "core.excludesFile"])).stdout.trim() !== file) {
+      (yield* mustGit(c, wt, ["config", "--worktree", "core.excludesFile", file]));
     }
   } catch (e) {
-    if (!wasEnabled) git(c, root, ["config", "--unset", "extensions.worktreeConfig"]);
+    if (!wasEnabled) (yield* git(c, root, ["config", "--unset", "extensions.worktreeConfig"]));
     log(`per-worktree excludes unavailable, using the shared info/exclude: ${e instanceof Error ? e.message : String(e)}`);
-    excludeInCommon(c, wt);
+    (yield* excludeInCommon(c, wt));
     return;
   }
 
-  const info = commonInfoExclude(c, wt);
+  const info = (yield* commonInfoExclude(c, wt));
   if (!existsSync(info)) return;
   const current = readFileSync(info, "utf8");
   const filtered = current.split("\n").filter((l) => !EXCLUDE_LINES.includes(l.replace(/\r$/, "")));
@@ -196,18 +215,28 @@ function excludeInWorktree(c: Ctx, root: string, wt: string, log: (m: string) =>
  * it. Neither ever shows up in `git status` or a commit: tracked paths get skip-worktree, the others are excluded
  * through a per-worktree excludes file (set up first, so the files are never visible). Never writes through a symlink.
  */
-export function writeAgentsFiles(o: {
+type WriteOptions = {
   root: string;
   worktree: string;
   content: string;
   env?: Env;
-  runner?: Runner;
   log?: (message: string) => void;
-}): void {
+};
+
+export function writeAgentsFiles(o: WriteOptions & { runner?: Runner }): void {
+  driveSync(writeSteps(o), o.runner ?? spawnRunner, o.env ?? (process.env as Env));
+}
+
+/** writeAgentsFiles without blocking the event loop: the daemon's effects use this one. */
+export function writeAgentsFilesAsync(o: WriteOptions & { runner?: AsyncRunner }): Promise<void> {
+  return driveAsync(writeSteps(o), o.runner ?? spawnAsync, o.env ?? (process.env as Env));
+}
+
+function* writeSteps(o: WriteOptions): Steps<void> {
   const wt = o.worktree;
-  const c: Ctx = { env: o.env ?? (process.env as Env), run: o.runner ?? spawnRunner };
-  excludeInWorktree(c, o.root, wt, o.log ?? ((m) => console.error(m)));
-  const project = projectInstructions(c, wt);
+  const c: Ctx = { env: o.env ?? (process.env as Env) };
+  yield* excludeInWorktree(c, o.root, wt, o.log ?? ((m) => console.error(m)));
+  const project = yield* projectInstructions(c, wt);
   const agents = join(wt, "AGENTS.md");
   let regular = false;
   try {
@@ -218,6 +247,6 @@ export function writeAgentsFiles(o: {
   removeIfPresent(join(wt, "CLAUDE.md"));
   symlinkSync("AGENTS.md", join(wt, "CLAUDE.md"));
   for (const file of FILES) {
-    if (git(c, wt, ["ls-files", "--error-unmatch", "--", file]).ok) mustGit(c, wt, ["update-index", "--skip-worktree", "--", file]);
+    if ((yield* git(c, wt, ["ls-files", "--error-unmatch", "--", file])).ok) yield* mustGit(c, wt, ["update-index", "--skip-worktree", "--", file]);
   }
 }

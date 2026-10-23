@@ -98,6 +98,8 @@ test("handoff timeout: the sweep generates a handoff and rotates", async () => {
   await waitFor(async () => (await events()).some((e) => e.type === "session.rotated"), 5000);
   const all = await events();
   expect(all.find((e) => e.type === "handoff.submitted")).toMatchObject({ payload: { generated: true } });
+  // events are readable while the follow-up renders the brief; the spawn comes right after
+  await waitFor(() => jobs.length >= 2);
   expect(jobs.at(-1)).toMatchObject({ split: { pane: "w1:p1" } });
 });
 

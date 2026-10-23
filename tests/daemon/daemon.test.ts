@@ -156,15 +156,15 @@ test("socket directory is forced back to 0700", async () => {
   expect(statSync(paths(root).socketDir).mode & 0o777).toBe(0o700);
 });
 
-test("follow-up rounds stop at the cap and say so; a settled chain logs nothing", () => {
+test("follow-up rounds stop at the cap and say so; a settled chain logs nothing", async () => {
   const ev = { seq: 1 } as StoredEvent;
   const logged: string[] = [];
   let rounds = 0;
-  runFollowUps([ev], () => (rounds++, [ev]), (m) => logged.push(m));
+  await runFollowUps([ev], () => (rounds++, [ev]), (m) => logged.push(m));
   expect(rounds).toBe(10);
   expect(logged).toEqual(["reactor stopped after 10 rounds"]);
   rounds = 0;
-  runFollowUps([ev], () => (++rounds < 3 ? [ev] : []), (m) => logged.push(m));
+  await runFollowUps([ev], () => (++rounds < 3 ? [ev] : []), (m) => logged.push(m));
   expect(rounds).toBe(3);
   expect(logged).toHaveLength(1);
 });

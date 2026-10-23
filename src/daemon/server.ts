@@ -1,14 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
 import type { SpawnJob } from "../agents/spawn-job.ts";
-import { handle } from "../commands/handler.ts";
+import { handle, type Effect } from "../commands/handler.ts";
 import { ActorSchema, CommandSchema } from "../commands/schema.ts";
 import { durationMs, loadConfig, type Config } from "../config/config.ts";
 import type { Actor, EventBody, StoredEvent } from "../domain/types.ts";
 import { react } from "../orchestration/reactor.ts";
 import { sweep } from "../orchestration/sweep.ts";
 import { paths } from "../project/paths.ts";
-import { memoizedTrail } from "../project/gittrail.ts";
+import { trailCache } from "../project/gittrail.ts";
 import { writeAll } from "../render/write.ts";
 import { applyEvent, project } from "../state/projection.ts";
 import { EventStore } from "../store/event-store.ts";
@@ -27,15 +27,19 @@ export interface Daemon {
 const MAX_FOLLOW_UP_ROUNDS = 10;
 
 /** Follow-ups (spawns, notifications, teardown) are themselves events; bound the chain so a bug can't loop forever. */
-export function runFollowUps(fresh: StoredEvent[], round: (events: StoredEvent[]) => StoredEvent[], log: (message: string) => void): void {
-  for (let i = 0; i < MAX_FOLLOW_UP_ROUNDS && fresh.length > 0; i++) fresh = round(fresh);
+export async function runFollowUps(
+  fresh: StoredEvent[],
+  round: (events: StoredEvent[]) => StoredEvent[] | Promise<StoredEvent[]>,
+  log: (message: string) => void,
+): Promise<void> {
+  for (let i = 0; i < MAX_FOLLOW_UP_ROUNDS && fresh.length > 0; i++) fresh = await round(fresh);
   if (fresh.length > 0) log(`reactor stopped after ${MAX_FOLLOW_UP_ROUNDS} rounds`);
 }
 
-export async function startDaemon(root: string, opts: { log?: (message: string) => void; launch?: (job: SpawnJob) => void; sweepIntervalMs?: number } = {}): Promise<Daemon> {
+export async function startDaemon(root: string, opts: { log?: (message: string) => void; launch?: (job: SpawnJob) => void; sweepIntervalMs?: number; pollIntervalMs?: number } = {}): Promise<Daemon> {
   const p = paths(root);
   // Taking the exclusive store lock first makes "one daemon per project" a property of state.db, not of the socket path.
-  const trail = memoizedTrail(root, 3000);
+  const trails = trailCache(root, 3000);
   const store = new EventStore(p.db, { exclusive: true });
   let state: ReturnType<typeof project>;
   let config: Config;
@@ -48,7 +52,8 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
     }
     ensureSocketDir(p.socketDir);
     rmSync(p.socket, { force: true });
-    writeAll(root, state, config, trail);
+    await trails.refresh(state.threads.values());
+    writeAll(root, state, config, trails.get);
   } catch (e) {
     store.close();
     throw e;
@@ -71,38 +76,58 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
     launch: opts.launch,
   });
 
-  const applyAndReact = (bodies: EventBody[], actor: Actor): void => {
-    const commit = (b: EventBody[]) => {
-      const stored = store.append(b, actor);
-      for (const ev of stored) applyEvent(state, ev);
-      return stored;
-    };
-    const fresh = bodies.length ? commit(bodies) : [];
-    runFollowUps(
-      fresh,
-      (evs) => {
-        const next = react(state, evs, { root, config, newId: randomUUID });
-        const more = [...next.events, ...next.effects.flatMap(runEffect)];
-        return more.length === 0 ? [] : commit(more);
-      },
-      opts.log ?? console.error,
-    );
+  const log = opts.log ?? console.error;
+  const runEffects = async (effects: Effect[]): Promise<EventBody[]> => {
+    const out: EventBody[] = [];
+    for (const e of effects) out.push(...(await runEffect(e)));
+    return out;
+  };
+  /** Renders every thread's files; git trails are computed without blocking first. */
+  const render = async (): Promise<void> => {
     try {
-      writeAll(root, state, config, trail);
+      await trails.refresh(state.threads.values());
+      writeAll(root, state, config, trails.get);
     } catch (e) {
       // Events are already committed; failing here would make the client retry and duplicate the command.
-      (opts.log ?? console.error)(`render failed after commit: ${e instanceof Error ? e.message : String(e)}`);
+      log(`render failed after commit: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
 
-  const runCommand = (raw: { command: unknown; actor: unknown }): Response => {
+  const applyAndReact = async (bodies: EventBody[], actor: Actor): Promise<void> => {
+    const commit = (b: EventBody[]) => {
+      const stored = store.append(b, actor);
+      for (const ev of stored) {
+        applyEvent(state, ev);
+        // A replacement coordinator must see the latest commits in its brief, not a cached trail.
+        if (ev.type === "session.created" && ev.payload.replaces && ev.thread) trails.invalidate(ev.thread);
+      }
+      return stored;
+    };
+    const fresh = bodies.length ? commit(bodies) : [];
+    await runFollowUps(
+      fresh,
+      async (evs) => {
+        const next = react(state, evs, { root, config, newId: randomUUID });
+        // Commit the follow-up events first, and render before any agent starts: a replacement must find its
+        // generated handoff (and the current state) in brief.md when it reads it.
+        const committed = next.events.length ? commit(next.events) : [];
+        if (next.effects.some((e) => e.kind === "agent.spawn")) await render();
+        const produced = await runEffects(next.effects);
+        return [...committed, ...(produced.length ? commit(produced) : [])];
+      },
+      log,
+    );
+    await render();
+  };
+
+  const runCommand = async (raw: { command: unknown; actor: unknown }): Promise<Response> => {
     const command = CommandSchema.safeParse(raw.command);
     if (!command.success) return { ok: false, error: `invalid command: ${command.error.issues.map((i) => i.message).join("; ")}` };
     const actor = ActorSchema.safeParse(raw.actor);
     if (!actor.success) return { ok: false, error: `invalid actor: ${actor.error.issues.map((i) => i.message).join("; ")}` };
     const decision = handle(state, command.data, actor.data, { root, config, newId: randomUUID });
     if (!decision.ok) return decision;
-    applyAndReact([...decision.events, ...decision.effects.flatMap(runEffect)], actor.data);
+    await applyAndReact([...decision.events, ...(await runEffects(decision.effects))], actor.data);
     return { ok: true, result: decision.result };
   };
 
@@ -159,10 +184,10 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
 
   const sweepTimer = setInterval(() => {
     if (shuttingDown) return;
-    void enqueue(() => {
+    void enqueue(async () => {
       const r = sweep(state, new Date().toISOString(), { root, config, newId: randomUUID });
-      const bodies = [...r.events, ...r.effects.flatMap(runEffect)];
-      if (bodies.length) applyAndReact(bodies, { role: "user" });
+      const bodies = [...r.events, ...(await runEffects(r.effects))];
+      if (bodies.length) await applyAndReact(bodies, { role: "user" });
     }).catch((e) => (opts.log ?? console.error)(`sweep failed: ${e instanceof Error ? e.message : String(e)}`));
   }, opts.sweepIntervalMs ?? 15_000);
   sweepTimer.unref?.();
@@ -173,7 +198,6 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
     void enqueue(async () => {
       const layout = state.layout;
       if (!layout) return;
-      const log = opts.log ?? console.error;
       let listed;
       try {
         listed = await new HerdrCli({ bin: layout.herdrBin, env: { ...process.env, ...(layout.herdrSocket ? { HERDR_SOCKET_PATH: layout.herdrSocket } : {}) } }).agentListAsync();
@@ -185,10 +209,10 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
       for (const d of diffAgentStatus({ sessions: [...state.sessions.values()], listed, misses })) {
         const decision = handle(state, { cmd: "session.signal", session: d.session, signal: d.signal }, actor, { root, config, newId: randomUUID });
         if (!decision.ok) continue;
-        applyAndReact([...decision.events, ...decision.effects.flatMap(runEffect)], actor);
+        await applyAndReact([...decision.events, ...(await runEffects(decision.effects))], actor);
       }
     }).catch((e) => (opts.log ?? console.error)(`poll failed: ${e instanceof Error ? e.message : String(e)}`));
-  }, durationMs(config.herdr.poll_interval));
+  }, opts.pollIntervalMs ?? durationMs(config.herdr.poll_interval));
   pollTimer.unref?.();
 
   const stop = (): Promise<void> => {

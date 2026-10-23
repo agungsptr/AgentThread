@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gitTrail, memoizedTrail } from "../../src/project/gittrail.ts";
+import { gitTrail, gitTrailAsync, trailCache } from "../../src/project/gittrail.ts";
 import { tempRepo } from "../helpers.ts";
 
 const git = (dir: string, ...args: string[]) => {
@@ -56,16 +56,36 @@ test("gitTrail counts untracked files", () => {
   expect(gitTrail({ root, worktree: wt, branch: "thread/004-u" })!.untracked).toBe(1);
 });
 
-test("memoizedTrail caches for the ttl", () => {
+test("trailCache caches for the ttl, refreshes without blocking, and forgets an invalidated thread", async () => {
   const root = tempRepo();
   const wt = join(realpathSync(mkdtempSync(join(tmpdir(), "agt-wt-"))), "wt");
   git(root, "worktree", "add", "-q", "-b", "thread/005-c", wt);
   let now = 0;
-  const memo = memoizedTrail(root, 3000, () => now);
+  const cache = trailCache(root, 3000, () => now);
   const t = { id: "005", status: "open", worktree: wt, branch: "thread/005-c" };
-  expect(memo(t)!.untracked).toBe(0);
+  expect(cache.get(t)).toBeUndefined();
+  await cache.refresh([t]);
+  expect(cache.get(t)!.untracked).toBe(0);
   writeFileSync(join(wt, "n.txt"), "n\n");
-  expect(memo(t)!.untracked).toBe(0);
+  await cache.refresh([t]);
+  expect(cache.get(t)!.untracked).toBe(0);
+  cache.invalidate("005");
+  await cache.refresh([t]);
+  expect(cache.get(t)!.untracked).toBe(1);
+  writeFileSync(join(wt, "m.txt"), "m\n");
   now = 3001;
-  expect(memo(t)!.untracked).toBe(1);
+  await cache.refresh([t]);
+  expect(cache.get(t)!.untracked).toBe(2);
+  expect(cache.get({ ...t, status: "done" })).toBeUndefined();
+});
+
+test("gitTrailAsync matches gitTrail", async () => {
+  const root = tempRepo();
+  const wt = join(realpathSync(mkdtempSync(join(tmpdir(), "agt-wt-"))), "wt");
+  git(root, "worktree", "add", "-q", "-b", "thread/006-a", wt);
+  writeFileSync(join(wt, "a.txt"), "a\n");
+  git(wt, "add", "a.txt");
+  git(wt, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "add a");
+  expect(await gitTrailAsync({ root, worktree: wt, branch: "thread/006-a" })).toEqual(gitTrail({ root, worktree: wt, branch: "thread/006-a" }));
+  expect(await gitTrailAsync({ root, worktree: "/nonexistent/wt", branch: "b" })).toBeUndefined();
 });

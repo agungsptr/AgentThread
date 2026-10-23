@@ -13,17 +13,7 @@ export function writeAll(
   config: Config = DEFAULT_CONFIG,
   trail?: (t: Thread) => GitTrail | undefined,
 ): void {
-  let head: string | undefined;
-  let headDone = false;
-  const mainHead = () => {
-    if (!headDone) {
-      headDone = true;
-      head = Bun.spawnSync(["git", "--no-optional-locks", "-C", root, "rev-parse", "HEAD"], { stdout: "pipe", stderr: "pipe" }).stdout.toString().trim() || undefined;
-    }
-    return head;
-  };
-  const trailOf =
-    trail ?? ((t: Thread) => (t.status === "done" ? undefined : gitTrail({ root, worktree: t.worktree, branch: t.branch, mainHead })));
+  const trailOf = trail ?? ((t: Thread) => (t.status === "done" ? undefined : gitTrail({ root, worktree: t.worktree, branch: t.branch })));
   const p = paths(root);
   mkdirSync(p.threadsDir, { recursive: true });
   writeAtomic(p.mainThread, renderMain(state, config));

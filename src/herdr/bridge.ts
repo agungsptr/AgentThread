@@ -28,6 +28,32 @@ export const spawnRunner: Runner = (bin, args, env, timeoutMs) => {
   return { exitCode, stdout: r.stdout.toString(), stderr: r.stderr.toString(), timedOut: exitCode === 137 };
 };
 
+export type AsyncRunner = (bin: string, args: string[], env: Env, timeoutMs: number) => Promise<RunResult>;
+
+/**
+ * Like spawnRunner, but never blocks the event loop. The daemon uses it for everything it runs after startup: in Bun
+ * 1.1.34 a Bun.spawnSync made from daemon work could stall forever after its child had exited (see the stress test).
+ */
+export const spawnAsync: AsyncRunner = async (bin, args, env, timeoutMs) => {
+  let proc;
+  try {
+    proc = Bun.spawn([bin, ...args], { env, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+  } catch (e) {
+    return { exitCode: 127, stdout: "", stderr: e instanceof Error ? e.message : String(e) };
+  }
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    proc.kill(9);
+  }, timeoutMs);
+  try {
+    const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    return { exitCode: code, stdout, stderr, timedOut };
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
 export class HerdrError extends Error {
   constructor(
     readonly code: string,
@@ -67,7 +93,7 @@ export function shellQuote(s: string): string {
 
 /** Drives Herdr through its CLI. Every call parses the JSON `result`, and herdr's JSON errors become HerdrError. */
 export class HerdrCli implements HerdrBridge {
-  constructor(private readonly opts: { bin: string; env?: Env; runner?: Runner; timeoutMs?: number }) {}
+  constructor(private readonly opts: { bin: string; env?: Env; runner?: Runner; asyncRunner?: AsyncRunner; timeoutMs?: number }) {}
 
   get bin(): string {
     return this.opts.bin;
@@ -140,27 +166,60 @@ export class HerdrCli implements HerdrBridge {
     return parseAgents(this.call(["agent", "list"]));
   }
 
-  /** Same as agentList, but never blocks the daemon's event loop (the poller runs it every couple of seconds). */
-  async agentListAsync(timeoutMs = this.opts.timeoutMs ?? DEFAULT_TIMEOUT_MS): Promise<AgentListing[]> {
-    const proc = Bun.spawn([this.opts.bin, "agent", "list"], { env: this.opts.env ?? process.env, stdout: "pipe", stderr: "pipe" });
-    const timer = setTimeout(() => proc.kill(9), timeoutMs);
+  // The async twins below never block the daemon's event loop; the daemon uses them for all its effects and polls.
+
+  async agentListAsync(): Promise<AgentListing[]> {
+    return parseAgents(await this.callAsync(["agent", "list"]));
+  }
+
+  async createTabAsync(o: { workspace: string; cwd: string; label: string; env: Record<string, string> }) {
+    const args = ["tab", "create", "--workspace", o.workspace, "--cwd", o.cwd, "--label", o.label, "--no-focus", ...envArgs(o.env)];
+    const result = await this.callAsync(args);
+    return { tabId: field(args, result, "tab", "tab_id"), rootPaneId: field(args, result, "root_pane", "pane_id") };
+  }
+
+  async closeTabAsync(tabId: string): Promise<void> {
+    await this.callAsync(["tab", "close", tabId]);
+  }
+
+  async tabExistsAsync(tabId: string): Promise<boolean> {
     try {
-      const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
-      if (code !== 0) throw new HerdrError("herdr_failed", `herdr agent list: ${stderr.trim() || `exited with ${code}`}`);
-      try {
-        return parseAgents((JSON.parse(stdout) as { result?: unknown }).result);
-      } catch (e) {
-        if (e instanceof HerdrError) throw e;
-        throw new HerdrError("bad_output", "herdr agent list: unparseable output");
-      }
-    } finally {
-      clearTimeout(timer);
+      await this.callAsync(["tab", "get", tabId]);
+      return true;
+    } catch (e) {
+      if (e instanceof HerdrError && (e.code === "tab_not_found" || e.code === "not_found")) return false;
+      throw e;
+    }
+  }
+
+  async agentPromptAsync(target: string, text: string): Promise<void> {
+    await this.callAsync(["agent", "prompt", target, text]);
+  }
+
+  async closePaneAsync(pane: string): Promise<void> {
+    await this.callAsync(["pane", "close", pane]);
+  }
+
+  async agentExistsAsync(target: string): Promise<boolean> {
+    try {
+      await this.callAsync(["agent", "get", target]);
+      return true;
+    } catch (e) {
+      if (e instanceof HerdrError && (e.code === "agent_not_found" || e.code === "pane_not_found" || e.code === "not_found")) return false;
+      throw e;
     }
   }
 
   private call(args: string[], timeoutMs = this.opts.timeoutMs ?? DEFAULT_TIMEOUT_MS): unknown {
+    return this.result(args, (this.opts.runner ?? spawnRunner)(this.opts.bin, args, this.opts.env ?? process.env, timeoutMs), timeoutMs);
+  }
+
+  private async callAsync(args: string[], timeoutMs = this.opts.timeoutMs ?? DEFAULT_TIMEOUT_MS): Promise<unknown> {
+    return this.result(args, await (this.opts.asyncRunner ?? spawnAsync)(this.opts.bin, args, this.opts.env ?? process.env, timeoutMs), timeoutMs);
+  }
+
+  private result(args: string[], r: RunResult, timeoutMs: number): unknown {
     const what = `herdr ${args.slice(0, 2).join(" ")}`;
-    const r = (this.opts.runner ?? spawnRunner)(this.opts.bin, args, this.opts.env ?? process.env, timeoutMs);
     if (r.timedOut) throw new HerdrError("timeout", `${what}: timed out after ${timeoutMs}ms`);
     if (r.exitCode !== 0) {
       let code = "herdr_failed";

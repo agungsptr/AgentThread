@@ -315,7 +315,7 @@ describe("writeAgentsFiles: symlinks, excludes, git operations", () => {
 describe("effect runner", () => {
   const LAYOUT = { workspace: "w", mainTab: "t", managerPane: "p0", loggerPane: "p1", herdrBin: "/nonexistent/herdr" };
 
-  test("writes AGENTS.md after git.worktree.add and again before every agent.spawn", () => {
+  test("writes AGENTS.md after git.worktree.add and again before every agent.spawn", async () => {
     const root = tempRepo();
     const wt = join(root, ".worktrees", "001-fix-race");
     const thread = { id: "001", title: "Fix race", slug: "fix-race", worktree: wt } as Thread;
@@ -329,20 +329,20 @@ describe("effect runner", () => {
       launch: (job) => launched.push(job.session),
       log: (m) => logs.push(m),
     });
-    run({ kind: "git.worktree.add", branch: "thread/001-fix-race", path: wt, thread: { id: "001", title: "Fix race", slug: "fix-race" } });
+    await run({ kind: "git.worktree.add", branch: "thread/001-fix-race", path: wt, thread: { id: "001", title: "Fix race", slug: "fix-race" } });
     expect(readFileSync(join(wt, "AGENTS.md"), "utf8")).toContain(`thread 001 ("Fix race")`);
     expectSymlink(wt);
     expect(status(wt)).toBe("");
 
     rmSync(join(wt, "AGENTS.md"));
     const spawn = { kind: "agent.spawn", session: "s-1", role: "coordinator", name: "coord", thread: "001", cwd: wt, pane: "p2" } as const;
-    expect(run(spawn)).toEqual([]);
+    expect(await run(spawn)).toEqual([]);
     expect(readFileSync(join(wt, "AGENTS.md"), "utf8")).toBe(agentsMd({ root, thread }));
     expect(launched).toEqual(["s-1"]);
 
     // a failed write is logged and does not block the spawn
     rmSync(wt, { recursive: true, force: true });
-    expect(run({ ...spawn, session: "s-2" })).toEqual([]);
+    expect(await run({ ...spawn, session: "s-2" })).toEqual([]);
     expect(launched).toEqual(["s-1", "s-2"]);
     expect(existsSync(join(wt, "AGENTS.md"))).toBe(false);
     expect(logs.some((m) => m.includes("writing AGENTS.md for thread 001 failed"))).toBe(true);

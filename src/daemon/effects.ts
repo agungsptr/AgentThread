@@ -2,17 +2,39 @@ import { dirname } from "node:path";
 import { AGT_BIN, agentEnv, claudeConfigDir } from "../agents/claude.ts";
 import { adapterFor } from "../agents/adapters.ts";
 import { bootstrapPrompt } from "../agents/prompts.ts";
-import { agentsMd, writeAgentsFiles } from "../agents/agents-md.ts";
+import { agentsMd, writeAgentsFilesAsync } from "../agents/agents-md.ts";
 import { launchSpawnJob, type SpawnJob } from "../agents/spawn-job.ts";
 import type { Effect } from "../commands/handler.ts";
 import type { Config } from "../config/config.ts";
 import type { EventBody, Layout } from "../domain/types.ts";
-import { HerdrCli, type HerdrBridge } from "../herdr/bridge.ts";
-import { addWorktree } from "../project/git.ts";
+import { HerdrCli } from "../herdr/bridge.ts";
+import { addWorktreeAsync } from "../project/git.ts";
 import { paths } from "../project/paths.ts";
 import type { Thread } from "../state/projection.ts";
 
 type HerdrEffect = Extract<Effect, { kind: "herdr.tab.ensure" | "herdr.tab.close" }>;
+
+/** The Herdr calls effects make. They may answer synchronously (test doubles) or not (HerdrCli's async twins). */
+export interface EffectBridge {
+  createTab(o: { workspace: string; cwd: string; label: string; env: Record<string, string> }): Promise<{ tabId: string; rootPaneId: string }> | { tabId: string; rootPaneId: string };
+  closeTab(tabId: string): Promise<void> | void;
+  tabExists(tabId: string): Promise<boolean> | boolean;
+  agentPrompt(target: string, text: string): Promise<void> | void;
+  closePane(pane: string): Promise<void> | void;
+  agentExists(target: string): Promise<boolean> | boolean;
+}
+
+/** HerdrCli through its non-blocking calls: the daemon never runs a synchronous child process after startup. */
+export function asyncHerdr(cli: HerdrCli): EffectBridge {
+  return {
+    createTab: (o) => cli.createTabAsync(o),
+    closeTab: (tab) => cli.closeTabAsync(tab),
+    tabExists: (tab) => cli.tabExistsAsync(tab),
+    agentPrompt: (target, text) => cli.agentPromptAsync(target, text),
+    closePane: (pane) => cli.closePaneAsync(pane),
+    agentExists: (target) => cli.agentExistsAsync(target),
+  };
+}
 
 export function createEffectRunner(opts: {
   root: string;
@@ -20,39 +42,40 @@ export function createEffectRunner(opts: {
   layout: () => Layout | undefined;
   thread: (id: string) => Thread | undefined;
   launch?: (job: SpawnJob) => void;
-  bridge?: (layout: Layout) => HerdrBridge;
+  bridge?: (layout: Layout) => EffectBridge;
   log?: (message: string) => void;
-}): (effect: Effect) => EventBody[] {
+}): (effect: Effect) => Promise<EventBody[]> {
   const log = opts.log ?? ((m: string) => console.error(m));
   const launch = opts.launch ?? ((job: SpawnJob) => launchSpawnJob(job, { logFile: paths(opts.root).daemonLog }));
   const bridgeFor =
     opts.bridge ??
     ((layout: Layout) =>
-      new HerdrCli({ bin: layout.herdrBin, env: { ...process.env, ...(layout.herdrSocket ? { HERDR_SOCKET_PATH: layout.herdrSocket } : {}) } }));
+      asyncHerdr(new HerdrCli({ bin: layout.herdrBin, env: { ...process.env, ...(layout.herdrSocket ? { HERDR_SOCKET_PATH: layout.herdrSocket } : {}) } })));
 
   const configDir = claudeConfigDir(opts.config);
 
   // AGENTS.md carries the role rules; a failure to write it is logged and never blocks the worktree or a spawn.
-  const writeAgents = (thread: { id: string; title: string; slug: string }, worktree: string) => {
+  const writeAgents = async (thread: { id: string; title: string; slug: string }, worktree: string) => {
     try {
-      writeAgentsFiles({ root: opts.root, worktree, content: agentsMd({ root: opts.root, thread: { ...thread, worktree } }), log });
+      await writeAgentsFilesAsync({ root: opts.root, worktree, content: agentsMd({ root: opts.root, thread: { ...thread, worktree } }), log });
     } catch (e) {
       log(`writing AGENTS.md for thread ${thread.id} failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
 
-  return (effect) => {
+  return async (effect) => {
     switch (effect.kind) {
       case "git.worktree.add":
-        addWorktree(opts.root, effect.branch, effect.path);
-        writeAgents(effect.thread, effect.path);
+        // Only from a command (thread.new): it runs before the command's events commit, so a failure fails the command.
+        await addWorktreeAsync(opts.root, effect.branch, effect.path);
+        await writeAgents(effect.thread, effect.path);
         return [];
       case "herdr.tab.ensure":
       case "herdr.tab.close": {
         const layout = opts.layout();
         if (!layout) return [];
         try {
-          return runHerdr(effect, bridgeFor(layout), layout, opts.root, configDir);
+          return await runHerdr(effect, bridgeFor(layout), layout, opts.root, configDir);
         } catch (e) {
           // Herdr is a view: a failure here must never fail the command. `agt start` reconciles missing tabs.
           log(`herdr ${effect.kind} for thread ${effect.thread} failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -65,7 +88,7 @@ export function createEffectRunner(opts: {
         const failed = (reason: string): EventBody[] => [{ type: "session.failed", thread: effect.thread, payload: { session: effect.session, reason } }];
         if (!layout) return failed("no Herdr layout registered");
         if (!t) return failed(`unknown thread ${effect.thread}`);
-        writeAgents(t, t.worktree);
+        await writeAgents(t, t.worktree);
         const prompt = { root: opts.root, role: effect.role, thread: t, ticket: effect.ticket };
         try {
           const adapter = adapterFor("claude-code");
@@ -99,7 +122,7 @@ export function createEffectRunner(opts: {
         const layout = opts.layout();
         if (!layout) return [];
         try {
-          bridgeFor(layout).agentPrompt(effect.pane, effect.text);
+          await bridgeFor(layout).agentPrompt(effect.pane, effect.text);
           return [{ type: "notice.delivered", ...(effect.thread ? { thread: effect.thread } : {}), payload: { session: effect.session, count: effect.count } }];
         } catch (e) {
           log(`notice delivery to session ${effect.session} failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -110,7 +133,7 @@ export function createEffectRunner(opts: {
         const layout = opts.layout();
         if (!layout) return [];
         try {
-          bridgeFor(layout).closePane(effect.pane);
+          await bridgeFor(layout).closePane(effect.pane);
         } catch (e) {
           log(`closing pane ${effect.pane} failed: ${e instanceof Error ? e.message : String(e)}`);
         }
@@ -120,7 +143,7 @@ export function createEffectRunner(opts: {
         const layout = opts.layout();
         if (!layout) return [];
         try {
-          return bridgeFor(layout).agentExists(effect.pane)
+          return (await bridgeFor(layout).agentExists(effect.pane))
             ? []
             : [{ type: "session.lost", ...(effect.thread ? { thread: effect.thread } : {}), payload: { session: effect.session, reason: `no agent in pane ${effect.pane}` } }];
         } catch (e) {
@@ -132,10 +155,10 @@ export function createEffectRunner(opts: {
   };
 }
 
-function runHerdr(effect: HerdrEffect, bridge: HerdrBridge, layout: Layout, root: string, configDir: string): EventBody[] {
+async function runHerdr(effect: HerdrEffect, bridge: EffectBridge, layout: Layout, root: string, configDir: string): Promise<EventBody[]> {
   if (effect.kind === "herdr.tab.ensure") {
-    if (effect.tab && bridge.tabExists(effect.tab)) return [];
-    const { tabId, rootPaneId } = bridge.createTab({
+    if (effect.tab && (await bridge.tabExists(effect.tab))) return [];
+    const { tabId, rootPaneId } = await bridge.createTab({
       workspace: layout.workspace,
       cwd: effect.cwd,
       label: effect.label,
@@ -150,6 +173,6 @@ function runHerdr(effect: HerdrEffect, bridge: HerdrBridge, layout: Layout, root
     });
     return [{ type: "thread.tab_opened", thread: effect.thread, payload: { tab: tabId, rootPane: rootPaneId } }];
   }
-  if (bridge.tabExists(effect.tab)) bridge.closeTab(effect.tab);
+  if (await bridge.tabExists(effect.tab)) await bridge.closeTab(effect.tab);
   return [{ type: "thread.tab_closed", thread: effect.thread, payload: { tab: effect.tab } }];
 }
