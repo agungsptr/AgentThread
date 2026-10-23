@@ -343,6 +343,11 @@ async function hookEvent(signal: string | undefined, env: Env, cwd: string): Pro
       transcript = parsed.transcript_path;
       source = parsed.source;
     }
+    // Claude Code adds SessionStart hook stdout to the context: after /clear or a compaction the main manager would
+    // otherwise lose its role, which it only gets as its first message.
+    if (signal === "started" && env.AGT_ROLE === "main" && (source === "clear" || source === "compact")) {
+      console.log(systemPrompt({ root: findRoot(cwd, env), role: "main" }));
+    }
     // The vendor's own session_id is never ours; identify by AGT_SESSION, else by the Herdr pane.
     const pane = env.HERDR_PANE_ID;
     if (!session && !pane) throw new Error("no session (AGT_SESSION or HERDR_PANE_ID)");

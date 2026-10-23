@@ -179,3 +179,21 @@ test("agt event identifies the session by AGT_SESSION or pane, never by the vend
   expect(bad.err).toContain("no live session in pane w9:p9");
   expect(status()).toBe("idle");
 });
+
+test("SessionStart after /clear or compaction gives the main manager its role prompt back on stdout", () => {
+  agt(["daemon", "start"]);
+  const main = { AGT_ROLE: "main", AGT_SESSION: "00000000-0000-4000-8000-0000000000aa" };
+  const prompt = systemPrompt({ root, role: "main" });
+  for (const source of ["clear", "compact"]) {
+    const r = agt(["event", "started"], main, JSON.stringify({ session_id: "x", source }));
+    expect(r.code).toBe(0);
+    expect(r.out).toBe(prompt);
+  }
+  // a fresh start already has the prompt as its first message; other roles get their rules from AGENTS.md
+  expect(agt(["event", "started"], main, JSON.stringify({ session_id: "x", source: "startup" })).out).toBe("");
+  expect(agt(["event", "started"], { AGT_ROLE: "coordinator", AGT_THREAD: "001", AGT_SESSION: main.AGT_SESSION }, JSON.stringify({ source: "clear" })).out).toBe("");
+  expect(agt(["event", "idle"], main, JSON.stringify({ source: "clear" })).out).toBe("");
+  // even with the daemon down the role prompt is printed
+  agt(["daemon", "stop"]);
+  expect(agt(["event", "started"], main, JSON.stringify({ source: "compact" })).out).toBe(prompt);
+});
