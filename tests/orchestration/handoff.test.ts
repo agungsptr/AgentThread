@@ -47,9 +47,9 @@ test("handoff request and bootstrap kinds", () => {
   expect(p.startsWith(`${HANDOFF_REQUEST_PREFIX} your coordinator session for thread 002 is being rotated (precompact).`)).toBe(true);
   for (const s of ["agt handoff 002 --stdin <<'EOF'", "## Goal status", "## Work done", "## Decisions", "## Next steps", "## Risks", "EOF"]) expect(p).toContain(s);
   const o = { root: "/repo", role: "coordinator" as const, thread: T };
-  expect(bootstrapPrompt(o)).toBe(`Start coordinating thread 002. Read ${DIR}/sub.thread.md and ${DIR}/board.md now.`);
+  expect(bootstrapPrompt(o)).toBe(`You are the coordinator of thread 002. Read ${DIR}/brief.md, then follow AGENTS.md.`);
   expect(bootstrapPrompt(o, "handoff")).toBe(
-    `Continue coordinating thread 002 as its new coordinator. Read the Handoff section of ${DIR}/sub.thread.md first, then ${DIR}/board.md.`,
+    `You are the new coordinator of thread 002; the previous session ended. Read ${DIR}/brief.md, then follow AGENTS.md.`,
   );
 });
 

@@ -51,9 +51,10 @@ test("a new thread gets a coordinator that is started through the spawner child"
   await waitFor(async () => (await events()).some((e) => e.type === "session.attached"), 10_000);
   const start = fake.read().calls.find((c) => c[0] === "agent" && c[1] === "start")!;
   expect(start.slice(0, 9)).toEqual(["agent", "start", expect.stringMatching(/^agt-[0-9a-f]{4}-c001-[0-9a-f]{4}$/), "--kind", "claude", "--pane", "w1:p1", "--timeout", "60000"]);
-  expect(start).toContain("--session-id");
+  expect(start).not.toContain("--session-id");
+  expect(start).not.toContain("--append-system-prompt");
   expect(start).toContain("acceptEdits");
-  expect(fake.read().calls.some((c) => c[0] === "agent" && c[1] === "prompt" && c[3]!.startsWith("Start coordinating thread 001."))).toBe(true);
+  expect(fake.read().calls.some((c) => c[0] === "agent" && c[1] === "prompt" && c[3]!.startsWith("You are the coordinator of thread 001. Read ") && c[3]!.endsWith("/brief.md, then follow AGENTS.md."))).toBe(true);
 });
 
 test("worker capacity: queue, finish, next worker spawns; coordinator gets notified when idle", async () => {
@@ -108,13 +109,13 @@ test("a coordinator blocked at a startup dialog is attached and gets its bootstr
   const all = await events();
   expect(all.some((e) => e.type === "session.failed")).toBe(false);
   const c = (await sessionOf("coordinator"))!.session;
-  expect(all.find((e) => e.type === "notice.queued")?.payload).toEqual({ session: c, text: expect.stringMatching(/^Start coordinating thread 001\./) });
+  expect(all.find((e) => e.type === "notice.queued")?.payload).toEqual({ session: c, text: expect.stringMatching(/^You are the coordinator of thread 001\. /) });
   // the dialog is dismissed; SessionStart fires at the empty prompt and delivers the bootstrap
   const s = fake.read();
   writeFileSync(fake.file, JSON.stringify({ ...s, fail: [] }));
   await cmd({ cmd: "session.signal", session: c, signal: "started" });
   expect((await events()).at(-1)!.type).toBe("notice.delivered");
-  expect(fake.read().calls.filter((x) => x[0] === "agent" && x[1] === "prompt" && x[2] === "w1:p1").map((x) => x[3]!.slice(0, 26))).toEqual(["Start coordinating thread "]);
+  expect(fake.read().calls.filter((x) => x[0] === "agent" && x[1] === "prompt" && x[2] === "w1:p1").map((x) => x[3]!.slice(0, 28))).toEqual(["You are the coordinator of t"]);
 });
 
 test("a hanging agent start never blocks the daemon", async () => {

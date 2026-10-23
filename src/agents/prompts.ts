@@ -33,7 +33,7 @@ export function systemPrompt(o: PromptInput): string {
       `- Split the work into tickets whose scopes do not overlap: agt ticket add ${t.id} "<title>" --scope <path> [--scope <path>].`,
       `- Start one worker per ticket that can run in parallel: agt worker spawn ${t.id} --ticket <T>. The daemon limits how many run at once and queues the rest.`,
       "- Workers only edit files. You are the only one who commits: when a ticket is done, review the change, then git add and git commit in the worktree.",
-      `- Record important decisions with agt decide ${t.id} "<decision>" and progress with agt log ${t.id} "<message>".`,
+      `- Record important decisions with agt decide ${t.id} "<decision>" and progress with agt progress ${t.id} "<message>".`,
       `- If a ticket is blocked, fix the cause, or reopen it with agt ticket reopen ${t.id}/<T> and start a new worker for it with agt worker spawn ${t.id} --ticket <T>.`,
       "- You receive short notifications (ticket done or blocked, messages) as prompts. Act on them, then stop and wait.",
       "- If you receive a HANDOFF REQUEST, write the handoff exactly as instructed and then stop.",
@@ -77,7 +77,7 @@ export function bootstrapPrompt(o: PromptInput, kind: "start" | "handoff" = "sta
   if (o.role === "main") return "";
   const dir = threadDir(o);
   const id = o.thread!.id;
-  if (o.role === "worker") return `Start ticket ${o.ticket} of thread ${id} now.`;
-  if (kind === "handoff") return `Continue coordinating thread ${id} as its new coordinator. Read the Handoff section of ${dir}/sub.thread.md first, then ${dir}/board.md.`;
-  return `Start coordinating thread ${id}. Read ${dir}/sub.thread.md and ${dir}/board.md now.`;
+  if (o.role === "worker") return `You are the worker for ticket ${o.ticket} of thread ${id}. Read ${dir}/brief.md, then follow AGENTS.md.`;
+  if (kind === "handoff") return `You are the new coordinator of thread ${id}; the previous session ended. Read ${dir}/brief.md, then follow AGENTS.md.`;
+  return `You are the coordinator of thread ${id}. Read ${dir}/brief.md, then follow AGENTS.md.`;
 }

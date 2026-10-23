@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { AGT_BIN, agentEnv, allowedTools, claudeArgs, hookCommand, hookSettings } from "../../src/agents/claude.ts";
+import { AGT_BIN, agentEnv, allowedTools, hookCommand, hookSettings } from "../../src/agents/claude.ts";
 import { bootstrapPrompt, systemPrompt } from "../../src/agents/prompts.ts";
 import { DEFAULT_CONFIG } from "../../src/config/config.ts";
 import { shellQuote } from "../../src/herdr/bridge.ts";
@@ -41,19 +41,6 @@ describe("claude adapter", () => {
     expect(allowedTools("main", DEFAULT_CONFIG, "/repo")).toEqual(["Bash(agt *)"]);
   });
 
-  test("claude args order and optional model", () => {
-    const args = claudeArgs({ session: "s-1", role: "worker", systemPrompt: "SP", config: DEFAULT_CONFIG, root: "/repo" });
-    expect(args).toEqual([
-      "--session-id", "s-1",
-      "--permission-mode", "acceptEdits",
-      "--allowed-tools", "Bash(agt *),Bash(git status*),Bash(git diff*),Bash(git log*),Read(//repo/.agentthread/**)",
-      "--settings", JSON.stringify(hookSettings()),
-      "--append-system-prompt", "SP",
-    ]);
-    const withModel = { ...DEFAULT_CONFIG, agents: { ...DEFAULT_CONFIG.agents, claude: { ...DEFAULT_CONFIG.agents.claude, model: "opus" } } };
-    expect(claudeArgs({ session: "s", role: "main", systemPrompt: "x", config: withModel, root: "/repo" }).slice(8, 10)).toEqual(["--model", "opus"]);
-  });
-
   test("agent env puts agt on PATH and identifies the session", () => {
     const env = agentEnv({ root: "/repo", role: "worker", session: "s-1", thread: "002", ticket: "T3" });
     expect(env).toMatchObject({ AGT_ROOT: "/repo", AGT_ROLE: "worker", AGT_SESSION: "s-1", AGT_AGENT: "claude-code", AGT_THREAD: "002", AGT_TICKET: "T3" });
@@ -69,7 +56,7 @@ describe("prompts", () => {
       expect(p).toContain(s);
     }
     expect(bootstrapPrompt({ root: "/repo", role: "coordinator", thread: T })).toBe(
-      `Start coordinating thread 002. Read ${DIR}/sub.thread.md and ${DIR}/board.md now.`,
+      `You are the coordinator of thread 002. Read ${DIR}/brief.md, then follow AGENTS.md.`,
     );
   });
 
@@ -78,7 +65,7 @@ describe("prompts", () => {
     for (const s of ["ticket T3 of thread 002", "agt ticket claim 002/T3", "agt ticket done 002/T3", "agt ticket block 002/T3", "Do not commit", "Run tests only with commands you are allowed to run without asking for approval; if a command you need requires approval, block the ticket and name the command in the reason."]) {
       expect(p).toContain(s);
     }
-    expect(bootstrapPrompt({ root: "/repo", role: "worker", thread: T, ticket: "T3" })).toBe("Start ticket T3 of thread 002 now.");
+    expect(bootstrapPrompt({ root: "/repo", role: "worker", thread: T, ticket: "T3" })).toBe(`You are the worker for ticket T3 of thread 002. Read ${DIR}/brief.md, then follow AGENTS.md.`);
   });
 
   test("main prompt requires user confirmation before creating threads", () => {

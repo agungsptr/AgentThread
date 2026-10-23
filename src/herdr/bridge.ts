@@ -45,7 +45,7 @@ export interface HerdrBridge {
   splitPane(o: { pane: string; direction: "right" | "down"; cwd: string; env: Record<string, string> }): string;
   renamePane(paneId: string, label: string): void;
   runInPane(paneId: string, command: string): void;
-  agentStart(o: { name: string; kind: "claude" | "opencode"; pane: string; args: string[]; timeoutMs?: number }): void;
+  agentStart(o: { name: string; kind: string; pane: string; args: string[]; timeoutMs?: number }): void;
   agentPrompt(target: string, text: string): void;
   closePane(pane: string): void;
   agentExists(target: string): boolean;
@@ -102,7 +102,7 @@ export class HerdrCli implements HerdrBridge {
     this.call(["pane", "run", paneId, command]);
   }
 
-  agentStart(o: { name: string; kind: "claude" | "opencode"; pane: string; args: string[]; timeoutMs?: number }): void {
+  agentStart(o: { name: string; kind: string; pane: string; args: string[]; timeoutMs?: number }): void {
     const herdrTimeout = o.timeoutMs ?? 60_000;
     this.call(
       ["agent", "start", o.name, "--kind", o.kind, "--pane", o.pane, "--timeout", String(herdrTimeout), "--", ...o.args],

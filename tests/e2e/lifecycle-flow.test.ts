@@ -75,7 +75,7 @@ test("rotation on precompact, then recovery by replacement", async () => {
   expect(sessions().find((s) => s.id === c1.id)!.status).toBe("rotated");
   expect(c2.pane).not.toBe(c1.pane);
   expect(fake.read().calls.some((x) => x.join(" ") === `pane close ${c1.pane}`)).toBe(true);
-  expect(prompts().some((p) => p.startsWith("Continue coordinating thread 001 as its new coordinator."))).toBe(true);
+  expect(prompts().some((p) => p.startsWith("You are the new coordinator of thread 001;"))).toBe(true);
   expect(readFileSync(join(root, ".agentthread/threads/001-login/sub.thread.md"), "utf8")).toContain("Goal status written by the coordinator");
 
   // the agent in c2's pane disappears → agt start replaces it with a fresh coordinator in a new split (never --resume)
@@ -98,7 +98,7 @@ test("rotation on precompact, then recovery by replacement", async () => {
   expect(sessions().find((x) => x.id === c2.id)!.status).toBe("lost");
 
   // the replacement got the replacement bootstrap, and its hooks (carrying its own AGT_SESSION) are accepted
-  await waitFor(() => prompts().filter((p) => p.startsWith("Continue coordinating thread 001 as its new coordinator.")).length >= 2, 10_000);
+  await waitFor(() => prompts().filter((p) => p.startsWith("You are the new coordinator of thread 001;")).length >= 2, 10_000);
   hook("started", c3.id, c3.id);
   expect(sessions().find((x) => x.id === c3.id)!.status).toBe("idle");
   hook("active", c3.id, c3.id);

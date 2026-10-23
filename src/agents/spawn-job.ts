@@ -9,7 +9,7 @@ export interface SpawnJob {
   herdrSocket?: string;
   session: string;
   name: string;
-  kind: "claude";
+  kind: string;
   pane?: string;
   split?: { pane: string; direction: "right" | "down"; cwd: string; env: Record<string, string> };
   args: string[];

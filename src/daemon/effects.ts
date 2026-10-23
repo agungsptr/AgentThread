@@ -1,6 +1,7 @@
 import { dirname } from "node:path";
-import { AGT_BIN, agentEnv, claudeArgs, claudeConfigDir } from "../agents/claude.ts";
-import { bootstrapPrompt, systemPrompt } from "../agents/prompts.ts";
+import { AGT_BIN, agentEnv, claudeConfigDir } from "../agents/claude.ts";
+import { adapterFor } from "../agents/adapters.ts";
+import { bootstrapPrompt } from "../agents/prompts.ts";
 import { agentsMd, writeAgentsFiles } from "../agents/agents-md.ts";
 import { launchSpawnJob, type SpawnJob } from "../agents/spawn-job.ts";
 import type { Effect } from "../commands/handler.ts";
@@ -67,13 +68,14 @@ export function createEffectRunner(opts: {
         writeAgents(t, t.worktree);
         const prompt = { root: opts.root, role: effect.role, thread: t, ticket: effect.ticket };
         try {
+          const adapter = adapterFor("claude-code");
           launch({
             root: opts.root,
             herdrBin: layout.herdrBin,
             ...(layout.herdrSocket ? { herdrSocket: layout.herdrSocket } : {}),
             session: effect.session,
             name: effect.name,
-            kind: "claude",
+            kind: adapter.herdrKind,
             ...(effect.pane ? { pane: effect.pane } : {}),
             ...(effect.splitFrom
               ? {
@@ -85,7 +87,7 @@ export function createEffectRunner(opts: {
                   },
                 }
               : {}),
-            args: claudeArgs({ session: effect.session, role: effect.role, systemPrompt: systemPrompt(prompt), config: opts.config, root: opts.root }),
+            args: adapter.startArgs({ role: effect.role, config: opts.config, root: opts.root }),
             bootstrap: bootstrapPrompt(prompt, effect.bootstrap ?? "start"),
           });
           return [];

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
+import { systemPrompt } from "../../src/agents/prompts.ts";
 import { initProject } from "../../src/project/init.ts";
 import { FAKE_CLAUDE, FAKE_HERDR, fakeHerdrState, isolatedConfigHome, tempRepo } from "../helpers.ts";
 
@@ -39,12 +40,15 @@ afterEach(() => {
   agt(["daemon", "stop"]);
 });
 
-test("agt start runs the main manager in the foreground with session, hooks and role", () => {
+test("agt start runs the main manager in the foreground with hooks, role and the main prompt as first message", () => {
   const r = agt(["start"]);
   expect(r.code).toBe(0);
   const id = /main manager session ([0-9a-f-]{36})/.exec(r.out)![1]!;
   const run = JSON.parse(readFileSync(claudeLog, "utf8").trim()) as { argv: string[]; env: Record<string, string> };
-  expect(run.argv.slice(0, 4)).toEqual(["--session-id", id, "--permission-mode", "acceptEdits"]);
+  expect(run.argv.slice(0, 2)).toEqual(["--permission-mode", "acceptEdits"]);
+  expect(run.argv).not.toContain("--session-id");
+  expect(run.argv).not.toContain("--append-system-prompt");
+  expect(run.argv[run.argv.length - 1]).toBe(systemPrompt({ root, role: "main" }));
   expect(run.argv).toContain("--settings");
   expect(run.env).toMatchObject({ AGT_ROLE: "main", AGT_SESSION: id, AGT_ROOT: root, AGT_AGENT: "claude-code" });
   const fm = readFileSync(join(root, ".agentthread", "main.thread.md"), "utf8");

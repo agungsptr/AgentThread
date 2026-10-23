@@ -4,7 +4,8 @@ import { closeSync, openSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { stringify } from "yaml";
-import { agentEnv, claudeArgs } from "../agents/claude.ts";
+import { agentEnv } from "../agents/claude.ts";
+import { adapterFor } from "../agents/adapters.ts";
 import { systemPrompt } from "../agents/prompts.ts";
 import { decodeJob, runSpawnJob } from "../agents/spawn-job.ts";
 import { contextTokensFromTranscript } from "../agents/transcript.ts";
@@ -306,7 +307,7 @@ async function start(root: string, env: Env, argv: string[]): Promise<number> {
   const bin = env.AGT_CLAUDE_BIN ?? "claude";
   let code: number;
   try {
-    const proc = Bun.spawn([bin, ...claudeArgs({ session, role: "main", systemPrompt: systemPrompt({ root, role: "main" }), config, root })], {
+    const proc = Bun.spawn([bin, ...adapterFor(config.agents.main_manager).startArgs({ role: "main", config, root }), systemPrompt({ root, role: "main" })], {
       stdio: ["inherit", "inherit", "inherit"],
       cwd: root,
       env: { ...env, ...agentEnv({ root, role: "main", session }) },

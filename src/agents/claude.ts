@@ -37,18 +37,6 @@ export function allowedTools(role: SessionRole, config: Config, root?: string): 
   return [...base, ...stateFiles, ...config.agents.claude.extra_allowed_tools];
 }
 
-export function claudeArgs(o: { session: string; role: SessionRole; systemPrompt: string; config: Config; root: string }): string[] {
-  const claude = o.config.agents.claude;
-  return [
-    "--session-id", o.session,
-    "--permission-mode", claude.permission_mode,
-    "--allowed-tools", allowedTools(o.role, o.config, o.root).join(","),
-    "--settings", JSON.stringify(hookSettings()),
-    ...(claude.model ? ["--model", claude.model] : []),
-    "--append-system-prompt", o.systemPrompt,
-  ];
-}
-
 export function agentEnv(o: { root: string; role: SessionRole; session: string; thread?: string; ticket?: string; configDir?: string }): Record<string, string> {
   return {
     AGT_ROOT: o.root,
