@@ -199,7 +199,8 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
     }
     case "thread.cancel":
       if (!t.tierProposal) reject(`thread ${t.id} is not waiting for a tier`);
-      return { events: [{ type: "thread.status_changed", thread: t.id, payload: { from: t.status, to: "done", reason: "cancelled before start" } }] };
+      // The usual path to done (dependents unblock), though an open or blocked thread cannot otherwise go straight to done.
+      return threadStatus(state, t, "done", "cancelled before start", ctx, { cancel: true });
     case "ticket.add": {
       if (t.status === "done") reject(`thread ${t.id} is done`);
       const ticket = `T${t.tickets.length + 1}`;
@@ -345,8 +346,8 @@ function checkTier(tier: string, ctx: HandlerContext): void {
   if (!tiers.includes(tier)) reject(`unknown tier ${tier}; configured: ${tiers.join(", ") || "(none)"}`);
 }
 
-function threadStatus(state: State, t: Thread, to: ThreadStatus, reason: string | undefined, ctx: HandlerContext): Decision {
-  if (!canTransitionThread(t.status, to)) reject(`thread ${t.id} cannot go ${t.status} → ${to}`);
+function threadStatus(state: State, t: Thread, to: ThreadStatus, reason: string | undefined, ctx: HandlerContext, how: { cancel?: boolean } = {}): Decision {
+  if (!how.cancel && !canTransitionThread(t.status, to)) reject(`thread ${t.id} cannot go ${t.status} → ${to}`);
   if ((to === "open" || to === "in_progress") && !depsDone(state, t.dependsOn)) {
     reject(`thread ${t.id} has unfinished dependencies: ${t.dependsOn.join(", ")}`);
   }

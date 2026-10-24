@@ -192,6 +192,8 @@ async function thread(sub: string | undefined, args: string[], root: string, env
       now: { type: "boolean" },
     });
     if (!positionals.length || !values.type) throw new UsageError("thread new needs <title> --type <type>");
+    if (values.tier !== undefined && !values.reason) throw new UsageError('--tier needs --reason "<why>"');
+    if (values.reason !== undefined && values.tier === undefined) throw new UsageError("--reason needs --tier");
     let maxWorkers: number | undefined;
     if (values["max-workers"] !== undefined) {
       maxWorkers = Number(values["max-workers"]);

@@ -126,12 +126,12 @@ export function spawnReplacement(
   const session = ctx.newId();
   const name = agentName(ctx.root, "coordinator", t.id, undefined, session);
   const carried = old.notices.filter((n) => !n.startsWith(HANDOFF_REQUEST_PREFIX));
-  // A thread with a tier always runs at that tier (roles.coordinator once the tier is gone from the config). Otherwise a
-  // replacement keeps the agent of the session it replaces, even when the config has changed since.
-  const run: RoleAgent =
-    t.tier !== undefined
-      ? tierAgent(ctx.config, t.tier)
-      : { agent: old.agent, ...(old.model ? { model: old.model } : {}), ...(old.effort ? { effort: old.effort } : {}) };
+  // A replacement keeps the agent of the session it replaces, even when the config (or the thread's tier) has changed
+  // since; only a thread whose tier is gone from the config falls back to roles.coordinator.
+  const tierGone = t.tier !== undefined && !Object.hasOwn(ctx.config.agents.complexity.tiers, t.tier);
+  const run: RoleAgent = tierGone
+    ? roleAgent(ctx.config, "coordinator")
+    : { agent: old.agent, ...(old.model ? { model: old.model } : {}), ...(old.effort ? { effort: old.effort } : {}) };
   return {
     events: [
       {

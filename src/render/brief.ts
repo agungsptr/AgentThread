@@ -33,7 +33,7 @@ const LEVELS: Limits[] = [
 
 export function renderBrief(o: { thread: Thread; sessions?: Session[]; trail?: GitTrail; dir?: string; config?: Config }): string {
   let md = "";
-  const tier = tierLines(o.thread, o.config ?? DEFAULT_CONFIG);
+  const tier = tierLines(o.thread, o.sessions ?? [], o.config ?? DEFAULT_CONFIG);
   for (const lim of LEVELS) {
     md = build(o.thread, o.trail, lim, tier);
     if (Buffer.byteLength(md) < MAX_BYTES) break;

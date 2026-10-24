@@ -2,7 +2,9 @@ import { expect, test } from "bun:test";
 import { ConfigSchema } from "../../src/config/config.ts";
 import type { EventBody, StoredEvent } from "../../src/domain/types.ts";
 import { react } from "../../src/orchestration/reactor.ts";
-import { spawnReplacement } from "../../src/orchestration/sessions.ts";
+import { rotateCoordinator, spawnReplacement } from "../../src/orchestration/sessions.ts";
+import { renderBrief } from "../../src/render/brief.ts";
+import { renderSub } from "../../src/render/markdown.ts";
 import { dueProposals } from "../../src/orchestration/tiers.ts";
 import { applyEvent, type State } from "../../src/state/projection.ts";
 import { INIT, USER, stateOf, threadCreated } from "../helpers.ts";
@@ -120,6 +122,49 @@ test("a replacement coordinator keeps the tier", () => {
   const s = withCoordinator("big");
   const r = spawnReplacement(s.threads.get("001")!, s.sessions.get(C)!, ctx(), { bootstrap: "handoff" });
   expect(r.effects[0]).toMatchObject({ kind: "agent.spawn", run: { agent: "omp", model: "m1", effort: "high" } });
+});
+
+test("editing the tier's model, then rotating, keeps the old model", () => {
+  const s = withCoordinator("big");
+  const edited = ConfigSchema.parse({
+    agents: { roles: { coordinator: { agent: "codex" } }, complexity: { tiers: { big: { agent: "omp", model: "m2", effort: "low" } } } },
+  });
+  const r = rotateCoordinator(s, s.sessions.get(C)!, "turns", ctx(edited));
+  expect(r.events.find((e) => e.type === "session.created")!.payload).toMatchObject({ agent: "omp", model: "m1", effort: "high", replaces: C });
+  expect(r.effects[0]).toMatchObject({ kind: "agent.spawn", run: { agent: "omp", model: "m1", effort: "high" } });
+});
+
+test("the Tier line shows the running coordinator session; before one exists, the config", () => {
+  const s = withCoordinator("big");
+  const edited = ConfigSchema.parse({ agents: { complexity: { tiers: { big: { agent: "omp", model: "m2" } } } } });
+  const t = s.threads.get("001")!;
+  const sessions = [...s.sessions.values()];
+  expect(renderBrief({ thread: t, sessions, config: edited })).toContain("Tier: big (omp m1 high), chosen by user: touches auth");
+  expect(renderSub(t, sessions, edited)).toContain("Tier: big (omp m1 high), chosen by user: touches auth");
+  expect(renderBrief({ thread: t, sessions: [], config: edited })).toContain("Tier: big (omp m2 default), chosen by user: touches auth");
+});
+
+test("a notice delivered to main pauses the timer", () => {
+  const s = proposed();
+  apply(s, at(1_000), { type: "notice.queued", payload: { session: M, text: "hi" } });
+  const r = react(s, apply(s, at(2_000), { type: "notice.delivered", payload: { session: M, count: 1 } }), ctx());
+  expect(r.events).toEqual([{ type: "thread.tier_timer", thread: "001", payload: { state: "paused" } }]);
+});
+
+test("main session.started (idle) and session.ended resume a paused timer", () => {
+  const s = proposed(false);
+  // a fresh main session: started leaves it idle at the prompt
+  apply(s, at(1_000), { type: "session.ended", payload: { session: M } });
+  const M2 = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  apply(s, at(1_000), { type: "session.created", payload: { session: M2, role: "main", agent: "claude-code", name: "m" } });
+  apply(s, at(1_000), { type: "thread.tier_timer", thread: "001", payload: { state: "paused" } });
+  const started = react(s, apply(s, at(2_000), { type: "session.started", payload: { session: M2 } }), ctx());
+  expect(started.events).toEqual([{ type: "thread.tier_timer", thread: "001", payload: { state: "running" } }]);
+
+  const p = proposed(false);
+  apply(p, at(1_000), { type: "session.active", payload: { session: M } });
+  const ended = react(p, apply(p, at(2_000), { type: "session.ended", payload: { session: M } }), ctx());
+  expect(ended.events).toEqual([{ type: "thread.tier_timer", thread: "001", payload: { state: "running" } }]);
 });
 
 test("with the tier deleted from config, the replacement uses roles.coordinator", () => {

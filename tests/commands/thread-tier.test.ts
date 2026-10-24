@@ -4,6 +4,7 @@ import { handle, type HandleResult } from "../../src/commands/handler.ts";
 import { CommandSchema } from "../../src/commands/schema.ts";
 import type { Actor, EventBody, StoredEvent } from "../../src/domain/types.ts";
 import { react } from "../../src/orchestration/reactor.ts";
+import { dueProposals } from "../../src/orchestration/tiers.ts";
 import { renderBrief } from "../../src/render/brief.ts";
 import { renderSub } from "../../src/render/markdown.ts";
 import { applyEvent, type State } from "../../src/state/projection.ts";
@@ -159,6 +160,27 @@ test("cancel marks the thread done and gives no coordinator", () => {
   expect(s.threads.get("001")!.status).toBe("done");
   expect(s.threads.get("001")!.tierProposal).toBeUndefined();
   expect(run(s, { cmd: "thread.choose", thread: "001", tier: "big" }).r).toEqual({ ok: false, error: "thread 001 is not waiting for a tier" });
+});
+
+test("cancel unblocks a thread that depends on the cancelled one", () => {
+  const s = base();
+  run(s, { ...NEW, tier: "big", reason: "x" });
+  run(s, { ...NEW, title: "After", dependsOn: ["001"] });
+  expect(s.threads.get("002")!.status).toBe("blocked");
+  const { r } = run(s, { cmd: "thread.cancel", thread: "001" });
+  expect(r.ok && r.events.map((e) => [e.thread, e.payload])).toEqual([
+    ["001", { from: "open", to: "done", reason: "cancelled before start" }],
+    ["002", { from: "blocked", to: "open", reason: "dependencies done" }],
+  ]);
+  expect(s.threads.get("002")!.status).toBe("open");
+});
+
+test("a proposal runs and comes due with no main session at all", () => {
+  n = 0;
+  const s = stateOf(INIT);
+  const { r } = run(s, { ...NEW, tier: "big", reason: "x" }, USER);
+  expect(r.ok && types(r.events)).toEqual(["thread.created", "thread.tier_proposed", "thread.tier_timer"]);
+  expect(dueProposals(s, Date.parse("2026-10-24T10:00:10.000Z"), 10_000)).toEqual(["001"]);
 });
 
 test("choose and cancel are rejected for a thread that was never proposed", () => {

@@ -96,3 +96,27 @@ test("a proposed thread gets no tab on a daemon restart or reconcile; choose sta
   expect(readFileSync(join(subDir(), "brief.md"), "utf8")).toContain("Tier: big (opencode p/m default), chosen by user: r");
   expect(readFileSync(join(root, ".agentthread/threads/002-other/sub.thread.md"), "utf8")).toContain("status: done");
 }, 30_000);
+
+test("a running timer survives a daemon restart: an overdue proposal fires on the first tick after it", async () => {
+  setup("1s");
+  agt(["start", "--no-manager"]);
+  agt(["thread", "new", "Login", "--type", "feature", "--tier", "big", "--reason", "r"]);
+  agt(["daemon", "stop"]);
+  await Bun.sleep(1_200);
+  expect(tabCreates()).toBe(0);
+  agt(["daemon", "start"]);
+  const c = await waitFor(() => coordinator(), 1_500);
+  expect(fake.read().kinds).toEqual({ [c.pane!]: "opencode" });
+  expect(readFileSync(join(subDir(), "brief.md"), "utf8")).toContain("chosen by auto: r");
+}, 20_000);
+
+test("the CLI requires --reason with --tier, and --tier with --reason", () => {
+  setup("1h");
+  const r = (args: string[]) => Bun.spawnSync([process.execPath, BIN, ...args], { cwd: root, env: { PATH: process.env.PATH ?? "", HOME: "/nonexistent", XDG_CONFIG_HOME: xdg, AGT_ROOT: root }, stdout: "pipe", stderr: "pipe" });
+  const noReason = r(["thread", "new", "Login", "--type", "feature", "--tier", "big"]);
+  expect(noReason.exitCode).toBe(2);
+  expect(noReason.stderr.toString()).toContain('--tier needs --reason "<why>"');
+  const noTier = r(["thread", "new", "Login", "--type", "feature", "--reason", "x"]);
+  expect(noTier.exitCode).toBe(2);
+  expect(noTier.stderr.toString()).toContain("--reason needs --tier");
+});

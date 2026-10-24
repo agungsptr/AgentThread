@@ -40,12 +40,17 @@ export function renderMain(state: State, config: Config = DEFAULT_CONFIG): strin
   ].join("\n");
 }
 
-/** `Tier: <tier> (<agent> <model> <effort>), chosen by user|auto: <reason>`, once the thread's tier is chosen. */
-export function tierLines(t: Thread, config: Config): string[] {
+/**
+ * `Tier: <tier> (<agent> <model> <effort>), chosen by user|auto: <reason>`, once the thread's tier is chosen. The run is
+ * the thread's latest coordinator session's; before one exists, the config's.
+ */
+export function tierLines(t: Thread, sessions: Session[], config: Config): string[] {
   if (t.tier === undefined) return [];
   const by = t.tierChoice?.auto ? "auto" : "user";
   const reason = t.tierChoice?.reason ? `: ${oneLine(t.tierChoice.reason)}` : "";
-  return [`Tier: ${t.tier} (${tierRun(config, t.tier)}), chosen by ${by}${reason}`];
+  const c = sessions.filter((s) => s.thread === t.id && s.role === "coordinator").at(-1);
+  const run = c ? `${c.agent} ${c.model ?? "default"} ${c.effort ?? "default"}` : tierRun(config, t.tier);
+  return [`Tier: ${t.tier} (${run}), chosen by ${by}${reason}`];
 }
 
 export function renderSub(t: Thread, sessions: Session[] = [], config: Config = DEFAULT_CONFIG): string {
@@ -77,7 +82,7 @@ export function renderSub(t: Thread, sessions: Session[] = [], config: Config = 
     frontmatter,
     "---",
     "",
-    ...(t.tier !== undefined ? [...tierLines(t, config), ""] : []),
+    ...(t.tier !== undefined ? [...tierLines(t, sessions, config), ""] : []),
     "## Goal",
     "",
     clampHeadings(t.goal.trim()) || "_Not set._",
