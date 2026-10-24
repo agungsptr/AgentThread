@@ -33,7 +33,9 @@ coordinators and workers are started by Herdr, which picks the executable itself
 cd your-repo
 agt init        # creates .agentthread/ (runs the setup wizard on a terminal when agents.roles is missing)
 agt start       # run inside a Herdr pane: sets up the main tab, then opens the main manager
-agt setup       # (agt start also runs it on a terminal when roles are missing; without a terminal it prints a hint and uses claude-code for every role) re-run the per-project wizard: agent, model and effort per role, and complexity tiers
+                # (also runs the wizard on a terminal when roles are missing; without one it prints a hint
+                # and uses claude-code for every role)
+agt setup       # re-run the per-project wizard: agent, model and effort per role, and complexity tiers
 ```
 
 Describe a feature or bug to the main manager. After you confirm, it creates a thread; the coordinator and workers take it from there.
