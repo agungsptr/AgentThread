@@ -28,6 +28,9 @@ const USAGE = `usage: agt <command>
   daemon start|stop|status
   config
   thread new <title...> --type feature|bug|chore [--goal <text>] [--criteria <text>]... [--depends <id>]... [--max-workers <n>]
+             [--tier <name> --reason <why> [--now]]
+  thread choose <id> --tier <name>
+  thread cancel <id>
   thread status <id> <status> [--reason <text>]
   ticket add <thread> <title...> --scope <path> [--scope <path>]...
   ticket claim|reopen <thread>/<ticket>
@@ -184,6 +187,9 @@ async function thread(sub: string | undefined, args: string[], root: string, env
       criteria: { type: "string", multiple: true },
       depends: { type: "string", multiple: true },
       "max-workers": { type: "string" },
+      tier: { type: "string" },
+      reason: { type: "string" },
+      now: { type: "boolean" },
     });
     if (!positionals.length || !values.type) throw new UsageError("thread new needs <title> --type <type>");
     let maxWorkers: number | undefined;
@@ -199,7 +205,19 @@ async function thread(sub: string | undefined, args: string[], root: string, env
       criteria: values.criteria ?? [],
       dependsOn: values.depends ?? [],
       maxWorkers,
+      ...(values.tier !== undefined ? { tier: values.tier } : {}),
+      ...(values.reason !== undefined ? { reason: values.reason } : {}),
+      ...(values.now ? { now: true } : {}),
     });
+  }
+  if (sub === "choose") {
+    const { values, positionals } = parse(args, { tier: { type: "string" } });
+    if (!positionals[0] || !values.tier) throw new UsageError("thread choose needs <id> --tier <name>");
+    return send(root, env, { cmd: "thread.choose", thread: positionals[0], tier: values.tier });
+  }
+  if (sub === "cancel") {
+    if (!args[0] || args.length > 1) throw new UsageError("thread cancel needs <id>");
+    return send(root, env, { cmd: "thread.cancel", thread: args[0] });
   }
   if (sub === "status") {
     const { values, positionals } = parse(args, { reason: { type: "string" } });
@@ -307,7 +325,7 @@ async function start(root: string, env: Env, argv: string[]): Promise<number> {
   let code: number;
   try {
     const launched = adapter.launch({ role: "main", run, config, root, ...gitCommonDir(root) });
-    const proc = Bun.spawn([bin, ...launched.args, ...adapter.promptArgs(systemPrompt({ root, role: "main" }))], {
+    const proc = Bun.spawn([bin, ...launched.args, ...adapter.promptArgs(systemPrompt({ root, role: "main", config }))], {
       stdio: ["inherit", "inherit", "inherit"],
       cwd: root,
       env: { ...env, ...launched.env, ...agentEnv({ root, role: "main", agent: run.agent, session }) },
@@ -356,7 +374,14 @@ async function hookEvent(signal: string | undefined, env: Env, cwd: string): Pro
     // otherwise lose its role, which it only gets as its first message.
     // Only Claude Code has this hook; a session without AGT_AGENT predates it and is Claude Code.
     if (signal === "started" && env.AGT_ROLE === "main" && (env.AGT_AGENT ?? "claude-code") === "claude-code" && (source === "clear" || source === "compact")) {
-      console.log(systemPrompt({ root: findRoot(cwd, env), role: "main" }));
+      const root = findRoot(cwd, env);
+      let config;
+      try {
+        config = loadConfig(root, env);
+      } catch {
+        // a broken config must not cost main its role; the tier lines are left out
+      }
+      console.log(systemPrompt({ root, role: "main", config }));
     }
     // The vendor's own session_id is never ours; identify by AGT_SESSION, else by the Herdr pane.
     const pane = env.HERDR_PANE_ID;

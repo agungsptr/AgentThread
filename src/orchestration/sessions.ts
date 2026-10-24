@@ -26,6 +26,11 @@ export function tabEnv(t: { id: string; tier?: string }, ctx: { root: string; co
   return { ...base, ...adapterFor(run.agent).launch({ role: "coordinator", run, config: ctx.config, root: ctx.root }).env };
 }
 
+/** Opens (or re-finds) a thread's Herdr tab, with the env its first coordinator inherits. */
+export function tabEnsure(t: { id: string; slug: string; worktree: string; tab?: string; tier?: string }, ctx: { root: string; config: Config }): Effect {
+  return { kind: "herdr.tab.ensure", thread: t.id, label: `${t.id}-${t.slug}`, cwd: t.worktree, env: tabEnv(t, ctx), ...(t.tab ? { tab: t.tab } : {}) };
+}
+
 export function liveSessions(state: State, thread?: string, role?: SessionRole): Session[] {
   return [...state.sessions.values()].filter(
     (s) => isLive(s) && (thread === undefined || s.thread === thread) && (role === undefined || s.role === role),
@@ -121,8 +126,12 @@ export function spawnReplacement(
   const session = ctx.newId();
   const name = agentName(ctx.root, "coordinator", t.id, undefined, session);
   const carried = old.notices.filter((n) => !n.startsWith(HANDOFF_REQUEST_PREFIX));
-  // A replacement keeps the agent of the session it replaces, even when the config has changed since.
-  const run: RoleAgent = { agent: old.agent, ...(old.model ? { model: old.model } : {}), ...(old.effort ? { effort: old.effort } : {}) };
+  // A thread with a tier always runs at that tier (roles.coordinator once the tier is gone from the config). Otherwise a
+  // replacement keeps the agent of the session it replaces, even when the config has changed since.
+  const run: RoleAgent =
+    t.tier !== undefined
+      ? tierAgent(ctx.config, t.tier)
+      : { agent: old.agent, ...(old.model ? { model: old.model } : {}), ...(old.effort ? { effort: old.effort } : {}) };
   return {
     events: [
       {

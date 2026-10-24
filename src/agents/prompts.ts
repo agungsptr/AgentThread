@@ -1,4 +1,6 @@
+import type { Config } from "../config/config.ts";
 import type { SessionRole } from "../domain/types.ts";
+import { tierList } from "../orchestration/tiers.ts";
 import { paths } from "../project/paths.ts";
 
 interface PromptInput {
@@ -6,6 +8,8 @@ interface PromptInput {
   role: SessionRole;
   thread?: { id: string; title: string; slug: string; worktree: string };
   ticket?: string;
+  /** Main's tier lines are rendered from it; without configured tiers they are left out. */
+  config?: Config;
 }
 
 const threadDir = (o: PromptInput) => paths(o.root).threadDir(o.thread!);
@@ -17,6 +21,7 @@ export function systemPrompt(o: PromptInput): string {
       `The state of every thread is in ${paths(o.root).mainThread}; read it whenever you need the big picture.`,
       "When the user describes a feature or a bug, draft a short title, a goal and acceptance criteria and show them to the user.",
       'Only after the user confirms, create the thread with: agt thread new "<title>" --type feature|bug|chore --goal "<goal>" --criteria "<criterion>" (repeat --criteria).',
+      ...tierPromptLines(o.config),
       'To pass a message to a thread\'s coordinator use: agt tell <thread-id> "<message>".',
       "Do not edit project source files yourself; implementation happens in the thread worktrees.",
       "You will receive short notifications (for example a thread ready for review) as prompts; relay them to the user.",
@@ -49,6 +54,15 @@ export function systemPrompt(o: PromptInput): string {
     `3. agt ticket done ${t.id}/${o.ticket} --summary "<one line>" — or, if you cannot finish, agt ticket block ${t.id}/${o.ticket} --reason "<why>".`,
     "Do not commit; the coordinator commits. Never bypass the commit guard (no git commit --no-verify, no changing core.hooksPath or AGT_ROLE). Do not work on other tickets.",
   ].join("\n");
+}
+
+function tierPromptLines(config: Config | undefined): string[] {
+  const tiers = config ? tierList(config) : [];
+  if (!config || tiers.length === 0) return [];
+  return [
+    `Before creating a thread, judge its complexity and pick one tier from: ${tiers.join(", ")}. Create it with agt thread new … --tier <name> --reason "<why>", tell the user the tier and why, say it starts in ${config.agents.complexity.timeout} unless they choose another, then end your turn.`,
+    "If the user picks another tier, run agt thread choose <id> --tier <name>; if they want to stop, agt thread cancel <id>. If the user named a tier themselves, add --now.",
+  ];
 }
 
 export const HANDOFF_REQUEST_PREFIX = "HANDOFF REQUEST:";

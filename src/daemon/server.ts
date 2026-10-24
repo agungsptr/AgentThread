@@ -3,11 +3,12 @@ import { rmSync } from "node:fs";
 import { configWarnings } from "../agents/roles.ts";
 import type { SpawnJob } from "../agents/spawn-job.ts";
 import { handle, type Effect } from "../commands/handler.ts";
-import { ActorSchema, CommandSchema } from "../commands/schema.ts";
+import { ActorSchema, CommandSchema, type Command } from "../commands/schema.ts";
 import { durationMs, loadConfig, type Config } from "../config/config.ts";
 import type { Actor, EventBody, StoredEvent } from "../domain/types.ts";
 import { react } from "../orchestration/reactor.ts";
 import { sweep } from "../orchestration/sweep.ts";
+import { dueProposals } from "../orchestration/tiers.ts";
 import { paths } from "../project/paths.ts";
 import { trailCache } from "../project/gittrail.ts";
 import { writeAll } from "../render/write.ts";
@@ -195,20 +196,27 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
   const pollTimer = setInterval(() => {
     if (shuttingDown) return;
     void enqueue(async () => {
-      const layout = state.layout;
-      if (!layout) return;
-      let listed;
-      try {
-        listed = await new HerdrCli({ bin: layout.herdrBin, env: { ...process.env, ...(layout.herdrSocket ? { HERDR_SOCKET_PATH: layout.herdrSocket } : {}) } }).agentListAsync();
-      } catch (e) {
-        log(`herdr poll failed: ${e instanceof Error ? e.message : String(e)}`);
-        return;
-      }
       const actor: Actor = { role: "user" };
-      for (const d of diffAgentStatus({ sessions: [...state.sessions.values()], listed, misses })) {
-        const decision = handle(state, { cmd: "session.signal", session: d.session, signal: d.signal }, actor, { root, config, newId: randomUUID });
-        if (!decision.ok) continue;
-        await applyAndReact([...decision.events, ...(await runEffects(decision.effects))], actor);
+      const run = async (command: Command) => {
+        const decision = handle(state, command, actor, { root, config, newId: randomUUID });
+        if (decision.ok) await applyAndReact([...decision.events, ...(await runEffects(decision.effects))], actor);
+      };
+      const layout = state.layout;
+      if (layout) {
+        let listed;
+        try {
+          listed = await new HerdrCli({ bin: layout.herdrBin, env: { ...process.env, ...(layout.herdrSocket ? { HERDR_SOCKET_PATH: layout.herdrSocket } : {}) } }).agentListAsync();
+        } catch (e) {
+          log(`herdr poll failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        for (const d of listed ? diffAgentStatus({ sessions: [...state.sessions.values()], listed, misses }) : []) {
+          await run({ cmd: "session.signal", session: d.session, signal: d.signal });
+        }
+      }
+      // After the signals: main starting to work in this tick pauses its proposals before they can fire.
+      for (const thread of dueProposals(state, Date.now(), durationMs(config.agents.complexity.timeout))) {
+        const t = state.threads.get(thread);
+        if (t?.tierProposal) await run({ cmd: "thread.choose", thread, tier: t.tierProposal.tier, auto: true });
       }
     }).catch((e) => (opts.log ?? console.error)(`poll failed: ${e instanceof Error ? e.message : String(e)}`));
   }, opts.pollIntervalMs ?? durationMs(config.herdr.poll_interval));

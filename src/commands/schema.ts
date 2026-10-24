@@ -6,6 +6,7 @@ const ticketId = z.string().regex(/^T\d+$/, "ticket id must look like T1");
 const herdrId = z.string().regex(/^[\w-]+(:[\w-]+)?$/, "invalid herdr id");
 const sessionId = z.string().uuid("session must be a UUID");
 const text = z.string().trim().min(1);
+const tierName = z.string().regex(/^[a-z][a-z0-9_-]*$/, "tier name must match /^[a-z][a-z0-9_-]*$/");
 
 export const CommandSchema = z.discriminatedUnion("cmd", [
   z.object({
@@ -16,7 +17,12 @@ export const CommandSchema = z.discriminatedUnion("cmd", [
     criteria: z.array(text).default([]),
     dependsOn: z.array(threadId).default([]),
     maxWorkers: z.number().int().min(1).max(16).optional(),
+    tier: tierName.optional(),
+    reason: z.string().trim().optional(),
+    now: z.boolean().optional(),
   }),
+  z.object({ cmd: z.literal("thread.choose"), thread: threadId, tier: tierName, auto: z.boolean().optional() }),
+  z.object({ cmd: z.literal("thread.cancel"), thread: threadId }),
   z.object({ cmd: z.literal("thread.status"), thread: threadId, status: z.enum(THREAD_STATUSES), reason: z.string().optional() }),
   z.object({ cmd: z.literal("ticket.add"), thread: threadId, title: text, scope: z.array(text).min(1) }),
   z.object({ cmd: z.literal("ticket.claim"), thread: threadId, ticket: ticketId }),

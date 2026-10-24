@@ -20,8 +20,8 @@ export function writeAll(
   for (const t of state.threads.values()) {
     const dir = p.threadDir(t);
     mkdirSync(dir, { recursive: true });
-    writeAtomic(join(dir, "sub.thread.md"), renderSub(t, [...state.sessions.values()].filter((s) => s.thread === t.id)));
-    writeAtomic(join(dir, "brief.md"), renderBrief({ thread: t, trail: trailOf(t) }));
+    writeAtomic(join(dir, "sub.thread.md"), renderSub(t, [...state.sessions.values()].filter((s) => s.thread === t.id), config));
+    writeAtomic(join(dir, "brief.md"), renderBrief({ thread: t, trail: trailOf(t), config }));
     writeAtomic(join(dir, "board.md"), renderBoard(t));
     writeAtomic(join(dir, "log.md"), renderLog(t));
   }

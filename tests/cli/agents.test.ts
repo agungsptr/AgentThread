@@ -18,7 +18,7 @@ function agt(args: string[], extra: Record<string, string> = {}, stdin?: string,
     env: {
       PATH: process.env.PATH ?? "", HOME: "/nonexistent", XDG_CONFIG_HOME: xdg, AGT_ROOT: root, FAKE_HERDR_STATE: fake.file,
       HERDR_ENV: "1", HERDR_WORKSPACE_ID: "w1", HERDR_TAB_ID: "w1:t0", HERDR_PANE_ID: "w1:p0", HERDR_BIN_PATH: FAKE_HERDR,
-      AGT_CLAUDE_BIN: FAKE_CLAUDE, FAKE_CLAUDE_LOG: claudeLog,
+      AGT_CLAUDE_BIN: FAKE_CLAUDE, AGT_OPENCODE_BIN: "/nonexistent/opencode", AGT_CODEX_BIN: "/nonexistent/codex", AGT_OMP_BIN: "/nonexistent/omp", FAKE_CLAUDE_LOG: claudeLog,
       ...extra,
     },
     stdin: stdin === undefined ? "ignore" : Buffer.from(stdin),

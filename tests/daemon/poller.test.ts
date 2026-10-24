@@ -42,3 +42,18 @@ test("ended, non-agent or pane-less sessions are ignored", () => {
   expect(list([sess("ended"), { ...sess("active"), role: "main" }])).toEqual([]);
   expect(m.size).toBe(0);
 });
+
+test("the main session is polled for started, active and idle, never ended or blocked", () => {
+  const m = new Map<string, number>();
+  const main = (status: string) => ({ ...sess(status, "p0"), id: "m", role: "main" }) as Session;
+  const poll = (status: string, listed: string | null) =>
+    diffAgentStatus({ sessions: [main(status)], listed: listed ? [{ pane: "p0", status: listed as "idle" }] : [], misses: m });
+  expect(poll("starting", "idle")).toEqual([{ session: "m", signal: "started" }]);
+  expect(poll("idle", "working")).toEqual([{ session: "m", signal: "active" }]);
+  expect(poll("active", "idle")).toEqual([{ session: "m", signal: "idle" }]);
+  expect(poll("active", "blocked")).toEqual([]);
+  expect(poll("active", null)).toEqual([]);
+  expect(poll("active", null)).toEqual([]);
+  expect(poll("active", null)).toEqual([]);
+  expect(m.size).toBe(0);
+});

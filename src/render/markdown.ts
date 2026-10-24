@@ -1,5 +1,6 @@
 import { stringify } from "yaml";
 import { DEFAULT_CONFIG, type Config } from "../config/config.ts";
+import { tierRun } from "../orchestration/tiers.ts";
 import { displayStatus, isLive, progressBy, type Session, type State, type Thread } from "../state/projection.ts";
 
 export const oneLine = (s: string) => s.replace(/\r?\n+/g, " ").trim();
@@ -39,7 +40,15 @@ export function renderMain(state: State, config: Config = DEFAULT_CONFIG): strin
   ].join("\n");
 }
 
-export function renderSub(t: Thread, sessions: Session[] = []): string {
+/** `Tier: <tier> (<agent> <model> <effort>), chosen by user|auto: <reason>`, once the thread's tier is chosen. */
+export function tierLines(t: Thread, config: Config): string[] {
+  if (t.tier === undefined) return [];
+  const by = t.tierChoice?.auto ? "auto" : "user";
+  const reason = t.tierChoice?.reason ? `: ${oneLine(t.tierChoice.reason)}` : "";
+  return [`Tier: ${t.tier} (${tierRun(config, t.tier)}), chosen by ${by}${reason}`];
+}
+
+export function renderSub(t: Thread, sessions: Session[] = [], config: Config = DEFAULT_CONFIG): string {
   const frontmatter = stringify({
     id: t.id,
     title: t.title,
@@ -68,6 +77,7 @@ export function renderSub(t: Thread, sessions: Session[] = []): string {
     frontmatter,
     "---",
     "",
+    ...(t.tier !== undefined ? [...tierLines(t, config), ""] : []),
     "## Goal",
     "",
     clampHeadings(t.goal.trim()) || "_Not set._",

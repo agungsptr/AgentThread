@@ -4,7 +4,8 @@ import { type Config, durationMs } from "../config/config.ts";
 import type { EventBody, StoredEvent } from "../domain/types.ts";
 import { isLive, type Session, type State, type Thread } from "../state/projection.ts";
 import { generateHandoff } from "./handoff.ts";
-import { liveSessions, rotateCoordinator, spawnCoordinator, spawnReplacement, spawnWorker, workerLimit } from "./sessions.ts";
+import { liveSessions, rotateCoordinator, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure, workerLimit } from "./sessions.ts";
+import { tierRun } from "./tiers.ts";
 
 const CHECKPOINT_NOTICE = (thread: string | undefined) =>
   `CHECKPOINT: record where you are with: agt progress ${thread ?? "<thread>"} "<what is done, what is next>"`;
@@ -151,11 +152,43 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
       .map((s) => s!.thread),
   );
 
+  /** Timer states set earlier in this call, by thread; state does not know about them yet. */
+  const timers = new Map<string, "paused" | "running">();
+  /** Pauses (main is working) or restarts (main is idle) every proposal's timer that is not in that state already. */
+  const setTimers = (s: Session | undefined, to: "paused" | "running") => {
+    if (s?.role !== "main") return;
+    for (const t of state.threads.values()) {
+      if (!t.tierProposal || t.status === "done") continue;
+      const current = timers.get(t.id) ?? (t.tierProposal.runningSince !== undefined ? "running" : "paused");
+      if (current === to) continue;
+      timers.set(t.id, to);
+      out.push({ type: "thread.tier_timer", thread: t.id, payload: { state: to } });
+    }
+  };
+
   for (const ev of events) {
     switch (ev.type) {
+      case "thread.tier_chosen": {
+        const t = state.threads.get(ev.thread);
+        if (!t || t.status === "done" || t.tierProposal) break;
+        if (state.layout && !t.tab) effects.push(tabEnsure(t, ctx));
+        if (ev.payload.auto) {
+          const timeout = ctx.config.agents.complexity.timeout;
+          notify(liveSessions(state, undefined, "main")[0], `Thread ${t.id} started with tier ${ev.payload.tier} (${tierRun(ctx.config, ev.payload.tier)}) after ${timeout} without a choice.`);
+        }
+        break;
+      }
+      case "session.active":
+        setTimers(state.sessions.get(ev.payload.session), "paused");
+        break;
+      case "notice.delivered":
+        // A pasted notice starts a turn of main's: it is working.
+        setTimers(state.sessions.get(ev.payload.session), "paused");
+        break;
       case "thread.tab_opened": {
         const t = state.threads.get(ev.thread);
-        if (!t || t.status === "done" || !t.rootPane) break;
+        // A proposed thread waits for its tier: its coordinator starts only once the tier is chosen.
+        if (!t || t.status === "done" || !t.rootPane || t.tierProposal) break;
         const c = coordinatorOf(t.id);
         if (c && c.pane && c.pane !== t.rootPane) {
           lose(c, "tab was reopened");
@@ -208,6 +241,8 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
       }
       case "session.ended": {
         const s = state.sessions.get(ev.payload.session);
+        // Without a main session nobody is replying: a paused proposal must not wait forever.
+        setTimers(s, "running");
         const t = s?.thread ? state.threads.get(s.thread) : undefined;
         // The thread's acting coordinator exited (any source: polled status or a hook): a fresh one takes over, as for
         // a loss. One ended by a finished thread, or one that was rotated or lost first, is not replaced here.
@@ -258,9 +293,12 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         deliver(s);
         break;
       }
-      case "session.started":
-        deliver(state.sessions.get(ev.payload.session));
+      case "session.started": {
+        const s = state.sessions.get(ev.payload.session);
+        if (s && isLive(s) && s.status === "idle") setTimers(s, "running");
+        deliver(s);
         break;
+      }
       case "session.compacting":
         if (rotation.on_precompact) requestRotation(state.sessions.get(ev.payload.session), "precompact");
         break;
@@ -285,6 +323,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
       }
       case "agent.idle": {
         const s = state.sessions.get(ev.payload.session);
+        if (s && isLive(s)) setTimers(s, "running");
         const ticketStatus = s?.thread ? state.threads.get(s.thread)?.tickets.find((k) => k.id === s.ticket)?.status : undefined;
         // A worker whose ticket is done or blocked has nothing left to do; ending it frees its slot.
         const finished = s && isLive(s) && s.role === "worker" && (ticketStatus === "done" || ticketStatus === "blocked");

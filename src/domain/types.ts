@@ -56,6 +56,9 @@ export type EventBody =
       };
     }
   | { type: "thread.status_changed"; thread: string; payload: { from: ThreadStatus; to: ThreadStatus; reason?: string } }
+  | { type: "thread.tier_proposed"; thread: string; payload: { tier: string; reason: string } }
+  | { type: "thread.tier_timer"; thread: string; payload: { state: "paused" | "running" } }
+  | { type: "thread.tier_chosen"; thread: string; payload: { tier: string; auto: boolean } }
   | { type: "ticket.created"; thread: string; payload: { ticket: string; title: string; scope: string[] } }
   | { type: "ticket.claimed"; thread: string; payload: { ticket: string; assignee: string } }
   | { type: "ticket.completed"; thread: string; payload: { ticket: string; summary?: string } }

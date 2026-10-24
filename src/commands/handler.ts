@@ -4,7 +4,7 @@ import { DEFAULT_CONFIG, type Config } from "../config/config.ts";
 import { canTransitionThread, canTransitionTicket, scopesOverlap, slugify, validateHandoff } from "../domain/rules.ts";
 import { ROLES, type Actor, type EventBody, type Role, type ThreadStatus, type TicketStatus } from "../domain/types.ts";
 import { roleAgent, type RoleAgent } from "../agents/roles.ts";
-import { agentName, liveSessions, spawnCoordinator, spawnReplacement, spawnWorker, tabEnv, workerLimit } from "../orchestration/sessions.ts";
+import { agentName, liveSessions, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure as tabEnsureFor, workerLimit } from "../orchestration/sessions.ts";
 import { isLive, type State, type Thread, type Ticket } from "../state/projection.ts";
 import type { Command, CommandName } from "./schema.ts";
 
@@ -49,6 +49,8 @@ interface Decision {
 const ALLOWED: Record<CommandName, readonly Role[]> = {
   "thread.new": ["user", "main"],
   "thread.status": ["user", "main", "coordinator"],
+  "thread.choose": ["user", "main"],
+  "thread.cancel": ["user", "main"],
   "ticket.add": ["coordinator"],
   "ticket.claim": ["worker"],
   "ticket.done": ["worker"],
@@ -106,7 +108,8 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
   if (cmd.cmd === "layout.reconcile") {
     if (!state.layout) reject("no Herdr layout registered; run `agt start`");
     const all = [...state.threads.values()];
-    const open = all.filter((t) => t.status !== "done");
+    // A thread waiting for its tier gets no tab yet: the tab's env is fixed when it is created.
+    const open = all.filter((t) => t.status !== "done" && !t.tierProposal);
     const closes: Effect[] = (ctx.config ?? DEFAULT_CONFIG).herdr.close_tab_on_done
       ? all.flatMap((t) => (t.status === "done" && t.tab ? [{ kind: "herdr.tab.close" as const, thread: t.id, tab: t.tab }] : []))
       : [];
@@ -184,6 +187,19 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
   switch (cmd.cmd) {
     case "thread.status":
       return threadStatus(state, t, cmd.status, cmd.reason, ctx);
+    case "thread.choose": {
+      const proposal = t.tierProposal ?? reject(`thread ${t.id} is not waiting for a tier`);
+      if (cmd.auto) {
+        // The daemon's auto-accept takes the proposed tier, even one since removed from the config (roles.coordinator then).
+        if (actor.role !== "user") reject("only the daemon may auto-accept a tier");
+        return { events: [{ type: "thread.tier_chosen", thread: t.id, payload: { tier: proposal.tier, auto: true } }] };
+      }
+      checkTier(cmd.tier, ctx);
+      return { events: [{ type: "thread.tier_chosen", thread: t.id, payload: { tier: cmd.tier, auto: false } }] };
+    }
+    case "thread.cancel":
+      if (!t.tierProposal) reject(`thread ${t.id} is not waiting for a tier`);
+      return { events: [{ type: "thread.status_changed", thread: t.id, payload: { from: t.status, to: "done", reason: "cancelled before start" } }] };
     case "ticket.add": {
       if (t.status === "done") reject(`thread ${t.id} is done`);
       const ticket = `T${t.tickets.length + 1}`;
@@ -256,7 +272,7 @@ function recoverCoordinators(state: State, open: Thread[], ctx: HandlerContext):
   const effects: Effect[] = [];
   const spawn = spawnContext(ctx);
   for (const t of open) {
-    if (!t.rootPane || liveSessions(state, t.id, "coordinator").length > 0) continue;
+    if (!t.rootPane || t.tierProposal || liveSessions(state, t.id, "coordinator").length > 0) continue;
     const latest = [...state.sessions.values()].filter((s) => s.thread === t.id && s.role === "coordinator").at(-1);
     const how = { splitFrom: t.rootPane, bootstrap: t.handoff ? ("handoff" as const) : ("start" as const) };
     let r: { events: EventBody[]; effects: Effect[] } | undefined;
@@ -277,6 +293,8 @@ function recoverCoordinators(state: State, open: Thread[], ctx: HandlerContext):
 
 function newThread(state: State, cmd: Extract<Command, { cmd: "thread.new" }>, ctx: HandlerContext): Decision {
   for (const dep of cmd.dependsOn) if (!state.threads.has(dep)) reject(`unknown dependency ${dep}`);
+  if (cmd.tier !== undefined) checkTier(cmd.tier, ctx);
+  else if (cmd.now) reject("--now needs --tier");
   const next = Math.max(0, ...[...state.threads.keys()].map(Number)) + 1;
   const id = String(next).padStart(3, "0");
   const slug = slugify(cmd.title);
@@ -302,13 +320,29 @@ function newThread(state: State, cmd: Extract<Command, { cmd: "thread.new" }>, c
           status,
         },
       },
+      ...tierEvents(state, id, cmd),
     ],
     effects: [
       { kind: "git.worktree.add", branch, path: worktree, thread: { id, title: cmd.title, slug } },
-      ...(state.layout ? [tabEnsure({ id, slug, worktree }, ctx)] : []),
+      // A proposed thread's tab opens once its tier is chosen (the reactor, on thread.tier_chosen).
+      ...(state.layout && cmd.tier === undefined ? [tabEnsure({ id, slug, worktree }, ctx)] : []),
     ],
-    result: { thread: id, worktree },
+    result: { thread: id, worktree, ...(cmd.tier !== undefined ? { tier: cmd.tier, proposed: !cmd.now } : {}) },
   };
+}
+
+/** A proposed tier: the proposal, then either the choice (--now) or the timer, running unless main is working. */
+function tierEvents(state: State, id: string, cmd: Extract<Command, { cmd: "thread.new" }>): EventBody[] {
+  if (cmd.tier === undefined) return [];
+  const proposed: EventBody = { type: "thread.tier_proposed", thread: id, payload: { tier: cmd.tier, reason: cmd.reason ?? "" } };
+  if (cmd.now) return [proposed, { type: "thread.tier_chosen", thread: id, payload: { tier: cmd.tier, auto: false } }];
+  const main = liveSessions(state, undefined, "main")[0];
+  return main?.status === "active" ? [proposed] : [proposed, { type: "thread.tier_timer", thread: id, payload: { state: "running" } }];
+}
+
+function checkTier(tier: string, ctx: HandlerContext): void {
+  const tiers = Object.keys((ctx.config ?? DEFAULT_CONFIG).agents.complexity.tiers);
+  if (!tiers.includes(tier)) reject(`unknown tier ${tier}; configured: ${tiers.join(", ") || "(none)"}`);
 }
 
 function threadStatus(state: State, t: Thread, to: ThreadStatus, reason: string | undefined, ctx: HandlerContext): Decision {
@@ -366,6 +400,5 @@ function spawnContext(ctx: HandlerContext) {
 }
 
 function tabEnsure(t: { id: string; slug: string; worktree: string; tab?: string; tier?: string }, ctx: HandlerContext): Effect {
-  const env = tabEnv(t, { root: ctx.root, config: ctx.config ?? DEFAULT_CONFIG });
-  return { kind: "herdr.tab.ensure", thread: t.id, label: `${t.id}-${t.slug}`, cwd: t.worktree, env, ...(t.tab ? { tab: t.tab } : {}) };
+  return tabEnsureFor(t, { root: ctx.root, config: ctx.config ?? DEFAULT_CONFIG });
 }

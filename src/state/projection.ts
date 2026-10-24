@@ -86,6 +86,10 @@ export interface Thread {
   maxWorkers?: number;
   /** The complexity tier the thread runs at (picks the coordinator's agent). */
   tier?: string;
+  /** A proposed tier that waits for the user's choice; `runningSince` is undefined while the timer is paused. */
+  tierProposal?: { tier: string; reason: string; runningSince?: string };
+  /** How the tier was chosen, and the reason main gave for proposing it. */
+  tierChoice?: { auto: boolean; reason: string };
   workerQueue: string[];
   tickets: Ticket[];
   decisions: Entry[];
@@ -179,8 +183,25 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       delete t.rootPane;
       note(t, ev, `herdr tab ${ev.payload.tab} closed`);
       break;
+    case "thread.tier_proposed":
+      t.tierProposal = { tier: ev.payload.tier, reason: ev.payload.reason };
+      note(t, ev, `tier ${ev.payload.tier} proposed${ev.payload.reason ? `: ${ev.payload.reason}` : ""}`);
+      break;
+    case "thread.tier_timer":
+      if (t.tierProposal) {
+        if (ev.payload.state === "running") t.tierProposal.runningSince = ev.ts;
+        else delete t.tierProposal.runningSince;
+      }
+      break;
+    case "thread.tier_chosen":
+      t.tier = ev.payload.tier;
+      t.tierChoice = { auto: ev.payload.auto, reason: t.tierProposal?.reason ?? "" };
+      delete t.tierProposal;
+      note(t, ev, `tier ${ev.payload.tier} chosen by ${ev.payload.auto ? "auto" : "user"}`);
+      break;
     case "thread.status_changed": {
       t.status = ev.payload.to;
+      if (t.status === "done") delete t.tierProposal;
       const reason = ev.payload.reason ? `: ${ev.payload.reason}` : "";
       note(t, ev, `status ${ev.payload.from} → ${ev.payload.to}${reason}`);
       break;

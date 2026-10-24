@@ -1,6 +1,7 @@
 import type { GitTrail } from "../project/gittrail.ts";
 import { progressBy, type Session, type Thread } from "../state/projection.ts";
-import { clampHeadings, oneLine } from "./markdown.ts";
+import { DEFAULT_CONFIG, type Config } from "../config/config.ts";
+import { clampHeadings, oneLine, tierLines } from "./markdown.ts";
 
 const MAX_BYTES = 16384;
 const TRUNC = "_(truncated — see sub.thread.md)_";
@@ -30,16 +31,17 @@ const LEVELS: Limits[] = [
   { handoff: 0, decisions: 0, findings: 0, board: 0, goal: 500, criteria: 5 },
 ];
 
-export function renderBrief(o: { thread: Thread; sessions?: Session[]; trail?: GitTrail; dir?: string }): string {
+export function renderBrief(o: { thread: Thread; sessions?: Session[]; trail?: GitTrail; dir?: string; config?: Config }): string {
   let md = "";
+  const tier = tierLines(o.thread, o.config ?? DEFAULT_CONFIG);
   for (const lim of LEVELS) {
-    md = build(o.thread, o.trail, lim);
+    md = build(o.thread, o.trail, lim, tier);
     if (Buffer.byteLength(md) < MAX_BYTES) break;
   }
   return md;
 }
 
-function build(t: Thread, trail: GitTrail | undefined, lim: Limits): string {
+function build(t: Thread, trail: GitTrail | undefined, lim: Limits, tier: string[]): string {
   const full = LEVELS[0]!;
   let handoff: string[];
   if (!t.handoff) handoff = ["None yet."];
@@ -81,6 +83,7 @@ function build(t: Thread, trail: GitTrail | undefined, lim: Limits): string {
     "## Where things stand",
     "",
     `Status: ${t.status}`,
+    ...tier,
     t.progress ? `Latest progress: ${t.progress.ts} ${progressBy(t.progress)} ${cap(oneLine(t.progress.message), 1000)}` : "No progress recorded yet.",
     "",
     "## Goal",
