@@ -60,7 +60,7 @@ describe("worker.spawn", () => {
     const s = threadWithTab(1);
     exec(s, { cmd: "worker.spawn", thread: "001", ticket: "T1" }, COORD);
     const r = exec(s, { cmd: "worker.spawn", thread: "001", ticket: "T2" }, COORD);
-    expect(r).toEqual({ ok: true, events: [{ type: "worker.queued", thread: "001", payload: { ticket: "T2" } }], effects: [], result: { queued: true } });
+    expect(r).toEqual({ ok: true, events: [{ type: "worker.queued", thread: "001", payload: { ticket: "T2" } }], effects: [], result: { queued: true }, actor: { ...COORD, via: "command" } });
     expect(s.threads.get("001")!.workerQueue).toEqual(["T2"]);
   });
 

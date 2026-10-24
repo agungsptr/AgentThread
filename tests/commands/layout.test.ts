@@ -15,7 +15,7 @@ function run(bodies: EventBody[], cmd: unknown, actor: Actor = USER, config = DE
 describe("layout.register", () => {
   test("emits layout.registered and the projection stores it", () => {
     const r = run([INIT], { cmd: "layout.register", ...LAYOUT });
-    expect(r).toEqual({ ok: true, events: [REGISTERED], effects: [], result: null });
+    expect(r).toEqual({ ok: true, events: [REGISTERED], effects: [], result: null, actor: { ...USER, via: "command" } });
     expect(stateOf(INIT, REGISTERED).layout).toEqual(LAYOUT);
   });
 

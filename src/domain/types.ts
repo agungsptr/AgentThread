@@ -23,6 +23,11 @@ export interface Actor {
   session?: string;
   ticket?: string;
   agent?: AgentKind;
+  /**
+   * Set by the daemon, never by a client: "command" marks the events handle() decided for a command other than a
+   * lifecycle signal. Follow-ups (reactor events, effect output) carry no marker. Old logs have no marker at all.
+   */
+  via?: "command";
 }
 
 export interface Layout {

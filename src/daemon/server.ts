@@ -95,9 +95,14 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
     }
   };
 
-  const applyAndReact = async (bodies: EventBody[], actor: Actor): Promise<void> => {
-    const commit = (b: EventBody[]) => {
-      const stored = store.append(b, actor);
+  /**
+   * Commits `bodies` with `actor`, then the reactor's follow-ups and effect output with the same actor minus its
+   * `via` marker: only what handle() decided for a command counts as authored, never what the command triggered.
+   */
+  const applyAndReact = async (bodies: EventBody[], actor: Actor, unmarked: EventBody[] = []): Promise<void> => {
+    const { via: _via, ...followActor } = actor;
+    const commit = (b: EventBody[], by: Actor = followActor) => {
+      const stored = store.append(b, by);
       for (const ev of stored) {
         applyEvent(state, ev);
         // A replacement coordinator must see the latest commits in its brief, not a cached trail.
@@ -105,7 +110,7 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
       }
       return stored;
     };
-    const fresh = bodies.length ? commit(bodies) : [];
+    const fresh = [...(bodies.length ? commit(bodies, actor) : []), ...(unmarked.length ? commit(unmarked) : [])];
     await runFollowUps(
       fresh,
       async (evs) => {
@@ -129,7 +134,7 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
     if (!actor.success) return { ok: false, error: `invalid actor: ${actor.error.issues.map((i) => i.message).join("; ")}` };
     const decision = handle(state, command.data, actor.data, { root, config, newId: randomUUID });
     if (!decision.ok) return decision;
-    await applyAndReact([...decision.events, ...(await runEffects(decision.effects))], decision.actor ?? actor.data);
+    await applyAndReact(decision.events, decision.actor ?? actor.data, await runEffects(decision.effects));
     return { ok: true, result: decision.result };
   };
 
@@ -201,7 +206,7 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
       const actor: Actor = { role: "user" };
       const run = async (command: Command) => {
         const decision = handle(state, command, actor, { root, config, newId: randomUUID });
-        if (decision.ok) await applyAndReact([...decision.events, ...(await runEffects(decision.effects))], decision.actor ?? actor);
+        if (decision.ok) await applyAndReact(decision.events, decision.actor ?? actor, await runEffects(decision.effects));
       };
       const layout = state.layout;
       if (layout) {

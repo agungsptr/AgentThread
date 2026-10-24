@@ -243,5 +243,25 @@ test("a command from the root-pane coordinator (no AGT_SESSION) is stored with i
   await cmd({ cmd: "session.attached", session: c, pane: "w1:p1" });
   expect(await cmd({ cmd: "thread.status", thread: "001", status: "in_progress" }, coord)).toMatchObject({ ok: true });
   const ev = (await events()).find((e) => e.type === "thread.status_changed")!;
-  expect(ev.actor).toEqual({ role: "coordinator", thread: "001", session: c });
+  expect(ev.actor).toEqual({ role: "coordinator", thread: "001", session: c, via: "command" });
+});
+
+test("only a command's decided events carry via; a root-pane coordinator's hook follow-ups do not credit it", async () => {
+  // the bootstrap cannot be delivered at spawn (a startup dialog), so it is queued
+  await boot({ seed: { fail: ["agent start", "agent prompt"], failCode: { "agent start": "agent_not_ready", "agent prompt": "agent_blocked" } } });
+  await cmd({ cmd: "thread.new", title: "X", type: "bug" });
+  await waitFor(async () => (await events()).some((e) => e.type === "session.attached" || e.type === "session.failed"), 10_000);
+  const c = (await sessionOf("coordinator"))!.session;
+  fake.update((s) => ({ fail: [], status: { ...s.status, "w1:p1": "idle" } }));
+  // the root pane's hooks: AGT_ROLE + AGT_THREAD, no AGT_SESSION. Its started hook gets the bootstrap delivered under
+  // that actor; the turn the bootstrap starts runs no agt command (a bad model).
+  for (const signal of ["started", "active", "idle"]) expect(await cmd({ cmd: "session.signal", pane: "w1:p1", signal }, coord)).toMatchObject({ ok: true });
+  const evs = await events();
+  expect(evs.find((e) => e.type === "thread.created")!.actor).toEqual({ role: "user", via: "command" });
+  // effect output (the tab) and reactor follow-ups of the command are unmarked
+  expect(evs.find((e) => e.type === "thread.tab_opened")!.actor).toEqual({ role: "user" });
+  expect(evs.find((e) => e.type === "session.created")!.actor).toEqual({ role: "user" });
+  expect(evs.find((e) => e.type === "notice.delivered" && e.payload.session === c)!.actor).toEqual(coord);
+  expect(evs.filter((e) => e.actor.role === "coordinator").every((e) => e.actor.via === undefined)).toBe(true);
+  expect(evs.filter((e) => e.type === "session.stalled").map((e) => e.payload)).toEqual([{ session: c }]);
 });

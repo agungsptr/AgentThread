@@ -35,7 +35,7 @@ export interface Session {
   polledStart?: boolean;
   /** Finished turns (real active to idle transitions). */
   turns: number;
-  /** The session authored an event other than its own lifecycle signals: it ran an agt command. */
+  /** The session ran an agt command other than a lifecycle signal (see isAuthored). */
   authored?: boolean;
   /** Reported as stalled (session.stalled): finished its first turn without running any agt command. */
   stalled?: boolean;
@@ -142,9 +142,6 @@ export function project(events: StoredEvent[]): State {
   return state;
 }
 
-/** Events a session's hooks or the poller report for it; they do not show that the agent ran an agt command. */
-const SIGNAL_TYPES: ReadonlySet<string> = new Set(["session.started", "session.active", "agent.idle", "session.compacting", "session.ended", "agent.blocked"]);
-
 /**
  * The session an actor stands for. Without AGT_SESSION (a thread's first coordinator runs in the tab's root pane, whose
  * env has none) it is the thread's acting coordinator, or the live worker of the actor's ticket.
@@ -158,9 +155,31 @@ export function actorSession(state: State, actor: Actor): string | undefined {
   return undefined;
 }
 
+/**
+ * Event types only an agt command produces (never the reactor or an effect), for logs written before commands were
+ * marked `via: "command"`.
+ */
+const COMMAND_OUTPUT_TYPES: ReadonlySet<string> = new Set([
+  "thread.status_changed", "ticket.created", "ticket.claimed", "ticket.completed", "ticket.blocked", "ticket.reopened",
+  "log.appended", "decision.recorded", "note.recorded", "progress.recorded", "question.recorded", "question.answered",
+  "worker.queued",
+]);
+
+/**
+ * Whether an event shows that its actor ran an agt command: handle() decided it for a command other than a signal.
+ * Follow-ups (the reactor's events, effect output such as notice.delivered) are stored with the triggering actor but
+ * unmarked, so a session's own hooks never count. Unmarked events (old logs) count by type: the reactor and effects
+ * emit none of these types, so a follow-up never matches.
+ */
+function isAuthored(ev: StoredEvent): boolean {
+  if (ev.actor.via === "command") return true;
+  if (ev.type === "handoff.submitted") return ev.payload.generated === false;
+  return COMMAND_OUTPUT_TYPES.has(ev.type);
+}
+
 export function applyEvent(state: State, ev: StoredEvent): void {
   state.lastSeq = ev.seq;
-  if (!SIGNAL_TYPES.has(ev.type) && (ev.actor.role === "coordinator" || ev.actor.role === "worker" || ev.actor.session)) {
+  if (isAuthored(ev) && (ev.actor.role === "coordinator" || ev.actor.role === "worker" || ev.actor.session)) {
     // Commands are attributed at intake; old logs without a session fall back to the acting session (replay backstop).
     const sid = actorSession(state, ev.actor);
     const by = sid ? state.sessions.get(sid) : undefined;

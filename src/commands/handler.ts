@@ -39,7 +39,7 @@ export interface HandlerContext {
 }
 
 export type HandleResult =
-  | { ok: true; events: EventBody[]; effects: Effect[]; result: unknown; /** Set when intake attributed the actor (see attribute): store the events with it. */ actor?: Actor }
+  | { ok: true; events: EventBody[]; effects: Effect[]; result: unknown; /** Set for a command other than a signal: the attributed, marked actor (see attribute) to store `events` with. */ actor?: Actor }
   | { ok: false; error: string };
 
 interface Decision {
@@ -91,13 +91,15 @@ function reject(message: string): never {
 }
 
 /**
- * Fills in the session of a coordinator or worker actor that has none (the root-pane coordinator has no AGT_SESSION),
- * so the stored events say who ran the command. Lifecycle signals keep their actor: they name their session or pane.
+ * The actor a command's decided events are stored with. A lifecycle signal keeps its actor: it names its session or
+ * pane, and it does not show that the agent ran an agt command. Any other command is marked `via: "command"` (only
+ * such events count as authored), and a coordinator or worker actor without a session (the root-pane coordinator has
+ * no AGT_SESSION) gets one, so the stored events say who ran it.
  */
 function attribute(state: State, cmd: Command, actor: Actor): Actor {
-  if (actor.session || cmd.cmd === "session.signal" || (actor.role !== "coordinator" && actor.role !== "worker")) return actor;
-  const session = actorSession(state, actor);
-  return session ? { ...actor, session } : actor;
+  if (cmd.cmd === "session.signal") return actor;
+  const session = actor.session || (actor.role !== "coordinator" && actor.role !== "worker") ? undefined : actorSession(state, actor);
+  return { ...actor, ...(session ? { session } : {}), via: "command" };
 }
 
 export function handle(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): HandleResult {
