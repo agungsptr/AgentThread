@@ -44,12 +44,13 @@ const turn = (s: State, session: string, role: "coordinator" | "worker") => {
   ];
 };
 
-const COORD_STALL = `Session ${C} (claude-code nope-9) finished 2 turns without running any agt command; it may be misconfigured (for example a wrong model). Check pane w1:p2.`;
-const WORKER_STALL = `Session ${W} (opencode default) finished 2 turns without running any agt command; it may be misconfigured (for example a wrong model). Check pane w1:p3.`;
+const COORD_STALL = `Session ${C} (claude-code nope-9) finished its first turn without running any agt command; it may be misconfigured (for example a wrong model). Check pane w1:p2.`;
+const WORKER_STALL = `Session ${W} (opencode default) finished its first turn without running any agt command; it may be misconfigured (for example a wrong model). Check pane w1:p3.`;
 
-test("a coordinator that finishes 2 turns without any agt command is reported once, to main", () => {
+test("a coordinator that finishes its first turn without any agt command is reported once, to main", () => {
   const s = base();
-  expect(react(s, turn(s, C, "coordinator"), ctx()).events.filter((e) => e.type === "session.stalled")).toEqual([]);
+  // started at its prompt (no turn yet): nothing
+  expect(react(s, apply(s, { role: "coordinator", thread: "001", session: C }, { type: "session.started", thread: "001", payload: { session: C } }), ctx()).events.filter((e) => e.type === "session.stalled")).toEqual([]);
   const r = react(s, turn(s, C, "coordinator"), ctx());
   expect(r.events.filter((e) => e.type === "session.stalled" || e.type === "notice.queued")).toEqual([
     { type: "session.stalled", thread: "001", payload: { session: C } },
@@ -64,7 +65,6 @@ test("a coordinator that finishes 2 turns without any agt command is reported on
 
 test("a stalled worker is reported to its coordinator", () => {
   const s = base();
-  turn(s, W, "worker");
   const r = react(s, turn(s, W, "worker"), ctx());
   expect(r.events.filter((e) => e.type === "session.stalled" || e.type === "notice.queued")).toEqual([
     { type: "session.stalled", thread: "001", payload: { session: W } },
@@ -75,7 +75,6 @@ test("a stalled worker is reported to its coordinator", () => {
 test("a session that ran any agt command is never reported", () => {
   const s = base();
   apply(s, { role: "coordinator", thread: "001", session: C }, { type: "thread.status_changed", thread: "001", payload: { from: "in_progress", to: "in_progress" } });
-  turn(s, C, "coordinator");
   const r = react(s, turn(s, C, "coordinator"), ctx());
   expect(r.events.filter((e) => e.type === "session.stalled")).toEqual([]);
   expect(r.events.some((e) => e.type === "notice.queued" && e.payload.text.includes("misconfigured"))).toBe(false);

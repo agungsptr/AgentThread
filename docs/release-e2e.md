@@ -64,7 +64,7 @@ still running in the scratch repo is killed. Check afterwards with
   OpenCode asks for every permission via the scenario-only `AGT_E2E_OPENCODE_ASK=worker`), `edge-rotate-turns`
   (`max_turns: 3`), `edge-rotate-age` (`max_age: 2m`), `edge-daemon-restart`, `edge-herdr-restart`, `edge-tab-closed`,
   `edge-missing-binary`, `edge-bad-model` (a coordinator on a model that does not exist: the stall watchdog's
-  `session.stalled` notice reaches main after its second turn).
+  `session.stalled` notice reaches main after its first turn).
 
 ## Reading the report
 

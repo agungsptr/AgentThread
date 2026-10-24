@@ -217,15 +217,13 @@ export function edgeScenarios(): Scenario[] {
         const c = await h.waitFor("session.created", (e) => e.thread === thread && e.payload.role === "coordinator", 30_000, "coordinator spawned");
         const s = c.payload.session;
         const t0 = Date.parse(c.ts);
-        // Turn 1 is the bootstrap; a message from the user starts turn 2.
-        await h.waitFor("agent.idle", (e, all) => e.payload.session === s && all.some((x) => x.type === "session.active" && x.payload.session === s && x.seq < e.seq), 60_000, "coordinator's first turn");
-        await h.agtOk(["tell", thread, "What is the status?"]);
+        // Its bootstrap turn errors and it idles with no further prompt: that first turn is enough.
         const stalled = await h.waitFor("session.stalled", (e) => e.payload.session === s, 60_000, "stall reported");
         const pane = (await h.events()).find((e): e is EventOf<"session.attached"> => e.type === "session.attached" && e.payload.session === s)?.payload.pane;
-        const text = `Session ${s} (claude-code agt-e2e-no-such-model) finished 2 turns without running any agt command; it may be misconfigured (for example a wrong model). Check pane ${pane}.`;
+        const text = `Session ${s} (claude-code agt-e2e-no-such-model) finished its first turn without running any agt command; it may be misconfigured (for example a wrong model). Check pane ${pane}.`;
         const notice = await h.waitFor("notice.queued", (e, all) => e.payload.session === mainSession(all) && e.payload.text === text, 10_000, "main told of the stall");
         h.check("main gets the stall notice", !!notice, text);
-        h.check("reported within 120s of the spawn", Date.parse(stalled.ts) - t0 <= 120_000, `${Math.round((Date.parse(stalled.ts) - t0) / 1000)}s`);
+        h.check("reported within 60s of the spawn", Date.parse(stalled.ts) - t0 <= 60_000, `${Math.round((Date.parse(stalled.ts) - t0) / 1000)}s`);
       },
     },
   ];

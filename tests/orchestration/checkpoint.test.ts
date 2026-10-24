@@ -59,6 +59,7 @@ test("reminder fires once after reminder_turns turns, then progress resets it", 
 
 test("reminder fires by time since progress (or creation)", () => {
   const s = base();
+  s.sessions.get(C)!.authored = true; // it ran agt commands: the stall watchdog stays out of this test
   expect(turn(s, 29).events).toEqual([]);
   expect(reminders(turn(s, 31))).toHaveLength(1);
   const s2 = base();

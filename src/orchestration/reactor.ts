@@ -12,8 +12,11 @@ const CHECKPOINT_NOTICE = (thread: string | undefined) =>
 
 /** At most this many automatic coordinator replacements per thread within AUTO_REPLACE_WINDOW_MS. */
 const MAX_AUTO_REPLACEMENTS = 3;
-/** Finished turns without any agt command after which a coordinator or worker is reported as stalled. */
-const STALL_TURNS = 2;
+/**
+ * Finished turns without any agt command after which a coordinator or worker is reported as stalled: a healthy one's
+ * first turn runs one (agt thread status … in_progress, agt ticket claim); a bad model errors and idles instead.
+ */
+const STALL_TURNS = 1;
 const AUTO_REPLACE_WINDOW_MS = 10 * 60_000;
 
 export interface ReactorContext {
@@ -349,11 +352,11 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         const s = state.sessions.get(ev.payload.session);
         if (s && isLive(s)) setTimers(s, "running");
         // A coordinator or worker that never runs an agt command is likely misconfigured (a wrong model, no auth):
-        // report it once, after its first STALL_TURNS turns.
+        // report it once, after its first turn.
         if (s && isLive(s) && s.role !== "main" && s.turns >= STALL_TURNS && !s.authored && !s.stalled && !stalled.has(s.id)) {
           stalled.add(s.id);
           out.push({ type: "session.stalled", ...(s.thread ? { thread: s.thread } : {}), payload: { session: s.id } } as EventBody);
-          const text = `Session ${s.id} (${s.agent} ${s.model ?? "default"}) finished ${STALL_TURNS} turns without running any agt command; it may be misconfigured (for example a wrong model). Check pane ${s.pane ?? "unknown"}.`;
+          const text = `Session ${s.id} (${s.agent} ${s.model ?? "default"}) finished its first turn without running any agt command; it may be misconfigured (for example a wrong model). Check pane ${s.pane ?? "unknown"}.`;
           notify(s.role === "coordinator" ? liveSessions(state, undefined, "main")[0] : coordinatorToNotify(s.thread), text);
         }
         const ticketStatus = s?.thread ? state.threads.get(s.thread)?.tickets.find((k) => k.id === s.ticket)?.status : undefined;
