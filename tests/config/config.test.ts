@@ -128,7 +128,7 @@ test("durationMs", async () => {
 test("legacy keys fill roles", () => {
   const { root, env } = setup({ project: "agents:\n  default_worker: opencode\n  claude:\n    model: claude-opus-5-5\n" });
   const a = loadConfig(root, env).agents;
-  expect(a.roles.worker).toEqual({ agent: "opencode", model: "claude-opus-5-5" });
+  expect(a.roles.worker).toEqual({ agent: "opencode" });
   expect(a.roles.main).toEqual({ agent: "claude-code", model: "claude-opus-5-5" });
   expect(a.default_worker).toBe("opencode");
 });
@@ -164,4 +164,16 @@ test("effort outside the agent's list is rejected", () => {
 test("a bad tier name is rejected", () => {
   const { root, env } = setup({ project: "agents:\n  complexity:\n    tiers:\n      Bad Name: { agent: omp }\n" });
   expect(() => loadConfig(root, env)).toThrow(/agents\.complexity\.tiers/);
+});
+
+test("effort outside the agent's list is rejected on a tier path", () => {
+  const { root, env } = setup({ project: "agents:\n  complexity:\n    tiers:\n      big: { agent: codex, effort: max }\n" });
+  expect(() => loadConfig(root, env)).toThrow("agents.complexity.tiers.big.effort: codex accepts minimal, low, medium, high, xhigh");
+});
+
+test("tier names must match the regex", () => {
+  for (const name of ["High", "1x"]) {
+    const { root, env } = setup({ project: `agents:\n  complexity:\n    tiers:\n      ${name}: { agent: omp }\n` });
+    expect(() => loadConfig(root, env)).toThrow(/agents\.complexity\.tiers/);
+  }
 });

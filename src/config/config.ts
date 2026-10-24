@@ -60,7 +60,10 @@ const agentsSchema = z
     for (const r of ROLE_NAMES) {
       const set = a.roles[r];
       if (set) roles[r] = set;
-      else roles[r] = { agent: legacy[r] ?? "claude-code", ...(a.claude.model ? { model: a.claude.model } : {}) };
+      else {
+        const ag = legacy[r] ?? "claude-code";
+        roles[r] = { agent: ag, ...(ag === "claude-code" && a.claude.model ? { model: a.claude.model } : {}) };
+      }
     }
     return {
       main_manager: roles.main.agent,
