@@ -30,7 +30,7 @@ test("claude autonomous: bypassPermissions, skip prompt setting, model and effor
   const { args, env } = adapterFor("claude-code").launch({ ...base, run: { agent: "claude-code", model: "claude-opus-5-5", effort: "high" } });
   expect(args).toEqual([
     "--permission-mode", "bypassPermissions",
-    "--settings", JSON.stringify({ ...hookSettings(), skipDangerousModePermissionPrompt: true }),
+    "--settings", JSON.stringify({ ...hookSettings(), permissions: { deny: ["Bash(git push:*)"] }, skipDangerousModePermissionPrompt: true }),
     "--model", "claude-opus-5-5",
     "--effort", "high",
   ]);
@@ -43,7 +43,7 @@ test("claude non-autonomous keeps permission mode and allowed tools", () => {
   expect(args).toEqual([
     "--permission-mode", "acceptEdits",
     "--allowed-tools", "Bash(agt *),Bash(git status*),Bash(git diff*),Bash(git log*),Read(//r/.agentthread/**)",
-    "--settings", JSON.stringify(hookSettings()),
+    "--settings", JSON.stringify({ ...hookSettings(), permissions: { deny: ["Bash(git push:*)"] } }),
   ]);
   const main = adapterFor("claude-code").launch({ ...base, role: "main", config: nonAuto, run: { agent: "claude-code", model: "opus" } }).args;
   expect(main.slice(2, 4)).toEqual(["--allowed-tools", "Bash(agt *)"]);
@@ -57,7 +57,7 @@ test("opencode: --auto and config content with model variant and permissions", (
   expect(args).toEqual(["--standalone", "--auto"]);
   expect(JSON.parse(env.OPENCODE_CONFIG_CONTENT!)).toEqual({
     model: "myrouter/gemini-flash#high",
-    permission: { "*": "allow", external_directory: "allow", doom_loop: "allow" },
+    permission: { "*": "allow", external_directory: "allow", doom_loop: "allow", bash: { "*": "allow", "git push*": "deny" } },
   });
   const none = adapterFor("opencode").launch({ ...base, run: { agent: "opencode" } });
   expect(JSON.parse(none.env.OPENCODE_CONFIG_CONTENT!)).not.toHaveProperty("model");
@@ -67,7 +67,7 @@ test("opencode: the release e2e's AGT_E2E_OPENCODE_ASK makes the named roles ask
   const env = { AGT_E2E_OPENCODE_ASK: "worker" };
   const asked = adapterFor("opencode").launch({ ...base, env, run: { agent: "opencode" } });
   expect(asked.args).toEqual(["--standalone"]);
-  expect(JSON.parse(asked.env.OPENCODE_CONFIG_CONTENT!)).toEqual({ permission: { "*": "ask" } });
+  expect(JSON.parse(asked.env.OPENCODE_CONFIG_CONTENT!)).toEqual({ permission: { "*": "ask", bash: { "*": "ask", "git push*": "deny" } } });
   // other roles stay autonomous
   const coordinator = adapterFor("opencode").launch({ ...base, role: "coordinator", env, run: { agent: "opencode" } });
   expect(coordinator.args).toEqual(["--standalone", "--auto"]);
@@ -101,7 +101,7 @@ test("autonomous false: every adapter keeps its approval prompts", () => {
   expect(oc.args).toEqual(["--standalone"]);
   const content = JSON.parse(oc.env.OPENCODE_CONFIG_CONTENT!);
   expect(content.model).toBe("p/m");
-  expect(content.permission["*"]).toBe("ask");
+  expect(content.permission).toEqual({ "*": "ask", bash: { "*": "ask", "git push*": "deny" } });
 
   const codex = adapterFor("codex").launch({ ...base, config: nonAuto, run: { agent: "codex" } }).args;
   expect(codex.slice(codex.indexOf("-a"), codex.indexOf("-a") + 2)).toEqual(["-a", "on-request"]);
@@ -117,4 +117,15 @@ test("autonomous false: every adapter keeps its approval prompts", () => {
 test("codex: trusts the project root and the worktree", () => {
   const { args } = adapterFor("codex").launch({ ...base, worktree: "/r/.worktrees/001-x", run: { agent: "codex" } });
   expect(args.slice(-2)).toEqual(["-c", 'projects={"/r"={trust_level="trusted"},"/r/.worktrees/001-x"={trust_level="trusted"}}']);
+});
+
+test("push is denied by the vendor's own rules in both modes (Claude Code, OpenCode)", () => {
+  for (const config of [DEFAULT_CONFIG, nonAuto]) {
+    const claude = adapterFor("claude-code").launch({ ...base, config, run: { agent: "claude-code" } }).args;
+    expect(JSON.parse(claude[claude.indexOf("--settings") + 1]!).permissions).toEqual({ deny: ["Bash(git push:*)"] });
+    const oc = JSON.parse(adapterFor("opencode").launch({ ...base, config, run: { agent: "opencode" } }).env.OPENCODE_CONFIG_CONTENT!);
+    expect(oc.permission.bash["git push*"]).toBe("deny");
+    // the catch-all comes first: the last matching rule wins
+    expect(Object.keys(oc.permission.bash)).toEqual(["*", "git push*"]);
+  }
 });

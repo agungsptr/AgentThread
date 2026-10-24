@@ -47,3 +47,14 @@ TUI's onboarding shows a directory-trust prompt for a project without a trust le
   `-c 'projects."<path>".trust_level=…'` breaks on any dot in the path (`.worktrees`). The adapter passes the whole
   table instead, `-c 'projects={"<root>"={trust_level="trusted"},…}'`; the CLI layer is merged into the loaded config
   (`merge_toml_values`), so the user's other project entries stay. Not yet seen in a release run.
+
+### Push deny rules (spec §12.9)
+No agent pushes; the vendors' own rules say so in both autonomy modes:
+- Claude Code: `"permissions": {"deny": ["Bash(git push:*)"]}` in the `--settings` JSON, in both modes. That the rule
+  holds under `bypassPermissions` is not yet seen in a release run.
+- OpenCode: `"bash": {"*": "allow", "git push*": "deny"}` inside `permission` when autonomous, `{"*": "ask", "git push*": "deny"}`
+  when not. Per https://opencode.ai/docs/permissions (fetched 2026-10-24) `*` "matches zero or more of any character",
+  so `git push*` covers a bare `git push` as well as `git push <args>` (the docs' own example, `"git push *"`, misses
+  the bare form), and "the last matching rule" wins, so the catch-all comes first.
+- Codex and omp have no per-command deny rule on the command line; Codex workers cannot write the repository's git dir
+  at all (see the sandbox scope below).

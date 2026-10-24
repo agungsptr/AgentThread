@@ -43,7 +43,8 @@ const claudeAdapter: AgentAdapter = {
   instructionFiles: ["CLAUDE.md"],
   prompt: "positional",
   launch({ role, run, config, root }) {
-    const settings = hookSettings();
+    // Pushing is the user's call: denied by Claude Code's own rules, whatever the permission mode.
+    const settings = { ...hookSettings(), permissions: { deny: ["Bash(git push:*)"] } };
     const args = config.agents.autonomous
       ? ["--permission-mode", "bypassPermissions", "--settings", JSON.stringify({ ...settings, skipDangerousModePermissionPrompt: true })]
       : [
@@ -70,7 +71,10 @@ const opencodeAdapter: AgentAdapter = {
     // Not autonomous: OpenCode asks for every permission. Release e2e only (tests/release): AGT_E2E_OPENCODE_ASK=<role,...>
     // starts those roles asking too, so the blocked-worker scenario can see a real approval dialog.
     const ask = !config.agents.autonomous || (env.AGT_E2E_OPENCODE_ASK ?? "").split(",").includes(role);
-    const permission = ask ? { "*": "ask" } : { "*": "allow", external_directory: "allow", doom_loop: "allow" };
+    // Pushing is the user's call: denied by OpenCode's own bash rules (the last matching rule wins, so "*" comes first).
+    const permission = ask
+      ? { "*": "ask", bash: { "*": "ask", "git push*": "deny" } }
+      : { "*": "allow", external_directory: "allow", doom_loop: "allow", bash: { "*": "allow", "git push*": "deny" } };
     // --standalone: a TUI attached to OpenCode's shared background service gets that service's config, and our
     // OPENCODE_CONFIG_CONTENT (model, permissions) would be ignored; a private server reads it.
     return { args: ask ? ["--standalone"] : ["--standalone", "--auto"], env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...model, permission }) } };
