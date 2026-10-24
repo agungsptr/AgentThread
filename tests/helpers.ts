@@ -89,6 +89,10 @@ export interface FakeHerdrState {
   agentPanes?: string[];
   status?: Record<string, string>;
   kinds?: Record<string, string>;
+  paneTab?: Record<string, string>;
+  workspaces?: string[];
+  agentStartPanes?: string[];
+  busyStarts?: number;
 }
 
 /**

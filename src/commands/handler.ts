@@ -23,6 +23,8 @@ export type Effect =
       cwd: string;
       pane?: string;
       splitFrom?: string;
+      /** Panes to split from instead when `splitFrom` is gone (real Herdr removes a closed pane). */
+      splitFallbacks?: string[];
       direction?: "right" | "down";
       bootstrap?: "start" | "handoff";
     }

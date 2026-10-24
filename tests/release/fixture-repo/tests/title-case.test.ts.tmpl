@@ -1,0 +1,6 @@
+import { expect, test } from "bun:test";
+import { titleCase } from "../src/index.ts";
+
+test("titleCase capitalizes every word", () => {
+  expect(titleCase("hello big world")).toBe("Hello Big World");
+});

@@ -47,6 +47,15 @@ describe("HerdrCli with a recording runner", () => {
     ]);
   });
 
+  test("runInPane accepts the empty stdout real Herdr prints for pane run", () => {
+    const { calls, runner } = recording({ stdout: "" });
+    const h = new HerdrCli({ bin: "herdr", runner });
+    h.runInPane("w7:p4", "agt logs -f");
+    expect(calls.map((c) => c.args)).toEqual([["pane", "run", "w7:p4", "agt logs -f"]]);
+    // other commands still need their JSON
+    expect(() => h.renamePane("w7:p4", "logger")).toThrow("herdr pane rename: unparseable output");
+  });
+
   test("error JSON on stderr becomes a HerdrError with its code", () => {
     const { runner } = recording({ exitCode: 1, stderr: '{"error":{"code":"tab_not_found","message":"no such tab"}}' });
     const h = new HerdrCli({ bin: "herdr", runner });

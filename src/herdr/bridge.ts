@@ -168,7 +168,8 @@ export class HerdrCli implements HerdrBridge {
   }
 
   runInPane(paneId: string, command: string): void {
-    this.call(["pane", "run", paneId, command]);
+    // Real Herdr prints nothing on stdout for a successful `pane run`.
+    this.call(["pane", "run", paneId, command], undefined, { emptyOk: true });
   }
 
   agentStart(o: { name: string; kind: string; pane: string; args: string[]; timeoutMs?: number }): void {
@@ -245,15 +246,15 @@ export class HerdrCli implements HerdrBridge {
     }
   }
 
-  private call(args: string[], timeoutMs = this.opts.timeoutMs ?? DEFAULT_TIMEOUT_MS): unknown {
-    return this.result(args, (this.opts.runner ?? spawnRunner)(this.opts.bin, args, this.opts.env ?? process.env, timeoutMs), timeoutMs);
+  private call(args: string[], timeoutMs = this.opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, o: { emptyOk?: boolean } = {}): unknown {
+    return this.result(args, (this.opts.runner ?? spawnRunner)(this.opts.bin, args, this.opts.env ?? process.env, timeoutMs), timeoutMs, o);
   }
 
   private async callAsync(args: string[], timeoutMs = this.opts.timeoutMs ?? DEFAULT_TIMEOUT_MS): Promise<unknown> {
     return this.result(args, await (this.opts.asyncRunner ?? spawnAsync)(this.opts.bin, args, this.opts.env ?? process.env, timeoutMs), timeoutMs);
   }
 
-  private result(args: string[], r: RunResult, timeoutMs: number): unknown {
+  private result(args: string[], r: RunResult, timeoutMs: number, o: { emptyOk?: boolean } = {}): unknown {
     const what = `herdr ${args.slice(0, 2).join(" ")}`;
     if (r.timedOut) throw new HerdrError("timeout", `${what}: timed out after ${timeoutMs}ms`);
     if (r.exitCode !== 0) {
@@ -270,6 +271,7 @@ export class HerdrCli implements HerdrBridge {
       }
       throw new HerdrError(code, `${what}: ${message}`);
     }
+    if (o.emptyOk && r.stdout.trim() === "") return undefined;
     try {
       return (JSON.parse(r.stdout) as { result?: unknown }).result;
     } catch {

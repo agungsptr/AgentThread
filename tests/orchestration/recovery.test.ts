@@ -42,7 +42,7 @@ test("lost coordinator is replaced by a fresh split from the root pane, with a g
   expect(newId).not.toBe(C);
   expect(created).toMatchObject({ payload: { role: "coordinator", replaces: C, retirePane: "w1:p2" } });
   expect(r.effects).toEqual([
-    { kind: "agent.spawn", session: newId, role: "coordinator", run: { agent: "claude-code" }, name: expect.any(String), thread: "001", cwd: "/repo/.worktrees/001-thread-001", splitFrom: "w1:p2", direction: "right", bootstrap: "handoff" },
+    { kind: "agent.spawn", session: newId, role: "coordinator", run: { agent: "claude-code" }, name: expect.any(String), thread: "001", cwd: "/repo/.worktrees/001-thread-001", splitFrom: "w1:p2", splitFallbacks: ["w1:p3"], direction: "right", bootstrap: "handoff" },
   ]);
   expect(r.effects[0]).not.toHaveProperty("resume");
   expect(r.effects[0]).not.toHaveProperty("pane");
@@ -367,4 +367,16 @@ test("an exiting coordinator is not replaced a 4th time within 10 minutes; main 
   const ok = react(old, at(old, "2026-10-11T10:05:00.000Z", { type: "session.ended", thread: "001", payload: { session: last } }), ctx());
   expect(ok.events.filter((e) => e.type === "session.created")).toHaveLength(1);
   expect(ok.events.some((e) => e.type === "notice.queued" && e.payload.text === KEEPS)).toBe(false);
+});
+
+test("a coordinator replacement can split from a live worker pane when the root pane is gone with the old coordinator", () => {
+  // Real Herdr: closing the coordinator's root pane removes it, so a split from it fails; a worker pane in the tab remains.
+  const s = withMain(base());
+  const r = react(s, apply(s, { type: "session.ended", thread: "001", payload: { session: C } }), ctx());
+  expect(r.effects).toEqual([expect.objectContaining({ kind: "agent.spawn", splitFrom: "w1:p2", splitFallbacks: ["w1:p3"] })]);
+  // without another live pane in the thread there is nothing to fall back to
+  const s2 = withMain(base());
+  apply(s2, { type: "session.ended", thread: "001", payload: { session: W } });
+  const r2 = react(s2, apply(s2, { type: "session.ended", thread: "001", payload: { session: C } }), ctx());
+  expect(r2.effects.find((e) => e.kind === "agent.spawn")).not.toHaveProperty("splitFallbacks");
 });

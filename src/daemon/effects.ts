@@ -121,6 +121,7 @@ export function createEffectRunner(opts: {
               ? {
                   split: {
                     pane: effect.splitFrom,
+                    ...(effect.splitFallbacks?.length ? { fallbacks: effect.splitFallbacks } : {}),
                     direction: effect.direction ?? "right",
                     cwd: effect.cwd,
                     env: {

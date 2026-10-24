@@ -121,7 +121,7 @@ export function spawnReplacement(
   t: Thread,
   old: Session,
   ctx: SpawnContext,
-  how: { splitFrom?: string; retirePane?: string; bootstrap: "start" | "handoff" },
+  how: { splitFrom?: string; retirePane?: string; bootstrap: "start" | "handoff"; fallbacks?: string[] },
 ): { events: EventBody[]; effects: Effect[] } {
   const session = ctx.newId();
   const name = agentName(ctx.root, "coordinator", t.id, undefined, session);
@@ -151,6 +151,7 @@ export function spawnReplacement(
         thread: t.id,
         cwd: t.worktree,
         splitFrom: how.splitFrom ?? old.pane ?? t.rootPane!,
+        ...(how.fallbacks?.length ? { splitFallbacks: how.fallbacks } : {}),
         direction: "right" as const,
         bootstrap: how.bootstrap,
       },

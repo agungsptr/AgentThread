@@ -5,9 +5,11 @@
 | Agent | Herdr kind | bin | model | effort | autonomous | first prompt | instruction file |
 |---|---|---|---|---|---|---|---|
 | Claude Code 2.1.296 | `claude` | `claude` | `--model <m>` | `--effort <low\|medium\|high\|xhigh\|max>` | `--permission-mode bypassPermissions` + `--settings` JSON with `"skipDangerousModePermissionPrompt": true` | positional | `CLAUDE.md` (symlink to `AGENTS.md`) |
-| OpenCode 2.0.27 | `opencode` | `opencode` | env `OPENCODE_CONFIG_CONTENT` = `{"model":"<provider/model>"}` (the TUI has no `--model`) | variant suffix in the same value: `<provider/model>#<effort>` | `--auto` + `"permission"` in `OPENCODE_CONFIG_CONTENT` | `--prompt <text>` | `AGENTS.md` |
+| OpenCode 2.0.27 | `opencode` | `opencode` | env `OPENCODE_CONFIG_CONTENT` = `{"model":"<provider/model>"}` (the TUI has no `--model`) | variant suffix in the same value: `<provider/model>#<effort>` | `--standalone --auto` + `"permission"` in `OPENCODE_CONFIG_CONTENT` | `--prompt <text>` | `AGENTS.md` |
 | Codex 0.164.0 | `codex` | `codex` | `-m <m>` | `-c model_reasoning_effort="<minimal\|low\|medium\|high\|xhigh>"` | `-s workspace-write -a never -c sandbox_workspace_write.network_access=true --add-dir <git common dir> --add-dir <root>/.agentthread --search` | positional | `AGENTS.md` |
 | omp 18.12.6 | `omp` | `omp` (standalone binary in `~/.local/bin`; the npm build needs a newer Bun) | `--model <m>` | `--thinking <off\|minimal\|low\|medium\|high\|xhigh\|max\|auto>` | `--approval-mode yolo` | positional | `AGENTS.md` |
+
+OpenCode needs `--standalone`: by default its TUI attaches to the shared background service (`opencode serve`), whose own config wins, so `OPENCODE_CONFIG_CONTENT` (model and permissions) was ignored in the release e2e. `--standalone` runs a private server that reads it.
 
 Codex needs `--add-dir <git common dir>` because commits from a worktree write to the main repository's `.git`, which lies outside the workspace-write sandbox.
 

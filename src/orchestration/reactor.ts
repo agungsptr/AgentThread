@@ -128,7 +128,11 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
       out.push({ type: "handoff.submitted", thread: t.id, payload: { content: generateHandoff(t, why), generated: true } });
     }
     // A split gets its own agent env; the root pane may carry the old session's AGT_SESSION. It is retired on attach.
-    const r = spawnReplacement(t, s, ctx, { splitFrom: t.rootPane, retirePane: t.rootPane, bootstrap: "handoff" });
+    // The root pane may be gone with the old coordinator (its pane was closed): any other live pane of the thread will do.
+    const fallbacks = liveSessions(state, t.id)
+      .filter((x) => x.id !== s.id && x.pane && x.pane !== t.rootPane)
+      .map((x) => x.pane!);
+    const r = spawnReplacement(t, s, ctx, { splitFrom: t.rootPane, retirePane: t.rootPane, bootstrap: "handoff", fallbacks });
     const created = r.events.find((e) => e.type === "session.created");
     if (created?.type === "session.created") redirect(s.id, created.payload.session);
     take(r);

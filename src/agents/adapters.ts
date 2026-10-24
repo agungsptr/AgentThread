@@ -11,6 +11,8 @@ export interface LaunchInput {
   root: string;
   worktree?: string;
   gitCommonDir?: string;
+  /** The launching process's env (default process.env); only the release e2e's AGT_E2E_* overrides are read from it. */
+  env?: Record<string, string | undefined>;
 }
 
 export interface AgentAdapter {
@@ -60,12 +62,20 @@ const opencodeAdapter: AgentAdapter = {
   bin: "opencode",
   instructionFiles: [],
   prompt: "flag",
-  launch({ run }) {
+  launch({ role, run, env = process.env }) {
+    // Release e2e only (tests/release): AGT_E2E_OPENCODE_ASK=<role,...> starts those roles asking for every
+    // permission, so the blocked-worker scenario can see a real approval dialog.
+    if ((env.AGT_E2E_OPENCODE_ASK ?? "").split(",").includes(role)) {
+      const content = { ...(run.model ? { model: run.effort ? `${run.model}#${run.effort}` : run.model } : {}), permission: { "*": "ask" } };
+      return { args: ["--standalone"], env: { OPENCODE_CONFIG_CONTENT: JSON.stringify(content) } };
+    }
     const content = {
       ...(run.model ? { model: run.effort ? `${run.model}#${run.effort}` : run.model } : {}),
       permission: { "*": "allow", external_directory: "allow", doom_loop: "allow" },
     };
-    return { args: ["--auto"], env: { OPENCODE_CONFIG_CONTENT: JSON.stringify(content) } };
+    // --standalone: a TUI attached to OpenCode's shared background service gets that service's config, and our
+    // OPENCODE_CONFIG_CONTENT (model, permissions) would be ignored; a private server reads it.
+    return { args: ["--standalone", "--auto"], env: { OPENCODE_CONFIG_CONTENT: JSON.stringify(content) } };
   },
   promptArgs: (text) => ["--prompt", text],
   capabilities: NO_HOOKS,

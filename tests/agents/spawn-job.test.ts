@@ -112,3 +112,52 @@ test("the spawner child writes to the log without handing it a parent fd (Bun cl
     closeSync(probe);
   }
 }, 15_000);
+
+test("a split whose source pane is gone tries the fallback panes in order", async () => {
+  const calls: string[] = [];
+  const b = {
+    splitPane: (o: { pane: string }) => {
+      calls.push(`split ${o.pane}`);
+      if (o.pane !== "w1:p5") throw new HerdrError("pane_not_found", "herdr pane split: pane not found");
+      return "w1:p6";
+    },
+    agentStart: (o: { name: string; pane: string }) => void calls.push(`start ${o.pane}`),
+    agentPrompt: () => {},
+    closePane: (p: string) => void calls.push(`close ${p}`),
+  } as unknown as HerdrBridge;
+  const reports: object[] = [];
+  await runSpawnJob({ ...JOB, split: { ...JOB.split!, fallbacks: ["w1:p4", "w1:p5"] } }, { herdr: b, report: async (c) => void reports.push(c) });
+  expect(calls).toEqual(["split w1:p2", "split w1:p4", "split w1:p5", "start w1:p6"]);
+  expect(reports).toEqual([{ cmd: "session.attached", session: "s-1", pane: "w1:p6" }]);
+  // any other split error is not retried
+  calls.length = 0;
+  const other = { ...b, splitPane: (o: { pane: string }) => { calls.push(`split ${o.pane}`); throw new HerdrError("server_unavailable", "down"); } } as unknown as HerdrBridge;
+  await runSpawnJob({ ...JOB, split: { ...JOB.split!, fallbacks: ["w1:p5"] } }, { herdr: other, report: async () => {} });
+  expect(calls).toEqual(["split w1:p2"]);
+});
+
+test("agent start in a just-split pane whose shell is not at its prompt yet (agent_pane_busy) is retried", async () => {
+  // Real Herdr 0.9.3 answers agent_pane_busy right after a pane split, until the new shell reaches its prompt.
+  const calls: string[] = [];
+  let busy = 2;
+  const b = {
+    splitPane: () => "w1:p3",
+    agentStart: (o: { pane: string }) => {
+      calls.push(`start ${o.pane}`);
+      if (busy-- > 0) throw new HerdrError("agent_pane_busy", "herdr agent start: agent target pane w1:p3 is not an available shell");
+    },
+    agentPrompt: () => {},
+    closePane: (p: string) => void calls.push(`close ${p}`),
+  } as unknown as HerdrBridge;
+  const reports: object[] = [];
+  await runSpawnJob(JOB, { herdr: b, report: async (c) => void reports.push(c), sleep: async () => {} });
+  expect(calls).toEqual(["start w1:p3", "start w1:p3", "start w1:p3"]);
+  expect(reports).toEqual([{ cmd: "session.attached", session: "s-1", pane: "w1:p3" }]);
+  // a pane that stays busy fails in the end, and the split pane is closed again
+  calls.length = 0;
+  busy = 1e9;
+  const failed: object[] = [];
+  await runSpawnJob(JOB, { herdr: b, report: async (c) => void failed.push(c), sleep: async () => {}, busyRetries: 3 });
+  expect(calls).toEqual(["start w1:p3", "start w1:p3", "start w1:p3", "start w1:p3", "close w1:p3"]);
+  expect(failed).toEqual([{ cmd: "session.failed", session: "s-1", reason: "herdr agent start: agent target pane w1:p3 is not an available shell" }]);
+});

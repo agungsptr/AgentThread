@@ -69,8 +69,8 @@ test("worker capacity: queue, finish, next worker spawns; coordinator gets notif
   expect(await cmd({ cmd: "worker.spawn", thread: "001", ticket: "T2" }, coord)).toMatchObject({ ok: true, result: { queued: true } });
   const w1 = (await sessionOf("worker", "T1"))!.session;
   expect(jobs.at(-1)).toMatchObject({ name: expect.stringMatching(/-w001-t1-[0-9a-f]{4}$/), split: { pane: "w1:p1", direction: "right", env: expect.objectContaining({ AGT_SESSION: w1, AGT_TICKET: "T1" }) } });
-  // attach the worker pane in the fake so pane.close can find it
-  fake.update((s) => ({ panes: [...s.panes, "w1:p7"] }));
+  // attach the worker pane in the fake so pane.close can find it; the coordinator's agent (launched by nobody here) is in w1:p1
+  fake.update((s) => ({ panes: [...s.panes, "w1:p7"], agentPanes: [...(s.agentPanes ?? []), "w1:p1"] }));
   await cmd({ cmd: "session.attached", session: w1, pane: "w1:p7" });
   const worker: Actor = { role: "worker", thread: "001", session: w1, ticket: "T1" };
   await cmd({ cmd: "ticket.claim", thread: "001", ticket: "T1" }, worker);
@@ -110,7 +110,7 @@ test("a coordinator blocked at a startup dialog is attached and gets its bootstr
   const c = (await sessionOf("coordinator"))!.session;
   expect(all.find((e) => e.type === "notice.queued")?.payload).toEqual({ session: c, text: expect.stringMatching(/^You are the coordinator of thread 001\. /) });
   // the dialog is dismissed; SessionStart fires at the empty prompt and delivers the bootstrap
-  fake.update(() => ({ fail: [] }));
+  fake.update((s) => ({ fail: [], status: { ...s.status, "w1:p1": "idle" } }));
   await cmd({ cmd: "session.signal", session: c, signal: "started" });
   expect((await events()).at(-1)!.type).toBe("notice.delivered");
   expect(fake.read().calls.filter((x) => x[0] === "agent" && x[1] === "prompt" && x[2] === "w1:p1").map((x) => x[3]!.slice(0, 28))).toEqual(["You are the coordinator of t"]);
@@ -173,7 +173,7 @@ test("a worker of a thread uses roles.worker: its kind, args and split env come 
   const job = jobs.at(-1)!;
   expect(jobs[0]!.kind).toBe("claude");
   expect(job.kind).toBe("opencode");
-  expect(job.args).toEqual(["--auto"]);
+  expect(job.args).toEqual(["--standalone", "--auto"]);
   expect(job.split!.env).toMatchObject({ AGT_AGENT: "opencode", AGT_ROLE: "worker" });
   expect(job.split!.env).not.toHaveProperty("CLAUDE_CONFIG_DIR");
   expect(JSON.parse(job.split!.env.OPENCODE_CONFIG_CONTENT!)).toMatchObject({ model: "p/m", permission: { "*": "allow" } });
@@ -197,4 +197,27 @@ test("the tab env carries the coordinator adapter env", async () => {
   expect(create.some((a) => a.startsWith("CLAUDE_CONFIG_DIR="))).toBe(false);
   const content = create.find((a) => a.startsWith("OPENCODE_CONFIG_CONTENT="))!;
   expect(JSON.parse(content.slice("OPENCODE_CONFIG_CONTENT=".length))).toMatchObject({ model: "p/m" });
+});
+
+test("a replacement for an exited coordinator carries the thread's live panes as split fallbacks", async () => {
+  const jobs: SpawnJob[] = [];
+  await boot({ launch: (j) => void jobs.push(j) });
+  await cmd({ cmd: "thread.new", title: "X", type: "bug" });
+  const c = (await sessionOf("coordinator"))!.session;
+  await cmd({ cmd: "session.attached", session: c, pane: "w1:p1" });
+  await cmd({ cmd: "ticket.add", thread: "001", title: "A", scope: ["A"] }, coord);
+  await cmd({ cmd: "worker.spawn", thread: "001", ticket: "T1" }, coord);
+  const w = (await sessionOf("worker", "T1"))!.session;
+  await cmd({ cmd: "session.attached", session: w, pane: "w1:p7" });
+  // the coordinator's root pane is closed in Herdr: its session ends and a replacement must not depend on that pane
+  await cmd({ cmd: "session.signal", session: c, signal: "ended" });
+  expect(jobs.at(-1)).toMatchObject({ split: { pane: "w1:p1", fallbacks: ["w1:p7"] }, bootstrap: expect.stringMatching(/^You are the new coordinator of thread 001/) });
+});
+
+test("a coordinator whose new pane is still busy (agent_pane_busy) attaches once its shell is ready", async () => {
+  await boot({ seed: { busyStarts: 2 } });
+  await cmd({ cmd: "thread.new", title: "X", type: "bug" });
+  await waitFor(async () => (await events()).some((e) => e.type === "session.attached" || e.type === "session.failed"), 15_000);
+  expect((await events()).some((e) => e.type === "session.failed")).toBe(false);
+  expect(fake.read().calls.filter((c) => c[0] === "agent" && c[1] === "start")).toHaveLength(3);
 });

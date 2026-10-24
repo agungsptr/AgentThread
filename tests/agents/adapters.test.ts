@@ -50,15 +50,27 @@ test("claude non-autonomous keeps permission mode and allowed tools", () => {
   expect(main.slice(-2)).toEqual(["--model", "opus"]);
 });
 
+// OpenCode 2 TUIs attach to a shared background service by default, whose own config wins over the TUI's
+// OPENCODE_CONFIG_CONTENT (seen in the release e2e: the model setting was ignored); --standalone runs a private server.
 test("opencode: --auto and config content with model variant and permissions", () => {
   const { args, env } = adapterFor("opencode").launch({ ...base, run: { agent: "opencode", model: "myrouter/gemini-flash", effort: "high" } });
-  expect(args).toEqual(["--auto"]);
+  expect(args).toEqual(["--standalone", "--auto"]);
   expect(JSON.parse(env.OPENCODE_CONFIG_CONTENT!)).toEqual({
     model: "myrouter/gemini-flash#high",
     permission: { "*": "allow", external_directory: "allow", doom_loop: "allow" },
   });
   const none = adapterFor("opencode").launch({ ...base, run: { agent: "opencode" } });
   expect(JSON.parse(none.env.OPENCODE_CONFIG_CONTENT!)).not.toHaveProperty("model");
+});
+
+test("opencode: the release e2e's AGT_E2E_OPENCODE_ASK makes the named roles ask for every permission", () => {
+  const env = { AGT_E2E_OPENCODE_ASK: "worker" };
+  const asked = adapterFor("opencode").launch({ ...base, env, run: { agent: "opencode" } });
+  expect(asked.args).toEqual(["--standalone"]);
+  expect(JSON.parse(asked.env.OPENCODE_CONFIG_CONTENT!)).toEqual({ permission: { "*": "ask" } });
+  // other roles stay autonomous
+  const coordinator = adapterFor("opencode").launch({ ...base, role: "coordinator", env, run: { agent: "opencode" } });
+  expect(coordinator.args).toEqual(["--standalone", "--auto"]);
 });
 
 test("codex: exact sandbox args", () => {

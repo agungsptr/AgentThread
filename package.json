@@ -6,7 +6,8 @@
   "bin": { "agt": "bin/agt" },
   "scripts": {
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "e2e:release": "bun tests/release/run.ts"
   },
   "dependencies": {
     "yaml": "^2.5.1",
