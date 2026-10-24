@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { appendFileSync, closeSync, openSync } from "node:fs";
+import { appendFileSync } from "node:fs";
 import { HerdrError, type HerdrBridge } from "../herdr/bridge.ts";
 import { AGT_BIN } from "./claude.ts";
 
@@ -51,20 +51,25 @@ export async function runSpawnJob(job: SpawnJob, deps: { herdr: HerdrBridge; rep
   }
 }
 
+/**
+ * `/bin/sh` argv that runs `argv` with stdout and stderr appended to `logFile`. The child opens the log itself: in
+ * Bun 1.1.34 an fd passed in `stdio` is closed again when the ChildProcess is garbage-collected, so closing it after
+ * spawn (as Node requires) makes a later GC close whatever reused that fd number, such as a daemon socket.
+ */
+export function loggedArgv(logFile: string, argv: string[]): [string, string[]] {
+  return ["/bin/sh", ["-c", 'log=$1; shift; exec "$@" >>"$log" 2>&1', "agt-log", logFile, ...argv]];
+}
+
 export function launchSpawnJob(job: SpawnJob, opts: { logFile: string; spawn?: typeof spawn }): void {
-  const fd = openSync(opts.logFile, "a");
-  try {
-    const child = (opts.spawn ?? spawn)(process.execPath, [AGT_BIN, "__spawn", encodeJob(job)], { stdio: ["ignore", fd, fd], env: { ...process.env, AGT_ROOT: job.root } });
-    // An async spawn error must never crash the daemon; log it instead.
-    child.on("error", (e) => {
-      try {
-        appendFileSync(opts.logFile, `spawn job for session ${job.session} failed: ${e.message}\n`);
-      } catch {
-        // nothing left to report to
-      }
-    });
-    child.unref();
-  } finally {
-    closeSync(fd);
-  }
+  const [cmd, args] = loggedArgv(opts.logFile, [process.execPath, AGT_BIN, "__spawn", encodeJob(job)]);
+  const child = (opts.spawn ?? spawn)(cmd, args, { stdio: "ignore", env: { ...process.env, AGT_ROOT: job.root } });
+  // An async spawn error must never crash the daemon; log it instead.
+  child.on("error", (e) => {
+    try {
+      appendFileSync(opts.logFile, `spawn job for session ${job.session} failed: ${e.message}\n`);
+    } catch {
+      // nothing left to report to
+    }
+  });
+  child.unref();
 }

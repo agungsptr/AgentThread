@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { closeSync, existsSync, fstatSync, mkdtempSync, openSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decodeJob, encodeJob, launchSpawnJob, runSpawnJob, type SpawnJob } from "../../src/agents/spawn-job.ts";
 import { HerdrError, type HerdrBridge } from "../../src/herdr/bridge.ts";
+import { waitFor } from "../helpers.ts";
 
 const JOB: SpawnJob = {
   root: "/repo", herdrBin: "herdr", session: "s-1", name: "agt-ab12-w001-t1", kind: "claude",
@@ -78,3 +80,35 @@ test("an async spawn error is written to the log instead of crashing the daemon"
   child.emit("error", new Error("EAGAIN"));
   expect(readFileSync(logFile, "utf8")).toContain("spawn job for session s-1 failed: EAGAIN");
 });
+
+test("the spawner child writes to the log without handing it a parent fd (Bun closes such fds again on GC)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "agt-spawn-"));
+  const logFile = join(dir, "daemon.log");
+  let pid: number | undefined;
+  launchSpawnJob({ ...JOB, root: dir, herdrBin: "/nonexistent/herdr" }, {
+    logFile,
+    spawn: ((cmd: string, args: string[], o: object) => {
+      const child = spawn(cmd, args, o as never);
+      pid = child.pid;
+      return child;
+    }) as never,
+  });
+  // an fd opened now may reuse a number the launch used; the child's exit and a GC must leave it open
+  const probe = openSync(join(dir, "probe"), "w");
+  try {
+    await waitFor(() => existsSync(logFile) && readFileSync(logFile, "utf8").includes("agt __spawn"), 10_000);
+    await waitFor(() => {
+      try {
+        process.kill(pid!, 0);
+        return false;
+      } catch {
+        return true;
+      }
+    }, 10_000);
+    Bun.gc(true);
+    await Bun.sleep(50);
+    expect(() => fstatSync(probe)).not.toThrow();
+  } finally {
+    closeSync(probe);
+  }
+}, 15_000);

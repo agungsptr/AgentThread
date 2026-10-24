@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { closeSync, openSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { stringify } from "yaml";
@@ -8,7 +8,7 @@ import { agentEnv } from "../agents/claude.ts";
 import { adapterFor } from "../agents/adapters.ts";
 import { roleAgent } from "../agents/roles.ts";
 import { systemPrompt } from "../agents/prompts.ts";
-import { decodeJob, runSpawnJob } from "../agents/spawn-job.ts";
+import { decodeJob, loggedArgv, runSpawnJob } from "../agents/spawn-job.ts";
 import { contextTokensFromTranscript } from "../agents/transcript.ts";
 import { isAlive, request } from "../daemon/client.ts";
 import { startDaemon } from "../daemon/server.ts";
@@ -240,18 +240,13 @@ async function ticket(sub: string | undefined, args: string[], root: string, env
 async function ensureDaemon(root: string, env: Env): Promise<"started" | "running"> {
   const p = paths(root);
   if (await isAlive(p.socket)) return "running";
-  // A new session (detached) keeps the daemon alive when the pane that started it goes away.
-  const logFd = openSync(p.daemonLog, "a");
+  // A new session (detached) keeps the daemon alive when the pane that started it goes away. The shell opens the
+  // log in the child (see loggedArgv): no fd of ours is handed over.
+  const [cmd, args] = loggedArgv(p.daemonLog, [process.execPath, Bun.main, "daemon", "run"]);
   try {
-    spawn(process.execPath, [Bun.main, "daemon", "run"], {
-      detached: true,
-      stdio: ["ignore", logFd, logFd],
-      env: { ...env, AGT_ROOT: root },
-    }).unref();
+    spawn(cmd, args, { detached: true, stdio: "ignore", env: { ...env, AGT_ROOT: root } }).unref();
   } catch {
     throw new Error("failed to launch daemon");
-  } finally {
-    closeSync(logFd);
   }
   for (let i = 0; i < 50; i++) {
     if (await isAlive(p.socket)) return "started";
