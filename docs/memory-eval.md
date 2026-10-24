@@ -14,7 +14,7 @@ Checks, with real agents, that a replacement coordinator continues a thread from
 2. Kill the coordinator's agent (quit it, or close its process) without writing a handoff.
 3. Run `agt start` from the main tab. A fresh coordinator starts in a new split pane.
 4. Let the replacement continue. Do not give it extra context by hand. Observe until its first productive action (a ticket spawned, a review, a commit) and beyond.
-5. Repeat the whole run twice: first with the same vendor for the replacement, later with another vendor (change `agents.default_coordinator` in the project config before step 3).
+5. Repeat the whole run twice: first with the same vendor for the replacement, later with another vendor (change `agents.roles.coordinator.agent`, and its `model` and `effort`, in `.agentthread/config.yaml` before step 3, or run `agt setup`; the cross-vendor run needs both agents installed and logged in).
 
 ## Score sheet
 

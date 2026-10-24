@@ -16,7 +16,8 @@ tickets), never on what a model writes.
   own agent config; the suite does not set them. A row whose agent is not installed is reported
   `SKIPPED (not installed: …)`; one whose agent cannot run is `SKIPPED (… not logged in)` (Codex: `codex login
   status`; omp: no `~/.omp/agent`; OpenCode: `opencode models` lists nothing). Set `AGT_E2E_ASSUME_LOGIN=omp,codex` to
-  skip those login checks.
+  skip those login checks. Install notes: omp is the standalone binary from omp.sh; Codex is `brew install --cask codex`.
+  If OpenCode's default model does not work, set `AGT_E2E_MODEL_OPENCODE`.
 - Optional models and efforts per agent: `AGT_E2E_MODEL_<AGENT>` and `AGT_E2E_EFFORT_<AGENT>`, with `<AGENT>` one of
   `CLAUDE_CODE`, `OPENCODE`, `CODEX`, `OMP` (for example `AGT_E2E_MODEL_CLAUDE_CODE=sonnet`). Unset means the agent's
   default model.

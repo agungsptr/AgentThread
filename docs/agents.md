@@ -13,6 +13,14 @@ OpenCode needs `--standalone`: by default its TUI attaches to the shared backgro
 
 Codex needs `--add-dir <git common dir>` because commits from a worktree write to the main repository's `.git`, which lies outside the workspace-write sandbox.
 
+## Adding an agent
+
+1. Add the kind to `AGENT_KINDS` (`src/domain/types.ts`) and an adapter entry in `src/agents/adapters.ts`: `herdrKind`, `bin`, `prompt`, `launch` (model, effort and the autonomous flags), `promptArgs` and `capabilities`, plus its `AGT_<AGENT>_BIN` name.
+2. Add its accepted effort values to `EFFORTS` in `src/agents/roles.ts` (an empty list accepts any string).
+3. Set `instructionFiles` to the extra symlinks to `AGENTS.md` the agent reads (empty when it reads `AGENTS.md`).
+4. Add a row to `tests/agents/adapters.test.ts` and a line to the table above, from the agent's own `--help`.
+5. Add a release e2e row (`tests/release/`) and the agent to the login checks, then run `bun run e2e:release --agents <agent>`.
+
 ## Verification notes
 
 ### OpenCode permission keys

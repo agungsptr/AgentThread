@@ -1,25 +1,39 @@
 # AgentThread
 
-AgentThread runs a team of Claude Code agents on one git repository, inside the Herdr terminal multiplexer.
+AgentThread runs a team of coding agents (Claude Code, OpenCode, Codex, omp) on one git repository, inside the Herdr terminal multiplexer.
 You talk to a **main manager** agent. For each feature or bug it opens a **thread**: a git worktree plus a Herdr tab with a
 **coordinator** agent, which splits the work into tickets and starts **worker** agents (in panes of that tab) to implement them.
 A local daemon (`agt daemon`) keeps the event log and renders the state as Markdown under `.agentthread/`.
 
 ## Install
 
-Requires [Bun](https://bun.sh) 1.1.34 or newer, git, Herdr and Claude Code.
+Requires [Bun](https://bun.sh) 1.1.34 or newer, git, Herdr and at least one supported agent.
 
 ```sh
 bun install
 bun link        # puts `agt` on your PATH
 ```
 
+## Supported agents
+
+| Agent | Install |
+|---|---|
+| Claude Code (`claude-code`) | see Claude Code's own docs |
+| OpenCode (`opencode`) | see opencode.ai; runs with `--standalone` |
+| Codex (`codex`) | `brew install --cask codex`, then `codex login` |
+| omp (`omp`) | the standalone binary from [omp.sh](https://omp.sh) (the npm build needs a newer Bun than 1.1.34) |
+
+Any agent can fill any role (main, coordinator, worker). CLI facts and how to add an agent: [docs/agents.md](docs/agents.md).
+`AGT_CLAUDE_BIN`, `AGT_OPENCODE_BIN`, `AGT_CODEX_BIN` and `AGT_OMP_BIN` override the executable of main's launch only;
+coordinators and workers are started by Herdr, which picks the executable itself.
+
 ## Quick start
 
 ```sh
 cd your-repo
-agt init        # creates .agentthread/
+agt init        # creates .agentthread/ (runs the setup wizard on a terminal when agents.roles is missing)
 agt start       # run inside a Herdr pane: sets up the main tab, then opens the main manager
+agt setup       # re-run the per-project wizard: agent, model and effort per role, and complexity tiers
 ```
 
 Describe a feature or bug to the main manager. After you confirm, it creates a thread; the coordinator and workers take it from there.
@@ -27,13 +41,20 @@ Describe a feature or bug to the main manager. After you confirm, it creates a t
 ## Configuration
 
 User config: `~/.config/agentthread/config.yaml`. Project config (overrides it): `.agentthread/config.yaml`.
+`agt setup` writes the `agents` block below to the project config.
 
 ```yaml
 agents:
-  claude:
-    permission_mode: acceptEdits        # acceptEdits | auto | bypassPermissions | manual | dontAsk | plan
-    extra_allowed_tools: ["Bash(bun test*)"]  # lets workers run the tests without asking for approval
-    # model: opus
+  roles:                                # agent, model and effort per role
+    main:        { agent: claude-code, model: opus, effort: high }
+    coordinator: { agent: claude-code, model: sonnet }
+    worker:      { agent: opencode, model: anthropic/claude-sonnet-4 }
+  complexity:
+    timeout: 10s                        # how long main's tier proposal waits for your choice (at least 1s)
+    tiers:                              # names match /^[a-z][a-z0-9_-]*$/
+      simple:  { agent: opencode, model: anthropic/claude-haiku-4 }
+      complex: { agent: claude-code, model: opus, effort: high }
+  autonomous: true                      # default: agents run without approval prompts
 workers:
   max_workers: 3                        # workers per thread; extra spawn requests are queued
 herdr:
@@ -42,12 +63,49 @@ herdr:
   close_worker_pane_on_end: true
 ```
 
-Workers only run commands they are allowed to run without approval. If a ticket needs another command, the worker blocks
-the ticket and names the command, so add the commands your project needs to `extra_allowed_tools`.
+An `effort` the agent does not accept is rejected when the config loads (`agents.<path>.effort: <agent> accepts <list>`).
+The older keys `main_manager`, `default_coordinator`, `default_worker` and `agents.claude.{permission_mode,
+extra_allowed_tools, model, config_dir}` still load: a legacy key fills a role only when `agents.roles` does not set it.
+
+### Tier proposal
+
+When main starts a thread it can propose a complexity tier:
+`agt thread new ... --tier <name> --reason "<why>" [--now]`. The thread is only proposed: it has no tab and no
+coordinator yet. You choose with `agt thread choose <thread> --tier <name>` or drop it with `agt thread cancel <thread>`.
+The timer pauses while main is working. When it runs out (`agents.complexity.timeout`), the proposed tier is accepted
+automatically and main is told so. `--now` starts the thread without waiting.
+
+### Autonomy and the worker commit guard
+
+With `agents.autonomous: true` (the default) every agent runs with its approval prompts off (see the autonomous column in
+[docs/agents.md](docs/agents.md)), and `agents.claude.permission_mode` and `extra_allowed_tools` are ignored (with a
+warning). Set it to `false` to get the Claude Code allowlist behaviour back: workers then only run commands they are
+allowed to run, and a ticket that needs another command blocks and names it; add those commands to `extra_allowed_tools`.
+
+Workers never commit. Each thread worktree gets its own `core.hooksPath` whose `pre-commit` refuses a commit when the
+agent runs as a worker, and then forwards to the project's own hooks. The coordinator reviews and commits. A coordinator
+does not implement tickets itself; it delegates them to workers.
+
+A worker with a question runs `agt question`; the coordinator replies with `agt answer <thread> <Q> "<text>"`. A blocked
+worker is reported to its coordinator. If a session's first settled turn runs no `agt` command (for example because the
+configured model does not exist), the daemon reports `session.stalled` instead of waiting forever.
+
+### Notes on instruction files and git config
+
+- Worktrees live under `<root>/.worktrees/`. Claude Code also loads an ancestor `CLAUDE.md` (the one in the repo root)
+  on top of the worktree's own `AGENTS.md`/`CLAUDE.md`, whose content already includes the project's instructions. The
+  project's instructions can therefore appear twice for Claude Code; this is harmless.
+- AgentThread sets `extensions.worktreeConfig = true` in the repository config. It is needed for the per-worktree
+  excludes and commit guard, and leaves the main checkout untouched.
+
+## Release check
+
+Run `bun run e2e:release` before every release. It runs real agents against an isolated Herdr server and costs money;
+see [docs/release-e2e.md](docs/release-e2e.md). `bun test` never starts real agents.
 
 ## Manual smoke test
 
-The test suite never runs the real `herdr` or `claude` binaries. Run this once in a scratch git repo:
+The test suite never runs the real `herdr` or agent binaries. Run this once in a scratch git repo:
 
 1. `agt init`, then `agt start` inside a Herdr pane. Claude Code opens as the main manager.
 2. Ask the main manager to create a small thread and confirm it. A new tab appears, and a coordinator Claude starts in it.
