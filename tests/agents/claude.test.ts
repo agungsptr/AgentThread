@@ -63,7 +63,7 @@ describe("prompts", () => {
 
   test("worker prompt is scoped to its ticket and forbids commits", () => {
     const p = systemPrompt({ root: "/repo", role: "worker", thread: T, ticket: "T3" });
-    for (const s of ["ticket T3 of thread 002", "agt ticket claim 002/T3", "agt ticket done 002/T3", "agt ticket block 002/T3", "Do not commit", `You may run any command the work needs (tests, the dev stack, installs) inside the worktree. When you need a decision you cannot make, run agt question 002 "<question>", end your turn and wait for the answer.`]) {
+    for (const s of ["ticket T3 of thread 002", "agt ticket claim 002/T3", "agt ticket done 002/T3", "agt ticket block 002/T3", "Do not commit", "Never bypass the commit guard (no git commit --no-verify, no changing core.hooksPath or AGT_ROLE).", `You may run any command the work needs (tests, the dev stack, installs) inside the worktree. When you need a decision you cannot make, run agt question 002 "<question>", end your turn and wait for the answer.`]) {
       expect(p).toContain(s);
     }
     expect(bootstrapPrompt({ root: "/repo", role: "worker", thread: T, ticket: "T3" })).toBe(`You are the worker for ticket T3 of thread 002. Read ${DIR}/brief.md, then follow AGENTS.md.`);

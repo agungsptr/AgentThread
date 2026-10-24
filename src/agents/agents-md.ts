@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { type AsyncRunner, type RunResult, type Runner, spawnAsync, spawnRunner } from "../herdr/bridge.ts";
 import { paths } from "../project/paths.ts";
@@ -223,32 +223,68 @@ function writeIfChanged(file: string, text: string): void {
   chmodSync(file, 0o755);
 }
 
+const HOOK_NAMES = [
+  "applypatch-msg", "pre-applypatch", "post-applypatch", "pre-commit", "pre-merge-commit", "prepare-commit-msg", "commit-msg",
+  "post-commit", "pre-rebase", "post-checkout", "post-merge", "pre-push", "pre-auto-gc", "post-rewrite", "reference-transaction",
+  "push-to-checkout",
+];
+
+/** The one stub, identical for every worktree: it finds the project's own hooks at run time from the worktree's config. */
+function hookStub(guardDir: string): string {
+  return [
+    "#!/bin/sh",
+    'N=${0##*/}',
+    `if [ "$N" = "pre-commit" ] && [ "\${AGT_ROLE:-}" = "worker" ]; then`, `  echo ${shq(GUARD_MESSAGE)} >&2`, "  exit 1", "fi",
+    "TOP=$(pwd -P)",
+    'V=$(git config --worktree --get agentthread.hooksPath 2>/dev/null)',
+    'if [ -z "$V" ]; then',
+    '  D=$(git rev-parse --git-common-dir 2>/dev/null) || exit 0',
+    '  case "$D" in /*) ;; *) D="$TOP/$D" ;; esac',
+    '  D="$D/hooks"',
+    "else",
+    '  case "$V" in /*) D="$V" ;; *) D="$TOP/$V" ;; esac',
+    "fi",
+    'R=$(cd "$D" 2>/dev/null && pwd -P) || exit 0',
+    `G=$(cd ${shq(guardDir)} 2>/dev/null && pwd -P)`,
+    '[ "$R" = "$G" ] && exit 0',
+    '[ -x "$R/$N" ] && exec "$R/$N" "$@"',
+    "exit 0",
+    "",
+  ].join("\n");
+}
+
 /**
- * Worker commit guard: a per-worktree core.hooksPath whose pre-commit refuses commits when $AGT_ROLE is "worker", then
- * runs the project's own hook. Every other hook the project has is forwarded, so nothing it relies on stops running.
- * Needs extensions.worktreeConfig (set up by excludeInWorktree); the main checkout is never touched.
+ * Worker commit guard: a per-worktree core.hooksPath whose pre-commit refuses commits when $AGT_ROLE is "worker". Every
+ * standard hook is a stub that then runs the project's own hook, found at run time through the worktree-scoped
+ * agentthread.hooksPath (the original core.hooksPath as configured, empty when unset), so the shared stubs hold no
+ * worktree-specific path. Needs extensions.worktreeConfig (set up by excludeInWorktree); the main checkout is untouched.
  */
 function* guardInWorktree(c: Ctx, root: string, wt: string, log: (m: string) => void): Steps<void> {
   const dir = join(root, ".agentthread", "hooks");
-  // The repo's own hooks directory, read from the main checkout so our per-worktree value is never read back.
-  const configured = (yield* git(c, root, ["config", "--path", "--get", "core.hooksPath"]));
-  const configuredPath = configured.ok ? configured.stdout.trim() : "";
-  let orig = configuredPath ? resolve(wt, configuredPath) : join(resolve(root, (yield* mustGit(c, root, ["rev-parse", "--git-common-dir"])).trim()), "hooks");
-  if (orig === dir) orig = join(resolve(root, (yield* mustGit(c, root, ["rev-parse", "--git-common-dir"])).trim()), "hooks");
-  mkdirSync(dir, { recursive: true });
-  const forward = (name: string) => `exec ${shq(join(orig, name))} "$@"`;
-  const chain = (name: string) => `if [ -x ${shq(join(orig, name))} ]; then\n  ${forward(name)}\nfi\nexit 0\n`;
-  writeIfChanged(
-    join(dir, "pre-commit"),
-    `#!/bin/sh\nif [ "\${AGT_ROLE:-}" = "worker" ]; then\n  echo ${shq(GUARD_MESSAGE)} >&2\n  exit 1\nfi\n${chain("pre-commit")}`,
-  );
   try {
-    for (const name of readdirSync(orig)) {
-      if (name === "pre-commit" || name.endsWith(".sample") || name.startsWith(".")) continue;
-      writeIfChanged(join(dir, name), `#!/bin/sh\n${chain(name)}`);
+    const configured = (yield* git(c, root, ["config", "--get", "core.hooksPath"]));
+    const original = configured.ok ? configured.stdout.trim() : "";
+    mkdirSync(dir, { recursive: true });
+    // One script, every hook name a symlink to it: a freshly written executable costs a one-off scan on some systems.
+    writeIfChanged(join(dir, "stub"), hookStub(dir));
+    for (const name of HOOK_NAMES) {
+      const link = join(dir, name);
+      let current = "";
+      try {
+        current = readlinkSync(link);
+      } catch {}
+      if (current !== "stub") {
+        removeIfPresent(link);
+        symlinkSync("stub", link);
+      }
     }
-  } catch {}
-  try {
+    const current = (yield* git(c, wt, ["config", "--worktree", "--get", "agentthread.hooksPath"]));
+    // Unset means empty (the runners drop an empty argument, so an empty value cannot be passed).
+    if (original === "") {
+      if (current.ok && current.stdout.trim() !== "") (yield* mustGit(c, wt, ["config", "--worktree", "--unset", "agentthread.hooksPath"]));
+    } else if (!current.ok || current.stdout.trim() !== original) {
+      (yield* mustGit(c, wt, ["config", "--worktree", "agentthread.hooksPath", original]));
+    }
     if ((yield* git(c, wt, ["config", "--worktree", "--get", "core.hooksPath"])).stdout.trim() !== dir) {
       (yield* mustGit(c, wt, ["config", "--worktree", "core.hooksPath", dir]));
     }

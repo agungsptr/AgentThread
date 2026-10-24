@@ -47,7 +47,7 @@ export function systemPrompt(o: PromptInput): string {
     `1. agt ticket claim ${t.id}/${o.ticket}`,
     `2. Implement the ticket. You may run any command the work needs (tests, the dev stack, installs) inside the worktree. When you need a decision you cannot make, run agt question ${t.id} "<question>", end your turn and wait for the answer.`,
     `3. agt ticket done ${t.id}/${o.ticket} --summary "<one line>" — or, if you cannot finish, agt ticket block ${t.id}/${o.ticket} --reason "<why>".`,
-    "Do not commit; the coordinator commits. Do not work on other tickets.",
+    "Do not commit; the coordinator commits. Never bypass the commit guard (no git commit --no-verify, no changing core.hooksPath or AGT_ROLE). Do not work on other tickets.",
   ].join("\n");
 }
 

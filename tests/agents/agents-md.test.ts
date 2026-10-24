@@ -290,6 +290,8 @@ describe("writeAgentsFiles: symlinks, excludes, git operations", () => {
     expect(info.filter((l) => l === "/CLAUDE.md").length).toBe(1);
     expect(Bun.spawnSync(["git", "-C", root, "config", "--get", "extensions.worktreeConfig"]).exitCode).toBe(1);
     expect(logs.some((m) => m.includes("per-worktree excludes unavailable"))).toBe(true);
+    expect(logs).toContain("worker commit guard unavailable: git without worktree config");
+    expect(existsSync(join(root, ".agentthread", "hooks"))).toBe(false);
     expectSymlink(wt);
     expect(status(wt)).toBe("");
   });
@@ -348,6 +350,37 @@ describe("worker commit guard", () => {
     write({ root, worktree: wt, content: SECTION });
     expect(Bun.spawnSync(["git", "-C", root, "config", "--get", "core.hooksPath"], { env: ENV }).exitCode).not.toBe(0);
     expect(commit(root, { AGT_ROLE: "worker" }).exitCode).toBe(0);
+  });
+
+  test("a relative core.hooksPath with two worktrees: each runs its own project hook", () => {
+    const root = tempRepo();
+    git(root, "config", "core.hooksPath", ".githooks");
+    const wts = ["001-a", "002-b"].map((n) => join(root, ".worktrees", n));
+    mkdirSync(join(root, ".githooks"), { recursive: true });
+    writeFileSync(join(root, ".githooks", "pre-commit"), "#!/bin/sh\necho hook-root >&2\nexit 1\n", { mode: 0o755 });
+    git(root, "add", ".githooks");
+    Bun.spawnSync(["git", "-C", root, "-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", "hooks"], { env: ENV });
+    wts.forEach((w, i) => {
+      addWorktree(root, `thread/00${i}-x`, w);
+      writeFileSync(join(w, ".githooks", "pre-commit"), `#!/bin/sh\necho hook-${i}\nexit 1\n`, { mode: 0o755 });
+      write({ root, worktree: w, content: SECTION });
+    });
+    wts.forEach((w, i) => {
+      const r = commit(w, { AGT_ROLE: "coordinator" });
+      expect(r.exitCode).not.toBe(0);
+      expect(r.stdout.toString() + r.stderr.toString()).toContain(`hook-${i}`);
+    });
+  });
+
+  test("a hook added after the files were written still runs, commit-msg gets its argument, a path with a space works", () => {
+    const root = tempRepo();
+    const wt = join(root, ".worktrees", "001 x");
+    addWorktree(root, "thread/001-x", wt);
+    write({ root, worktree: wt, content: SECTION });
+    writeFileSync(join(root, ".git", "hooks", "commit-msg"), '#!/bin/sh\ncase "$1" in *COMMIT_EDITMSG) echo msg-arg-ok >&2;; esac\nexit 1\n', { mode: 0o755 });
+    const r = commit(wt, { AGT_ROLE: "coordinator" });
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr.toString()).toContain("msg-arg-ok");
   });
 
   test("rerunning is idempotent", () => {
