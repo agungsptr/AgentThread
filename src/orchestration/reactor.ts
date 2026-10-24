@@ -12,6 +12,8 @@ const CHECKPOINT_NOTICE = (thread: string | undefined) =>
 
 /** At most this many automatic coordinator replacements per thread within AUTO_REPLACE_WINDOW_MS. */
 const MAX_AUTO_REPLACEMENTS = 3;
+/** Finished turns without any agt command after which a coordinator or worker is reported as stalled. */
+const STALL_TURNS = 2;
 const AUTO_REPLACE_WINDOW_MS = 10 * 60_000;
 
 export interface ReactorContext {
@@ -147,6 +149,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
       (x) => x.thread === thread && x.role === "coordinator" && x.replaces && Date.parse(ts) - Date.parse(x.createdAt) <= AUTO_REPLACE_WINDOW_MS,
     ).length;
   const braked = new Set<string>();
+  const stalled = new Set<string>();
   /** Threads whose coordinator is lost in this batch; it will be replaced, so tab_opened must not spawn a fresh one. */
   const coordinatorLostIn = new Set(
     events
@@ -345,6 +348,14 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
       case "agent.idle": {
         const s = state.sessions.get(ev.payload.session);
         if (s && isLive(s)) setTimers(s, "running");
+        // A coordinator or worker that never runs an agt command is likely misconfigured (a wrong model, no auth):
+        // report it once, after its first STALL_TURNS turns.
+        if (s && isLive(s) && s.role !== "main" && s.turns >= STALL_TURNS && !s.authored && !s.stalled && !stalled.has(s.id)) {
+          stalled.add(s.id);
+          out.push({ type: "session.stalled", ...(s.thread ? { thread: s.thread } : {}), payload: { session: s.id } } as EventBody);
+          const text = `Session ${s.id} (${s.agent} ${s.model ?? "default"}) finished ${STALL_TURNS} turns without running any agt command; it may be misconfigured (for example a wrong model). Check pane ${s.pane ?? "unknown"}.`;
+          notify(s.role === "coordinator" ? liveSessions(state, undefined, "main")[0] : coordinatorToNotify(s.thread), text);
+        }
         const ticketStatus = s?.thread ? state.threads.get(s.thread)?.tickets.find((k) => k.id === s.ticket)?.status : undefined;
         // A worker whose ticket is done or blocked has nothing left to do; ending it frees its slot.
         const finished = s && isLive(s) && s.role === "worker" && (ticketStatus === "done" || ticketStatus === "blocked");

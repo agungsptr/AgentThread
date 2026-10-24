@@ -35,6 +35,10 @@ export interface Session {
   polledStart?: boolean;
   /** Finished turns (real active to idle transitions). */
   turns: number;
+  /** The session authored an event other than its own lifecycle signals: it ran an agt command. */
+  authored?: boolean;
+  /** Reported as stalled (session.stalled): finished its first turns without running any agt command. */
+  stalled?: boolean;
   /** When the session was created (session.created ts). */
   createdAt: string;
 }
@@ -134,8 +138,15 @@ export function project(events: StoredEvent[]): State {
   return state;
 }
 
+/** Events a session's hooks or the poller report for it; they do not show that the agent ran an agt command. */
+const SIGNAL_TYPES: ReadonlySet<string> = new Set(["session.started", "session.active", "agent.idle", "session.compacting", "session.ended", "agent.blocked"]);
+
 export function applyEvent(state: State, ev: StoredEvent): void {
   state.lastSeq = ev.seq;
+  if (ev.actor.session && !SIGNAL_TYPES.has(ev.type)) {
+    const by = state.sessions.get(ev.actor.session);
+    if (by) by.authored = true;
+  }
 
   if (ev.type === "project.initialized") {
     state.project = { name: ev.payload.name };
@@ -398,6 +409,12 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
         s.lastActiveAt = ev.ts;
         if (ev.payload.contextTokens !== undefined) s.contextTokens = ev.payload.contextTokens;
       }
+      return true;
+    }
+    case "session.stalled": {
+      const s = sessionOf(state, ev.seq, ev.payload.session);
+      s.stalled = true;
+      threadNote(state, ev, `session ${short(s.id)} finished its first turns without running any agt command`);
       return true;
     }
     case "checkpoint.reminded": {

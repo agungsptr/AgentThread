@@ -122,6 +122,13 @@ export interface HerdrServer {
 
 let serverSerial = 0;
 
+/** Every isolated server started and not yet stopped, so an interrupt (even during startHerdr) can stop them all. */
+export const activeServers = new Map<string, () => Promise<void>>();
+
+export async function stopAllServers(): Promise<void> {
+  await Promise.all([...activeServers.values()].map((stop) => stop().catch(() => {})));
+}
+
 /** Runs an isolated headless Herdr server: `herdr --session agt-e2e-<pid>-<n> server`, its own socket. */
 export async function startHerdr(name?: string): Promise<HerdrServer> {
   const session = name ?? `agt-e2e-${process.pid}-${++serverSerial}`;
@@ -140,6 +147,10 @@ export async function startHerdr(name?: string): Promise<HerdrServer> {
   });
   child.unref();
   const pid = child.pid;
+  // One stop per server, however many callers (the row's teardown, an interrupt) ask for it.
+  let stopping: Promise<void> | undefined;
+  const stop = () => (stopping ??= stopServer(session, pid, socket));
+  activeServers.set(session, stop);
   let proof = "";
   for (let i = 0; i < 100; i++) {
     const r = await spawnAsync(HERDR_BIN, ["status", "server"], herdr.env(), 5_000);
@@ -149,24 +160,27 @@ export async function startHerdr(name?: string): Promise<HerdrServer> {
   }
   const named = /^socket: (.*)$/m.exec(proof)?.[1]?.trim();
   if (!/^status: running$/m.test(proof) || !named || resolve(named) !== resolve(socket)) {
-    await stopServer(session, pid);
+    await stop();
     throw new Error(`isolated Herdr server ${session} did not come up on ${socket}:\n${proof}`);
   }
   assertIsolated(named);
-  return { socket, session, herdr, proof, stop: () => stopServer(session, pid) };
+  return { socket, session, herdr, proof, stop };
 }
 
-async function stopServer(session: string, pid: number | undefined): Promise<void> {
+async function stopServer(session: string, pid: number | undefined, socket: string): Promise<void> {
   if (!session.startsWith("agt-e2e-")) throw new Error(`refusing to stop ${session}`);
-  // `session stop <name>` names the isolated session explicitly; the live one is never addressed.
-  await spawnAsync(HERDR_BIN, ["session", "stop", session], cleanEnv(), 15_000);
+  assertIsolated(socket);
+  // `session stop <name>` names the isolated session explicitly, and the env names its socket: the live one is never addressed.
+  const env = cleanEnv({ HERDR_SOCKET_PATH: socket });
+  await spawnAsync(HERDR_BIN, ["session", "stop", session], env, 15_000);
   if (pid) {
     for (let i = 0; i < 50 && alive(pid); i++) await Bun.sleep(100);
     if (alive(pid)) process.kill(pid, "SIGTERM");
     for (let i = 0; i < 30 && alive(pid); i++) await Bun.sleep(100);
     if (alive(pid)) process.kill(pid, "SIGKILL");
   }
-  await spawnAsync(HERDR_BIN, ["session", "delete", session], cleanEnv(), 15_000);
+  await spawnAsync(HERDR_BIN, ["session", "delete", session], env, 15_000);
+  activeServers.delete(session);
 }
 
 function alive(pid: number): boolean {
@@ -355,8 +369,11 @@ export function writeConfig(root: string, agents: RoleAgents, extra: Record<stri
 
 // ---------- cleanup ----------
 
-/** Stops the project's daemon and every leftover process of the run: spawn jobs of `root` and anything cwd'd in it. */
-export async function cleanupProcesses(root: string, log: (m: string) => void, o: { sweepCwd?: boolean } = {}): Promise<void> {
+/**
+ * Stops the project's daemon and every leftover process of the run: spawn jobs of `root` and anything cwd'd in it.
+ * Returns the leftover processes the cwd sweep had to kill (after Herdr stopped, any is a leak).
+ */
+export async function cleanupProcesses(root: string, log: (m: string) => void, o: { sweepCwd?: boolean } = {}): Promise<string[]> {
   const env = cleanEnv({ AGT_ROOT: root });
   try {
     const ping = await request(paths(root).socket, { op: "ping" }, 2_000);
@@ -382,19 +399,25 @@ export async function cleanupProcesses(root: string, log: (m: string) => void, o
       }
     } catch {}
   }
-  if (o.sweepCwd === false) return;
-  // Any process whose cwd is inside the scratch repo (an agent the Herdr shutdown did not take down).
+  if (o.sweepCwd === false) return [];
+  // Any process whose cwd is inside the scratch repo (an agent the Herdr shutdown did not take down). Give the
+  // processes Herdr's shutdown just signalled a moment to exit first.
+  await Bun.sleep(1_500);
+  const killed: string[] = [];
   const lsof = await spawnAsync("lsof", ["-a", "-d", "cwd", "-Fpn", "-u", String(process.getuid?.() ?? "")], cleanEnv(), 20_000);
   let pid = 0;
   for (const line of lsof.stdout.split("\n")) {
     if (line.startsWith("p")) pid = Number(line.slice(1));
     else if (line.startsWith("n") && (line.slice(1) === root || line.slice(1).startsWith(`${root}/`)) && pid && pid !== process.pid) {
       try {
+        const cmd = (await spawnAsync("ps", ["-o", "command=", "-p", String(pid)], cleanEnv(), 5_000)).stdout.trim();
         process.kill(pid, "SIGKILL");
-        log(`killed leftover process ${pid} in ${line.slice(1)}`);
+        killed.push(`${pid} ${cmd.slice(0, 120)}`);
+        log(`killed leftover process ${pid} (${cmd.slice(0, 120)}) in ${line.slice(1)}`);
       } catch {}
     }
   }
+  return killed;
 }
 
 export function removeScratch(root: string): void {

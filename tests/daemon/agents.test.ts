@@ -161,6 +161,19 @@ test("configWarnings are logged once at daemon start", async () => {
   expect(logged).toEqual(["warning: agents.claude.permission_mode/extra_allowed_tools are ignored while agents.autonomous is true"]);
 });
 
+test("AGT_E2E_OPENCODE_ASK is reported once at daemon start", async () => {
+  await boot();
+  await daemon.stop();
+  const logged: string[] = [];
+  process.env.AGT_E2E_OPENCODE_ASK = "worker";
+  try {
+    daemon = await startDaemon(root, { log: (m) => void logged.push(m) });
+  } finally {
+    delete process.env.AGT_E2E_OPENCODE_ASK;
+  }
+  expect(logged).toEqual(["warning: AGT_E2E_OPENCODE_ASK=worker is set (release e2e only): OpenCode worker sessions ask for every permission"]);
+});
+
 test("a worker of a thread uses roles.worker: its kind, args and split env come from its adapter", async () => {
   const jobs: SpawnJob[] = [];
   await boot({ launch: (j) => void jobs.push(j), config: "agents:\n  roles:\n    worker: { agent: opencode, model: p/m }\n" });

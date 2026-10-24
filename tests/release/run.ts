@@ -21,6 +21,7 @@ import {
   removeScratch,
   report,
   say,
+  stopAllServers,
   scratchRepo,
   startHerdr,
   TimeoutError,
@@ -98,13 +99,17 @@ function loginProblem(agent: AgentKind): Promise<string | undefined> {
 
 let teardown: (() => Promise<void>) | undefined;
 let running: { sc: Scenario; t0: number } | undefined;
+let interrupted: Promise<void> | undefined;
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, () => {
     log(`${sig}: cleaning up`);
-    void (teardown?.() ?? Promise.resolve()).finally(() => {
+    // A second signal waits for the cleanup the first one started.
+    interrupted ??= (async () => {
+      await (teardown?.() ?? Promise.resolve()).catch(() => {});
+      await stopAllServers(); // e.g. one still starting inside startHerdr
       if (running) report(running.sc, { status: "FAIL", reason: `interrupted by ${sig}`, durationS: Math.round((Date.now() - running.t0) / 1000), checks: [], notes: [] });
       process.exit(130);
-    });
+    })();
   });
 }
 
@@ -119,16 +124,19 @@ async function runRow(sc: Scenario): Promise<{ status: "PASS" | "FAIL"; reason?:
   let root: string | undefined;
   let watcher: ReturnType<typeof watchTrustDialogs> | undefined;
   let failure: string | undefined;
-  let cleaned = false;
-  const cleanup = async () => {
-    if (cleaned) return;
-    cleaned = true;
-    watcher?.stop();
-    // The daemon first (it would react to the agents vanishing), then Herdr with every pane, then any straggler.
-    if (root) await cleanupProcesses(root, note, { sweepCwd: false }).catch((e) => note(`cleanup: ${e}`));
-    if (server) await server.stop().catch((e) => note(`herdr stop: ${e}`));
-    if (root) await cleanupProcesses(root, note).catch((e) => note(`cleanup: ${e}`));
-  };
+  let cleaning: Promise<void> | undefined;
+  const cleanup = () =>
+    (cleaning ??= (async () => {
+      watcher?.stop();
+      // The daemon first (it would react to the agents vanishing), then Herdr with every pane, then any straggler.
+      if (root) await cleanupProcesses(root, note, { sweepCwd: false }).catch((e) => note(`cleanup: ${e}`));
+      if (server) await server.stop().catch((e) => note(`herdr stop: ${e}`));
+      if (root) {
+        const leaked = await cleanupProcesses(root, note).catch((e) => (note(`cleanup: ${e}`), [] as string[]));
+        // A process outliving the Herdr shutdown is a product leak (e.g. a private agent server left running).
+        checks.push({ name: "harness: no process left in the scratch repo after Herdr stopped", ok: leaked.length === 0, ...(leaked.length ? { detail: leaked.join("; ") } : {}) });
+      }
+    })());
   teardown = cleanup;
   const deadline = Date.now() + timeoutMs;
   try {
@@ -188,7 +196,8 @@ async function runRow(sc: Scenario): Promise<{ status: "PASS" | "FAIL"; reason?:
     watcher = watchTrustDialogs(server.herdr, note);
     const manager = sc.manager !== false;
     await h.startAgt(manager ? [] : ["--no-manager"], sc.startEnv);
-    await h.waitFor("layout.registered", () => true, 60_000, "agt start registered the layout");
+    const layout = await h.waitFor("layout.registered", () => true, 60_000, "agt start registered the layout");
+    h.check("harness: the layout names the isolated Herdr socket", layout.payload.herdrSocket === server.socket, layout.payload.herdrSocket);
     // Main is a bare process in its pane: answer its first-run trust dialog by screen as well.
     if (manager) void answerTrustIn(server.herdr, h.mainPane, 60_000, () => {}).then((a) => a && note(`answered the trust dialog in main's pane ${h.mainPane}`));
     let timer: Timer | undefined;
@@ -202,14 +211,17 @@ async function runRow(sc: Scenario): Promise<{ status: "PASS" | "FAIL"; reason?:
   } finally {
     await cleanup();
   }
-  const status = failure || checks.some((c) => !c.ok) || checks.length === 0 ? "FAIL" : "PASS";
-  return { status, ...(failure ? { reason: failure } : checks.length === 0 ? { reason: "no checks ran" } : {}), checks, notes, ...(server ? { server } : {}), ...(root ? { root } : {}) };
+  // A row must assert something of its own; the harness checks every row gets do not count.
+  const own = checks.filter((c) => !c.name.startsWith("harness:")).length;
+  const status = failure || checks.some((c) => !c.ok) || own === 0 ? "FAIL" : "PASS";
+  return { status, ...(failure ? { reason: failure } : own === 0 ? { reason: "no checks ran" } : {}), checks, notes, ...(server ? { server } : {}), ...(root ? { root } : {}) };
 }
 
 const detected = detectAgents((bin) => Bun.which(bin, { PATH: process.env.PATH ?? "" }), cleanEnv());
 let mdPath = "";
 const summary: string[] = [];
 for (const sc of scenarios) {
+  if (interrupted) break;
   const t0 = Date.now();
   const kinds = [...new Set([sc.agents.main, sc.agents.coordinator, sc.agents.worker])];
   const missing = kinds.filter((k) => !detected.includes(k));
@@ -243,6 +255,8 @@ for (const sc of scenarios) {
   summary.push(`${sc.id}: ${r.status}${r.reason ? ` (${r.reason})` : ""}`);
   log(`[${sc.id}] ${r.status}`);
 }
+// An interrupt mid-row lets that row finish its own teardown; the interrupt handler then exits once it is done.
+if (interrupted) await interrupted;
 teardown = undefined;
 console.log(`\n${summary.join("\n")}\n\nreport: ${mdPath || "(no rows)"}`);
 // Skipped rows block a release as much as failed ones.

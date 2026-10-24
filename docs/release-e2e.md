@@ -63,13 +63,15 @@ still running in the scratch repo is killed. Check afterwards with
 - Edge cases: `edge-kill-coordinator`, `edge-coordinator-brake`, `edge-kill-worker`, `edge-blocked-worker` (the worker's
   OpenCode asks for every permission via the scenario-only `AGT_E2E_OPENCODE_ASK=worker`), `edge-rotate-turns`
   (`max_turns: 3`), `edge-rotate-age` (`max_age: 2m`), `edge-daemon-restart`, `edge-herdr-restart`, `edge-tab-closed`,
-  `edge-missing-binary`, `edge-bad-model`.
+  `edge-missing-binary`, `edge-bad-model` (a coordinator on a model that does not exist: the stall watchdog's
+  `session.stalled` notice reaches main after its second turn).
 
 ## Reading the report
 
 Each run appends rows to `.agentthread/e2e-reports/<iso>.md` (a table) and `<iso>.json` (every check, note, the
 isolated Herdr session and socket, and the scratch repo path) in this repo. The directory carries its own `.gitignore`.
-A row is `PASS` when every check passed, `FAIL` with the failed checks or the error (a timeout names the event it was
+Every row also gets two harness checks: the registered layout names the isolated socket, and no process is left in
+the scratch repo after Herdr stopped (a leak fails the row). A row is `PASS` when every check passed, `FAIL` with the failed checks or the error (a timeout names the event it was
 waiting for and the last events), or `SKIPPED` with the reason. Each isolated server's log is next to the report
 (`agt-e2e-<pid>-<n>.herdr.log`); a failed row's scratch repo keeps `.agentthread/daemon.log` and the event database.
 

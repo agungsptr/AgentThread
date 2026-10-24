@@ -19,7 +19,10 @@ export interface AgentAdapter {
   agent: AgentKind;
   /** The `--kind` Herdr is given, e.g. "claude". */
   herdrKind: "claude" | "opencode" | "codex" | "omp";
-  /** Default executable; overridden by the env var AGT_<AGENT>_BIN. */
+  /**
+   * Default executable of main's launch by `agt start`, overridden there by AGT_<AGENT>_BIN. Coordinators and workers
+   * are started by Herdr from `herdrKind`, which picks the executable itself; the override does not reach them.
+   */
   bin: string;
   /** Extra symlinks to AGENTS.md this agent reads. */
   instructionFiles: string[];

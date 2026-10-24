@@ -58,6 +58,8 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
     throw e;
   }
   for (const w of configWarnings(config)) (opts.log ?? console.error)(`warning: ${w}`);
+  const ask = process.env.AGT_E2E_OPENCODE_ASK;
+  if (ask) (opts.log ?? console.error)(`warning: AGT_E2E_OPENCODE_ASK=${ask} is set (release e2e only): OpenCode ${ask.split(",").join(", ")} sessions ask for every permission`);
 
   // Every command runs strictly one after another: this queue is what makes the daemon the single writer.
   let chain: Promise<unknown> = Promise.resolve();

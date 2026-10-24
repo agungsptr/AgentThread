@@ -53,7 +53,7 @@ describe("claude adapter", () => {
 describe("prompts", () => {
   test("coordinator prompt names its thread, files and commands", () => {
     const p = systemPrompt({ root: "/repo", role: "coordinator", thread: T });
-    for (const s of [`thread 002 ("Fix race")`, T.worktree, `${DIR}/sub.thread.md`, `${DIR}/board.md`, "agt ticket add 002", "agt worker spawn 002 --ticket <T>", "HANDOFF REQUEST", "git commit", "agt thread status 002 review", 'answer each with agt answer <thread> <Q> "<answer>". Only you and the main manager ever ask the user.']) {
+    for (const s of [`thread 002 ("Fix race")`, T.worktree, `${DIR}/sub.thread.md`, `${DIR}/board.md`, "agt ticket add 002", "agt worker spawn 002 --ticket <T>", "HANDOFF REQUEST", "git commit", "agt thread status 002 review", "- Do not implement tickets yourself: every change to project files is made by a worker. You may read code and docs, run the tests and the stack, review and commit.", 'answer each with agt answer <thread> <Q> "<answer>". Only you and the main manager ever ask the user.']) {
       expect(p).toContain(s);
     }
     expect(bootstrapPrompt({ root: "/repo", role: "coordinator", thread: T })).toBe(

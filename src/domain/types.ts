@@ -71,6 +71,7 @@ export type EventBody =
   | { type: "question.answered"; thread: string; payload: { question: string; answer: string } }
   | { type: "checkpoint.reminded"; thread?: string; payload: { session: string } }
   | { type: "agent.blocked"; thread?: string; payload: { session: string } }
+  | { type: "session.stalled"; thread?: string; payload: { session: string } }
   | { type: "handoff.submitted"; thread: string; payload: { content: string; generated: boolean } }
   | {
       type: "session.created";

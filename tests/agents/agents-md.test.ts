@@ -68,7 +68,7 @@ describe("agentsMd", () => {
     const memory = s.slice(s.indexOf("## Working memory"), s.indexOf("## Coordinator"));
     for (const x of ["agt note 002", "agt progress 002", "agt question 002", "--summary", "Before ending a turn"]) expect(memory).toContain(x);
     const coord = s.slice(s.indexOf("## Coordinator"), s.indexOf("## Worker"));
-    for (const x of ["agt ticket add 002", "agt worker spawn 002 --ticket <T>", "agt ticket reopen 002/<T>", "HANDOFF REQUEST", "git commit", "agt thread status 002 review", "Never run git update-index --no-skip-worktree and never commit AGENTS.md or CLAUDE.md. If merging or rebasing main is blocked by them, ask with agt question."]) {
+    for (const x of ["agt ticket add 002", "agt worker spawn 002 --ticket <T>", "agt ticket reopen 002/<T>", "HANDOFF REQUEST", "git commit", "agt thread status 002 review", "- Do not implement tickets yourself: every change to project files is made by a worker. You may read code and docs, run the tests and the stack, review and commit.", "Never run git update-index --no-skip-worktree and never commit AGENTS.md or CLAUDE.md. If merging or rebasing main is blocked by them, ask with agt question."]) {
       expect(coord).toContain(x);
     }
     const worker = s.slice(s.indexOf("## Worker"));

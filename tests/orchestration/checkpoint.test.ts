@@ -41,6 +41,7 @@ const reminders = (r: { events: EventBody[] }) => r.events.filter((e) => e.type 
 
 test("reminder fires once after reminder_turns turns, then progress resets it", () => {
   const s = base();
+  s.sessions.get(C)!.authored = true; // it ran agt commands: the stall watchdog stays out of this test
   for (let i = 1; i < 8; i++) expect(turn(s, i * 0.1).events).toEqual([]);
   const r = turn(s, 1);
   expect(r.events).toEqual([

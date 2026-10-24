@@ -28,10 +28,23 @@ export function edgeScenarios(): Scenario[] {
         const c = await workingCoordinator(h, thread);
         // Kill it while a worker runs, so the tab stays open: the replacement splits from a live pane of the thread.
         await h.waitFor("session.attached", (e, all) => sessionsOf(all, thread, "worker").some((w) => w.payload.session === e.payload.session), 600_000, "a worker attached");
+        const killedAt = (await h.events()).at(-1)!.seq;
         await h.herdr.ok(["pane", "close", c.pane]);
-        const next = await h.waitFor("session.created", (e) => e.payload.replaces === c.session, 120_000, "automatic replacement");
-        h.check("the replacement continues from brief.md (handoff bootstrap)", true, next.payload.session);
-        await h.waitFor("session.attached", (e) => e.payload.session === next.payload.session, 180_000, "replacement attached");
+        const next = await h.waitFor("session.created", (e) => e.thread === thread && e.payload.role === "coordinator" && e.seq > killedAt, 120_000, "automatic replacement");
+        h.check("the replacement replaces the killed coordinator", next.payload.replaces === c.session, `replaces ${next.payload.replaces ?? "nothing"}`);
+        const all = await h.events();
+        h.check("a handoff was submitted for the thread after the kill", all.some((e) => e.type === "handoff.submitted" && e.thread === thread && e.seq > killedAt));
+        const attached = await h.waitFor("session.attached", (e) => e.payload.session === next.payload.session, 180_000, "replacement attached");
+        h.check("the replacement runs in another pane", attached.payload.pane !== c.pane, attached.payload.pane);
+        // Its first prompt is the replacement bootstrap: typed into its pane, or queued while the agent was not ready.
+        const bootstrap = `You are the new coordinator of thread ${thread}; the previous session ended.`;
+        let screen = "";
+        for (let i = 0; i < 20 && !screen.replace(/\s+/g, " ").includes(bootstrap); i++) {
+          screen = await h.herdr.read(attached.payload.pane, 400);
+          if (!screen.replace(/\s+/g, " ").includes(bootstrap)) await Bun.sleep(1_000);
+        }
+        const queued = (await h.events()).some((e) => e.type === "notice.queued" && e.payload.session === next.payload.session && e.payload.text.startsWith(bootstrap));
+        h.check("the replacement got the brief.md continuation bootstrap", screen.replace(/\s+/g, " ").includes(bootstrap) || queued);
         await done(h, thread);
         await closeThread(h, thread);
       },
@@ -83,8 +96,19 @@ export function edgeScenarios(): Scenario[] {
       async run(h) {
         const thread = await newThread(h);
         const blocked = await h.waitFor("agent.blocked", (e, all) => sessionsOf(all, thread, "worker").some((w) => w.payload.session === e.payload.session), 600_000, "a worker blocks");
-        const ticket = sessionsOf(await h.events(), thread, "worker").find((w) => w.payload.session === blocked.payload.session)?.payload.ticket;
-        await h.waitFor("notice.queued", (e) => e.thread === thread && e.payload.text.startsWith(`The worker for ticket ${ticket} is blocked in pane `), 30_000, "coordinator notified");
+        const all = await h.events();
+        const worker = sessionsOf(all, thread, "worker").find((w) => w.payload.session === blocked.payload.session)!;
+        const ticket = worker.payload.ticket!;
+        h.check("agent.blocked is for a worker of the thread", worker.payload.agent === "opencode", `${worker.payload.session} ${ticket}`);
+        const pane = all.find((e): e is EventOf<"session.attached"> => e.type === "session.attached" && e.payload.session === worker.payload.session)?.payload.pane;
+        const text = `The worker for ticket ${ticket} is blocked in pane ${pane}. Check it, replace it with agt worker spawn ${thread} --ticket ${ticket}, or ask the user.`;
+        const notice = await h.waitFor("notice.queued", (e) => e.thread === thread && e.payload.text.includes(`The worker for ticket ${ticket} is blocked in pane `), 30_000, "coordinator notified");
+        const coords = new Set(sessionsOf(all, thread, "coordinator").map((c) => c.payload.session));
+        h.check("the coordinator gets the exact blocked-worker notice", coords.has(notice.payload.session) && notice.payload.text === text, notice.payload.text);
+        // Blocked at its first tool call (agt ticket claim): the ticket is not done, and the worker still holds no other one.
+        const after = await h.events();
+        h.check("the ticket is not done", !after.some((e) => e.type === "ticket.completed" && e.thread === thread && e.payload.ticket === ticket));
+        h.check("the blocked worker's session is still live", !after.some((e) => ["session.ended", "session.failed", "session.lost"].includes(e.type) && (e.payload as { session: string }).session === worker.payload.session));
       },
     },
     {
@@ -126,8 +150,10 @@ export function edgeScenarios(): Scenario[] {
         await h.agtOk(["daemon", "start"], { HERDR_SOCKET_PATH: h.server.socket });
         await done(h, thread);
         const all = await h.events();
-        const live = sessionsOf(all, thread, "coordinator").filter((c) => !all.some((e) => e.type === "session.ended" && e.payload.session === c.payload.session));
-        h.check("one coordinator after the restart", live.length === 1, `${live.length}`);
+        // Acting coordinators only: not ended, rotated, lost or failed.
+        const gone = new Set(all.filter((e) => ["session.ended", "session.rotated", "session.lost", "session.failed"].includes(e.type)).map((e) => (e.payload as { session: string }).session));
+        const acting = sessionsOf(all, thread, "coordinator").filter((c) => !gone.has(c.payload.session));
+        h.check("one acting coordinator after the restart", acting.length === 1, `${acting.length}`);
         await closeThread(h, thread);
       },
     },
@@ -183,20 +209,23 @@ export function edgeScenarios(): Scenario[] {
     {
       id: "edge-bad-model",
       agents: DAILY,
-      manager: false,
+      // Main receives the stall notice.
       config: { agents: { roles: { coordinator: { agent: "claude-code", model: "agt-e2e-no-such-model" } } } },
       async run(h) {
-        // A coordinator on a model that does not exist must surface as a failure within 60s of its spawn.
+        // A coordinator on a model that does not exist runs no agt command; the stall watchdog reports it to main.
         const thread = await newThread(h);
         const c = await h.waitFor("session.created", (e) => e.thread === thread && e.payload.role === "coordinator", 30_000, "coordinator spawned");
+        const s = c.payload.session;
         const t0 = Date.parse(c.ts);
-        const failure = await h.waitFor(
-          "session.failed",
-          (e) => e.payload.session === c.payload.session,
-          60_000,
-          "coordinator failure reported",
-        ).catch(async () => h.waitFor("session.ended", (e) => e.payload.session === c.payload.session, 1_000, "coordinator ended"));
-        h.check("failed clearly within 60s", Date.parse(failure.ts) - t0 <= 60_000, `${failure.type} after ${Math.round((Date.parse(failure.ts) - t0) / 1000)}s`);
+        // Turn 1 is the bootstrap; a message from the user starts turn 2.
+        await h.waitFor("agent.idle", (e, all) => e.payload.session === s && all.some((x) => x.type === "session.active" && x.payload.session === s && x.seq < e.seq), 60_000, "coordinator's first turn");
+        await h.agtOk(["tell", thread, "What is the status?"]);
+        const stalled = await h.waitFor("session.stalled", (e) => e.payload.session === s, 60_000, "stall reported");
+        const pane = (await h.events()).find((e): e is EventOf<"session.attached"> => e.type === "session.attached" && e.payload.session === s)?.payload.pane;
+        const text = `Session ${s} (claude-code agt-e2e-no-such-model) finished 2 turns without running any agt command; it may be misconfigured (for example a wrong model). Check pane ${pane}.`;
+        const notice = await h.waitFor("notice.queued", (e, all) => e.payload.session === mainSession(all) && e.payload.text === text, 10_000, "main told of the stall");
+        h.check("main gets the stall notice", !!notice, text);
+        h.check("reported within 120s of the spawn", Date.parse(stalled.ts) - t0 <= 120_000, `${Math.round((Date.parse(stalled.ts) - t0) / 1000)}s`);
       },
     },
   ];

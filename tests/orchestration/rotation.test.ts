@@ -228,6 +228,7 @@ test("sweep skips a coordinator without a pane", () => {
 test("turns trigger rotation at exactly max_turns", () => {
   const cfg = { ...DEFAULT_CONFIG, session: { ...DEFAULT_CONFIG.session, rotation: { ...DEFAULT_CONFIG.session.rotation, max_turns: 3 } }, checkpoint: { reminder_turns: 99, reminder_after: "999d" } };
   const s = base();
+  s.sessions.get(C)!.authored = true; // it ran agt commands: the stall watchdog stays out of this test
   const turn = (min: number) => {
     apply(s, `2026-10-11T10:0${min}:00.000Z`, { type: "session.active", thread: "001", payload: { session: C } });
     return react(s, apply(s, `2026-10-11T10:0${min}:00.000Z`, { type: "agent.idle", thread: "001", payload: { session: C } }), ctx(cfg)).events;
