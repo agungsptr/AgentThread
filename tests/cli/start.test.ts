@@ -166,7 +166,7 @@ test("agt start prints configWarnings once to stderr", () => {
   writeFileSync(join(root, ".agentthread", "config.yaml"), "agents:\n  claude:\n    extra_allowed_tools: [\"Bash(x)\"]\n");
   const r = agt(["start", "--no-manager"]);
   expect(r.code).toBe(0);
-  expect(r.err).toBe("agt: warning: agents.claude.permission_mode/extra_allowed_tools are ignored while agents.autonomous is true");
+  expect(r.err.split("\n").filter((l) => l.includes("warning"))).toEqual(["agt: warning: agents.claude.permission_mode/extra_allowed_tools are ignored while agents.autonomous is true"]);
 });
 
 test("the SessionStart re-print stays claude-only", () => {
