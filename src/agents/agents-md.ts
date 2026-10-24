@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { type AsyncRunner, type RunResult, type Runner, spawnAsync, spawnRunner } from "../herdr/bridge.ts";
+import type { Config } from "../config/config.ts";
 import { paths } from "../project/paths.ts";
 import { AGENT_KINDS } from "../domain/types.ts";
 import { adapterFor } from "./adapters.ts";
@@ -12,11 +13,11 @@ type ThreadRef = { id: string; title: string; slug: string; worktree: string };
 const rulesOf = (prompt: string) => prompt.split("\n").slice(1);
 
 /** The AgentThread section of a worktree's AGENTS.md. One file serves the coordinator and the workers. */
-export function agentsMd(o: { root: string; thread: ThreadRef }): string {
+export function agentsMd(o: { root: string; thread: ThreadRef; config?: Config }): string {
   const t = o.thread;
   const dir = paths(o.root).threadDir(t);
-  const coordinator = rulesOf(systemPrompt({ root: o.root, role: "coordinator", thread: t }));
-  const worker = rulesOf(systemPrompt({ root: o.root, role: "worker", thread: t, ticket: "<T>" }));
+  const coordinator = rulesOf(systemPrompt({ root: o.root, role: "coordinator", thread: t, ...(o.config ? { config: o.config } : {}) }));
+  const worker = rulesOf(systemPrompt({ root: o.root, role: "worker", thread: t, ticket: "<T>", ...(o.config ? { config: o.config } : {}) }));
   return [
     "# AgentThread",
     "",

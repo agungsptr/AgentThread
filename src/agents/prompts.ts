@@ -8,7 +8,7 @@ interface PromptInput {
   role: SessionRole;
   thread?: { id: string; title: string; slug: string; worktree: string };
   ticket?: string;
-  /** Main's tier lines are rendered from it; without configured tiers they are left out. */
+  /** Main's tier lines and the worker's command rule are rendered from it; without it, tiers are left out and agents are autonomous. */
   config?: Config;
 }
 
@@ -51,7 +51,11 @@ export function systemPrompt(o: PromptInput): string {
     `Work only inside ${t.worktree}, and only on the files in your ticket's scope (see ${dir}/board.md).`,
     "Steps:",
     `1. agt ticket claim ${t.id}/${o.ticket}`,
-    `2. Implement the ticket. You may run any command the work needs (tests, the dev stack, installs) inside the worktree. When you need a decision you cannot make, run agt question ${t.id} "<question>", end your turn and wait for the answer.`,
+    `2. Implement the ticket. ${
+      o.config?.agents.autonomous === false
+        ? "Run tests only with commands you are allowed to run without asking for approval; if a command you need requires approval, block the ticket and name the command in the reason."
+        : "You may run any command the work needs (tests, the dev stack, installs) inside the worktree."
+    } When you need a decision you cannot make, run agt question ${t.id} "<question>", end your turn and wait for the answer.`,
     `3. agt ticket done ${t.id}/${o.ticket} --summary "<one line>" — or, if you cannot finish, agt ticket block ${t.id}/${o.ticket} --reason "<why>".`,
     "Do not commit; the coordinator commits. Never bypass the commit guard (no git commit --no-verify, no changing core.hooksPath or AGT_ROLE). Do not work on other tickets.",
   ].join("\n");

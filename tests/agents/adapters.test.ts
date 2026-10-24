@@ -90,3 +90,23 @@ test("omp: model, thinking and yolo", () => {
   ]);
   expect(adapterFor("omp").launch({ ...base, run: { agent: "omp" } }).args).toEqual(["--approval-mode", "yolo"]);
 });
+
+test("autonomous false: every adapter keeps its approval prompts", () => {
+  const claude = adapterFor("claude-code").launch({ ...base, config: nonAuto, run: { agent: "claude-code" } }).args;
+  expect(claude.slice(0, 2)).toEqual(["--permission-mode", "acceptEdits"]);
+  expect(claude).not.toContain("bypassPermissions");
+
+  const oc = adapterFor("opencode").launch({ ...base, config: nonAuto, run: { agent: "opencode", model: "p/m" } });
+  expect(oc.args).toEqual(["--standalone"]);
+  const content = JSON.parse(oc.env.OPENCODE_CONFIG_CONTENT!);
+  expect(content.model).toBe("p/m");
+  expect(content.permission["*"]).toBe("ask");
+
+  const codex = adapterFor("codex").launch({ ...base, config: nonAuto, run: { agent: "codex" } }).args;
+  expect(codex.slice(codex.indexOf("-a"), codex.indexOf("-a") + 2)).toEqual(["-a", "on-request"]);
+  expect(codex.slice(0, 2)).toEqual(["-s", "workspace-write"]);
+  expect(codex).not.toContain("never");
+
+  const omp = adapterFor("omp").launch({ ...base, config: nonAuto, run: { agent: "omp", effort: "low" } }).args;
+  expect(omp).toEqual(["--thinking", "low"]);
+});

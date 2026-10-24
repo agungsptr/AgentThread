@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { AGT_BIN, agentEnv, allowedTools, hookCommand, hookSettings } from "../../src/agents/claude.ts";
 import { bootstrapPrompt, systemPrompt } from "../../src/agents/prompts.ts";
+import { agentsMd } from "../../src/agents/agents-md.ts";
 import { DEFAULT_CONFIG } from "../../src/config/config.ts";
 import { shellQuote } from "../../src/herdr/bridge.ts";
 
@@ -67,6 +68,21 @@ describe("prompts", () => {
       expect(p).toContain(s);
     }
     expect(bootstrapPrompt({ root: "/repo", role: "worker", thread: T, ticket: "T3" })).toBe(`You are the worker for ticket T3 of thread 002. Read ${DIR}/brief.md, then follow AGENTS.md.`);
+  });
+
+  test("worker step 2 follows agents.autonomous", () => {
+    const AUTO = `2. Implement the ticket. You may run any command the work needs (tests, the dev stack, installs) inside the worktree.`;
+    const ASK = "2. Implement the ticket. Run tests only with commands you are allowed to run without asking for approval; if a command you need requires approval, block the ticket and name the command in the reason.";
+    const nonAuto = { ...DEFAULT_CONFIG, agents: { ...DEFAULT_CONFIG.agents, autonomous: false } };
+    const auto = systemPrompt({ root: "/repo", role: "worker", thread: T, ticket: "T3", config: DEFAULT_CONFIG });
+    expect(auto).toContain(AUTO);
+    expect(auto).not.toContain(ASK);
+    const asking = systemPrompt({ root: "/repo", role: "worker", thread: T, ticket: "T3", config: nonAuto });
+    expect(asking).toContain(ASK);
+    expect(asking).not.toContain("You may run any command");
+    expect(asking).toContain('run agt question 002 "<question>", end your turn and wait for the answer.');
+    expect(agentsMd({ root: "/repo", thread: T, config: nonAuto })).toContain(ASK);
+    expect(agentsMd({ root: "/repo", thread: T })).toContain(AUTO);
   });
 
   test("main prompt requires user confirmation before creating threads", () => {

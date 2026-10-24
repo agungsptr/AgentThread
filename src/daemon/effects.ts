@@ -65,7 +65,7 @@ export function createEffectRunner(opts: {
   // AGENTS.md carries the role rules; a failure to write it is logged and never blocks the worktree or a spawn.
   const writeAgents = async (thread: { id: string; title: string; slug: string }, worktree: string) => {
     try {
-      await writeAgentsFilesAsync({ root: opts.root, worktree, content: agentsMd({ root: opts.root, thread: { ...thread, worktree } }), log });
+      await writeAgentsFilesAsync({ root: opts.root, worktree, content: agentsMd({ root: opts.root, thread: { ...thread, worktree }, config: opts.config }), log });
     } catch (e) {
       log(`writing AGENTS.md for thread ${thread.id} failed: ${e instanceof Error ? e.message : String(e)}`);
     }

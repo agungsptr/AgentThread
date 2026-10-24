@@ -82,8 +82,11 @@ automatically and main is told so. `--now` starts the thread without waiting.
 
 With `agents.autonomous: true` (the default) every agent runs with its approval prompts off (see the autonomous column in
 [docs/agents.md](docs/agents.md)), and `agents.claude.permission_mode` and `extra_allowed_tools` are ignored (with a
-warning). Set it to `false` to get the Claude Code allowlist behaviour back: workers then only run commands they are
-allowed to run, and a ticket that needs another command blocks and names it; add those commands to `extra_allowed_tools`.
+warning). Set it to `false` to keep every agent's approval prompts: Claude Code runs with
+`agents.claude.permission_mode` and the `extra_allowed_tools` allowlist, OpenCode starts without `--auto` and asks for
+every permission, Codex runs with `-a on-request` (still in the workspace-write sandbox), and omp gets no
+`--approval-mode`, so its own default applies. Workers are then told to run only commands they may run without
+approval; a ticket that needs another command blocks and names it (for Claude Code, add it to `extra_allowed_tools`).
 
 Workers never commit. Each thread worktree gets its own `core.hooksPath` whose `pre-commit` refuses a commit when the
 agent runs as a worker, and then forwards to the project's own hooks. The coordinator reviews and commits. A coordinator

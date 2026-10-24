@@ -65,20 +65,15 @@ const opencodeAdapter: AgentAdapter = {
   bin: "opencode",
   instructionFiles: [],
   prompt: "flag",
-  launch({ role, run, env = process.env }) {
-    // Release e2e only (tests/release): AGT_E2E_OPENCODE_ASK=<role,...> starts those roles asking for every
-    // permission, so the blocked-worker scenario can see a real approval dialog.
-    if ((env.AGT_E2E_OPENCODE_ASK ?? "").split(",").includes(role)) {
-      const content = { ...(run.model ? { model: run.effort ? `${run.model}#${run.effort}` : run.model } : {}), permission: { "*": "ask" } };
-      return { args: ["--standalone"], env: { OPENCODE_CONFIG_CONTENT: JSON.stringify(content) } };
-    }
-    const content = {
-      ...(run.model ? { model: run.effort ? `${run.model}#${run.effort}` : run.model } : {}),
-      permission: { "*": "allow", external_directory: "allow", doom_loop: "allow" },
-    };
+  launch({ role, run, config, env = process.env }) {
+    const model = run.model ? { model: run.effort ? `${run.model}#${run.effort}` : run.model } : {};
+    // Not autonomous: OpenCode asks for every permission. Release e2e only (tests/release): AGT_E2E_OPENCODE_ASK=<role,...>
+    // starts those roles asking too, so the blocked-worker scenario can see a real approval dialog.
+    const ask = !config.agents.autonomous || (env.AGT_E2E_OPENCODE_ASK ?? "").split(",").includes(role);
+    const permission = ask ? { "*": "ask" } : { "*": "allow", external_directory: "allow", doom_loop: "allow" };
     // --standalone: a TUI attached to OpenCode's shared background service gets that service's config, and our
     // OPENCODE_CONFIG_CONTENT (model, permissions) would be ignored; a private server reads it.
-    return { args: ["--standalone", "--auto"], env: { OPENCODE_CONFIG_CONTENT: JSON.stringify(content) } };
+    return { args: ask ? ["--standalone"] : ["--standalone", "--auto"], env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...model, permission }) } };
   },
   promptArgs: (text) => ["--prompt", text],
   capabilities: NO_HOOKS,
@@ -90,13 +85,13 @@ const codexAdapter: AgentAdapter = {
   bin: "codex",
   instructionFiles: [],
   prompt: "positional",
-  launch({ run, root, gitCommonDir }) {
+  launch({ run, config, root, gitCommonDir }) {
     return {
       args: [
         ...(run.model ? ["-m", run.model] : []),
         ...(run.effort ? ["-c", `model_reasoning_effort="${run.effort}"`] : []),
         "-s", "workspace-write",
-        "-a", "never",
+        "-a", config.agents.autonomous ? "never" : "on-request",
         "-c", "sandbox_workspace_write.network_access=true",
         "--add-dir", gitCommonDir ?? join(root, ".git"),
         "--add-dir", join(root, ".agentthread"),
@@ -115,12 +110,13 @@ const ompAdapter: AgentAdapter = {
   bin: "omp",
   instructionFiles: [],
   prompt: "positional",
-  launch({ run }) {
+  launch({ run, config }) {
     return {
       args: [
         ...(run.model ? ["--model", run.model] : []),
         ...(run.effort ? ["--thinking", run.effort] : []),
-        "--approval-mode", "yolo",
+        // Not autonomous: no flag, so omp's own default approval mode applies.
+        ...(config.agents.autonomous ? ["--approval-mode", "yolo"] : []),
       ],
       env: {},
     };
