@@ -16,6 +16,7 @@ import { loadConfig } from "../config/config.ts";
 import { ROLES, SESSION_SIGNALS, type Actor, type AgentKind, type Layout, type StoredEvent } from "../domain/types.ts";
 import { HerdrCli, shellQuote } from "../herdr/bridge.ts";
 import { initProject } from "../project/init.ts";
+import { setupIfNeeded, setupOnTty } from "../project/setup.ts";
 import { paths } from "../project/paths.ts";
 import { findRoot } from "../project/root.ts";
 
@@ -24,6 +25,7 @@ type Env = Record<string, string | undefined>;
 const USAGE = `usage: agt <command>
 
   init [--name <name>]
+  setup                      choose agent, model and effort per role, and complexity tiers
   start [--no-manager]       set up the Herdr layout and run the main manager (inside a Herdr pane)
   daemon start|stop|status
   config
@@ -110,8 +112,16 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
     }
     case "init": {
       const { values } = parse(argv.slice(1), { name: { type: "string" } });
-      initProject(resolve(env.AGT_ROOT ?? cwd), values.name as string | undefined);
+      const initRoot = resolve(env.AGT_ROOT ?? cwd);
+      initProject(initRoot, values.name as string | undefined);
       console.log("initialized");
+      await setupIfNeeded(initRoot, env);
+      return 0;
+    }
+    case "setup": {
+      if (!process.stdin.isTTY) throw new UsageError("agt setup needs a terminal; edit .agentthread/config.yaml instead");
+      await setupOnTty(findRoot(cwd, env), env);
+      console.log("saved .agentthread/config.yaml");
       return 0;
     }
     case "daemon":
@@ -291,6 +301,7 @@ async function start(root: string, env: Env, argv: string[]): Promise<number> {
   if (env.AGT_THREAD || env.AGT_ROLE === "coordinator" || env.AGT_ROLE === "worker" || env.AGT_ROLE === "main") {
     throw new Error("agt start must run from the main tab, not a subthread pane");
   }
+  await setupIfNeeded(root, env);
   const config = loadConfig(root, env);
   for (const w of configWarnings(config)) console.error(`agt: warning: ${w}`);
   await ensureDaemon(root, env);
