@@ -61,6 +61,7 @@ const ALLOWED: Record<CommandName, readonly Role[]> = {
   note: ROLES,
   progress: ROLES,
   question: ROLES,
+  answer: ROLES,
   handoff: ["main", "coordinator", "worker"],
   "layout.register": ["user"],
   "layout.reconcile": ["user"],
@@ -255,7 +256,12 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
     case "progress":
       return { events: [{ type: "progress.recorded", thread: t.id, payload: { message: cmd.message } }] };
     case "question":
-      return { events: [{ type: "question.recorded", thread: t.id, payload: { message: cmd.message } }] };
+      return { events: [{ type: "question.recorded", thread: t.id, payload: { message: cmd.message, id: `Q${t.questions.length + 1}` } }] };
+    case "answer": {
+      if (actor.role !== "coordinator") reject("only the coordinator answers questions");
+      if (!t.questions.some((q) => q.id === cmd.question)) reject(`unknown question ${cmd.question} in thread ${t.id}`);
+      return { events: [{ type: "question.answered", thread: t.id, payload: { question: cmd.question, answer: cmd.message } }] };
+    }
     case "handoff": {
       const v = validateHandoff(cmd.content);
       if (!v.ok) reject(`handoff missing sections: ${v.missing.join(", ")}`);

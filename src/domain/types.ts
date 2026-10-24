@@ -66,7 +66,9 @@ export type EventBody =
   | { type: "ticket.reopened"; thread: string; payload: { ticket: string } }
   | { type: "log.appended"; thread: string; payload: { message: string } }
   | { type: "decision.recorded"; thread: string; payload: { message: string } }
-  | { type: "note.recorded" | "progress.recorded" | "question.recorded"; thread: string; payload: { message: string } }
+  | { type: "note.recorded" | "progress.recorded"; thread: string; payload: { message: string } }
+  | { type: "question.recorded"; thread: string; payload: { message: string; id?: string } }
+  | { type: "question.answered"; thread: string; payload: { question: string; answer: string } }
   | { type: "checkpoint.reminded"; thread?: string; payload: { session: string } }
   | { type: "agent.blocked"; thread?: string; payload: { session: string } }
   | { type: "handoff.submitted"; thread: string; payload: { content: string; generated: boolean } }

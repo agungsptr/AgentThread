@@ -106,7 +106,10 @@ export function renderSub(t: Thread, sessions: Session[] = [], config: Config = 
     "",
     "## Open questions",
     "",
-    ...orNone(t.questions.map((d) => `- ${d.ts} ${oneLine(d.message)}`), "_None yet._"),
+    ...orNone(
+      t.questions.flatMap((d) => [`- ${d.ts} ${oneLine(d.message)} (${d.id})`, ...(d.answer ? [`  - answer ${d.answer.ts}: ${oneLine(d.answer.message)}`] : [])]),
+      "_None yet._",
+    ),
     "",
     "## Handoff",
     "",

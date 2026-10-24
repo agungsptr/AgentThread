@@ -56,6 +56,13 @@ export interface Entry {
   message: string;
 }
 
+/** A question asked with `agt question`; `by` is the asker's role and ticket, `answer` the coordinator's reply. */
+export interface Question extends Entry {
+  id: string;
+  by?: { role: Role; ticket?: string };
+  answer?: { message: string; ts: string };
+}
+
 /** A recorded progress line and who wrote it. */
 export interface Progress {
   message: string;
@@ -94,7 +101,7 @@ export interface Thread {
   tickets: Ticket[];
   decisions: Entry[];
   findings: Entry[];
-  questions: Entry[];
+  questions: Question[];
   /** The thread's position: the coordinator's (or main's, or the user's) latest progress. */
   progress?: Progress;
   /** Each worker's latest progress, by ticket. */
@@ -262,10 +269,28 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       t.findings.push({ ts: ev.ts, actor: ev.actor, message: ev.payload.message });
       note(t, ev, `note: ${ev.payload.message}`);
       break;
-    case "question.recorded":
-      t.questions.push({ ts: ev.ts, actor: ev.actor, message: ev.payload.message });
+    case "question.recorded": {
+      const by = ev.actor.session ? state.sessions.get(ev.actor.session) : undefined;
+      const role: Role | undefined = by?.role ?? ev.actor.role;
+      const ticketId = ev.actor.ticket ?? by?.ticket;
+      // Old events carry no id: they are numbered in log order.
+      const id = ev.payload.id ?? `Q${t.questions.length + 1}`;
+      t.questions.push({
+        id,
+        ts: ev.ts,
+        actor: ev.actor,
+        message: ev.payload.message,
+        ...(role ? { by: { role, ...(ticketId ? { ticket: ticketId } : {}) } } : {}),
+      });
       note(t, ev, `question: ${ev.payload.message}`);
       break;
+    }
+    case "question.answered": {
+      const q = t.questions.find((x) => x.id === ev.payload.question);
+      if (q) q.answer = { message: ev.payload.answer, ts: ev.ts };
+      note(t, ev, `answer to ${ev.payload.question}: ${ev.payload.answer}`);
+      break;
+    }
     case "progress.recorded": {
       const by = ev.actor.session ? state.sessions.get(ev.actor.session) : undefined;
       // Old events may carry no role: they are the coordinator's.

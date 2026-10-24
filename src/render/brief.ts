@@ -71,8 +71,10 @@ function build(t: Thread, trail: GitTrail | undefined, lim: Limits, tier: string
   const tail = <T>(xs: T[], n: number) => (n === 0 ? [] : xs.slice(-n));
   const findings = tail(t.findings, lim.findings).map(entry);
   const decisions = tail(t.decisions, lim.decisions).map(entry);
-  const questions = t.questions.slice(-20).map(entry);
-  const earlier = t.questions.length - questions.length;
+  const openQs = t.questions.filter((q) => !q.answer);
+  const questions = openQs.slice(-20).map((q) => entry({ ts: q.ts, message: `${q.message} (${q.id})` }));
+  const earlier = openQs.length - questions.length;
+  const answered = t.questions.filter((q) => q.answer).slice(-10).map((q) => cap(`- ${q.id} ${oneLine(q.message)} — answer: ${oneLine(q.answer!.message)}`, 400));
   const goal = clampHeadings(t.goal.trim());
   const criteria = t.criteria.slice(0, lim.criteria).map((c) => cap(`- [ ] ${oneLine(c)}`, 300));
   const commits = trail?.commits.slice(0, 20) ?? [];
@@ -114,6 +116,7 @@ function build(t: Thread, trail: GitTrail | undefined, lim: Limits, tier: string
     ...orNone(decisions, "None yet."),
     ...(lim.decisions < full.decisions && t.decisions.length > lim.decisions ? [TRUNC] : []),
     "",
+    ...(answered.length ? ["## Answered questions", "", ...answered, ""] : []),
     "## Handoff",
     "",
     ...handoff,

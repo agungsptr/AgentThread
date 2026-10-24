@@ -34,6 +34,7 @@ export const CommandSchema = z.discriminatedUnion("cmd", [
   z.object({ cmd: z.literal("note"), thread: threadId, message: text }),
   z.object({ cmd: z.literal("progress"), thread: threadId, message: text }),
   z.object({ cmd: z.literal("question"), thread: threadId, message: text }),
+  z.object({ cmd: z.literal("answer"), thread: threadId, question: z.string().regex(/^Q\d+$/), message: text }),
   z.object({ cmd: z.literal("handoff"), thread: threadId, content: text }),
   z.object({
     cmd: z.literal("layout.register"),

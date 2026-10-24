@@ -41,6 +41,7 @@ const USAGE = `usage: agt <command>
   note <thread> <message...>
   progress <thread> <message...>
   question <thread> <message...>
+  answer <thread> <Q> <text...>
   handoff <thread> (--file <path> | --stdin)
   worker spawn <thread> --ticket <T>
   tell <thread|main> <message...>
@@ -132,6 +133,11 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
       const [threadId, ...words] = argv.slice(1);
       if (!threadId || !words.length) throw new UsageError(`${group} needs <thread> <message>`);
       return send(findRoot(cwd, env), env, { cmd: group, thread: threadId, message: words.join(" ") });
+    }
+    case "answer": {
+      const [threadId, question, ...words] = argv.slice(1);
+      if (!threadId || !question || !words.length) throw new UsageError('answer needs <thread> <Q> "<text>"');
+      return send(findRoot(cwd, env), env, { cmd: "answer", thread: threadId, question, message: words.join(" ") });
     }
     case "handoff": {
       const { values, positionals } = parse(argv.slice(1), { file: { type: "string" }, stdin: { type: "boolean" } });

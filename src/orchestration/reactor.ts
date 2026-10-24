@@ -314,9 +314,26 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         if (c?.rotation && (ev.actor.role === "coordinator" || ev.payload.generated)) rotate(c, c.rotation.reason);
         break;
       }
+      case "question.recorded": {
+        const s = ev.actor.session ? state.sessions.get(ev.actor.session) : undefined;
+        if (s?.role === "worker" && ev.payload.id) {
+          notify(coordinatorToNotify(ev.thread), `Question ${ev.payload.id} from the worker for ticket ${s.ticket ?? ev.actor.ticket}: ${ev.payload.message} Answer with: agt answer ${ev.thread} ${ev.payload.id} "<answer>"`);
+        }
+        break;
+      }
+      case "question.answered": {
+        const q = state.threads.get(ev.thread)?.questions.find((x) => x.id === ev.payload.question);
+        const asker = q?.actor.session ? state.sessions.get(q.actor.session) : undefined;
+        // A worker that has ended gets nothing; the answer stays recorded.
+        if (asker && isLive(asker) && asker.role === "worker") notify(asker, `Answer to ${ev.payload.question} from the coordinator: ${ev.payload.answer}`);
+        break;
+      }
       case "agent.blocked": {
         const s = state.sessions.get(ev.payload.session);
-        if (s && isLive(s) && s.role !== "main") {
+        if (s && isLive(s) && s.role === "worker") {
+          const pane = s.pane ?? "unknown";
+          notify(coordinatorToNotify(s.thread), `The worker for ticket ${s.ticket} is blocked in pane ${pane}. Check it, replace it with agt worker spawn ${s.thread} --ticket ${s.ticket}, or ask the user.`);
+        } else if (s && isLive(s) && s.role !== "main") {
           notify(liveSessions(state, undefined, "main")[0], `${s.role} for thread ${s.thread} is waiting for approval in pane ${s.pane ?? "unknown"}.`);
         }
         break;
