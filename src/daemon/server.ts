@@ -129,7 +129,7 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
     if (!actor.success) return { ok: false, error: `invalid actor: ${actor.error.issues.map((i) => i.message).join("; ")}` };
     const decision = handle(state, command.data, actor.data, { root, config, newId: randomUUID });
     if (!decision.ok) return decision;
-    await applyAndReact([...decision.events, ...(await runEffects(decision.effects))], actor.data);
+    await applyAndReact([...decision.events, ...(await runEffects(decision.effects))], decision.actor ?? actor.data);
     return { ok: true, result: decision.result };
   };
 
@@ -201,7 +201,7 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
       const actor: Actor = { role: "user" };
       const run = async (command: Command) => {
         const decision = handle(state, command, actor, { root, config, newId: randomUUID });
-        if (decision.ok) await applyAndReact([...decision.events, ...(await runEffects(decision.effects))], actor);
+        if (decision.ok) await applyAndReact([...decision.events, ...(await runEffects(decision.effects))], decision.actor ?? actor);
       };
       const layout = state.layout;
       if (layout) {

@@ -140,6 +140,9 @@ export async function verifyThread(h: H, thread: string, o: { coordinator: strin
   h.check("the branch adds slugify and its README line", changed.includes("README.md") && changed.some((f) => /slugify/.test(f)), changed.join(","));
   h.check("AGENTS.md/CLAUDE.md never committed", !changed.includes("CLAUDE.md") && !(await git(h.root, "diff", `main...${branch}`, "--", "AGENTS.md")).trim());
 
+  const stalls = all.filter((e) => e.type === "session.stalled" && e.thread === thread);
+  h.check("no session reported stalled in a healthy run", stalls.length === 0, stalls.map((e) => JSON.stringify(e.payload)).join(",") || "none");
+
   // Worker panes are closed once their ticket is done.
   const panes = await h.herdr.panes();
   const workerPanes = all

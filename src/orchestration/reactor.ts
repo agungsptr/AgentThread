@@ -353,7 +353,9 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         if (s && isLive(s)) setTimers(s, "running");
         // A coordinator or worker that never runs an agt command is likely misconfigured (a wrong model, no auth):
         // report it once, after its first turn.
-        if (s && isLive(s) && s.role !== "main" && s.turns >= STALL_TURNS && !s.authored && !s.stalled && !stalled.has(s.id)) {
+        // Not a replacement (the session it replaced proved its agent and model), nor one already reported blocked; and
+        // only turns that ran after its bootstrap was delivered count.
+        if (s && isLive(s) && s.role !== "main" && (s.settledTurns ?? 0) >= STALL_TURNS && !s.authored && !s.stalled && !s.replaces && !s.blockedEarly && !stalled.has(s.id)) {
           stalled.add(s.id);
           out.push({ type: "session.stalled", ...(s.thread ? { thread: s.thread } : {}), payload: { session: s.id } } as EventBody);
           const text = `Session ${s.id} (${s.agent} ${s.model ?? "default"}) finished its first turn without running any agt command; it may be misconfigured (for example a wrong model). Check pane ${s.pane ?? "unknown"}.`;

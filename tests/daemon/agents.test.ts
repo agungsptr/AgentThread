@@ -234,3 +234,14 @@ test("a coordinator whose new pane is still busy (agent_pane_busy) attaches once
   expect((await events()).some((e) => e.type === "session.failed")).toBe(false);
   expect(fake.read().calls.filter((c) => c[0] === "agent" && c[1] === "start")).toHaveLength(3);
 });
+
+test("a command from the root-pane coordinator (no AGT_SESSION) is stored with its session", async () => {
+  const jobs: SpawnJob[] = [];
+  await boot({ launch: (j) => void jobs.push(j) });
+  await cmd({ cmd: "thread.new", title: "X", type: "bug" });
+  const c = (await sessionOf("coordinator"))!.session;
+  await cmd({ cmd: "session.attached", session: c, pane: "w1:p1" });
+  expect(await cmd({ cmd: "thread.status", thread: "001", status: "in_progress" }, coord)).toMatchObject({ ok: true });
+  const ev = (await events()).find((e) => e.type === "thread.status_changed")!;
+  expect(ev.actor).toEqual({ role: "coordinator", thread: "001", session: c });
+});

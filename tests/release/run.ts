@@ -98,16 +98,22 @@ function loginProblem(agent: AgentKind): Promise<string | undefined> {
 }
 
 let teardown: (() => Promise<void>) | undefined;
-let running: { sc: Scenario; t0: number } | undefined;
+/** The row in progress; `reported` is set once its report row is written, so an interrupt never writes a second one. */
+let running: { sc: Scenario; t0: number; reported: boolean; done?: Promise<unknown> } | undefined;
+let interruptedBy: string | undefined;
 let interrupted: Promise<void> | undefined;
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, () => {
     log(`${sig}: cleaning up`);
     // A second signal waits for the cleanup the first one started.
+    interruptedBy ??= sig;
     interrupted ??= (async () => {
       await (teardown?.() ?? Promise.resolve()).catch(() => {});
       await stopAllServers(); // e.g. one still starting inside startHerdr
-      if (running) report(running.sc, { status: "FAIL", reason: `interrupted by ${sig}`, durationS: Math.round((Date.now() - running.t0) / 1000), checks: [], notes: [] });
+      // The row's own flow writes its (interrupted) report row once its teardown returns; give it the chance first.
+      const row = running;
+      if (row?.done) await Promise.race([row.done.catch(() => {}), Bun.sleep(30_000)]);
+      if (row && !row.reported) report(row.sc, { status: "FAIL", reason: `interrupted by ${sig}`, durationS: Math.round((Date.now() - row.t0) / 1000), checks: [], notes: [] });
       process.exit(130);
     })();
   });
@@ -238,9 +244,15 @@ for (const sc of scenarios) {
     continue;
   }
   log(`[${sc.id}] start (main=${sc.agents.main} coordinator=${sc.agents.coordinator} worker=${sc.agents.worker})`);
-  running = { sc, t0 };
-  const r = await runRow(sc);
-  running = undefined;
+  const row: NonNullable<typeof running> = { sc, t0, reported: false };
+  running = row;
+  const pending = runRow(sc);
+  row.done = pending;
+  const r = await pending;
+  if (interruptedBy) {
+    r.status = "FAIL";
+    r.reason = `interrupted by ${interruptedBy}${r.reason ? `: ${r.reason}` : ""}`;
+  }
   if (r.root && r.status === "PASS" && !values.keep) removeScratch(r.root);
   else if (r.root) r.notes.push(`scratch repo kept at ${r.root}`);
   mdPath = report(sc, {
@@ -252,6 +264,8 @@ for (const sc of scenarios) {
     ...(r.server ? { herdrSession: r.server.session, herdrSocket: r.server.socket } : {}),
     ...(r.root ? { scratch: r.root } : {}),
   });
+  row.reported = true;
+  running = undefined;
   summary.push(`${sc.id}: ${r.status}${r.reason ? ` (${r.reason})` : ""}`);
   log(`[${sc.id}] ${r.status}`);
 }

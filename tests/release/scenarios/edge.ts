@@ -33,7 +33,17 @@ export function edgeScenarios(): Scenario[] {
         const next = await h.waitFor("session.created", (e) => e.thread === thread && e.payload.role === "coordinator" && e.seq > killedAt, 120_000, "automatic replacement");
         h.check("the replacement replaces the killed coordinator", next.payload.replaces === c.session, `replaces ${next.payload.replaces ?? "nothing"}`);
         const all = await h.events();
-        h.check("a handoff was submitted for the thread after the kill", all.some((e) => e.type === "handoff.submitted" && e.thread === thread && e.seq > killedAt));
+        // Generated at the kill, or written by the killed coordinator itself during its life (then none is generated).
+        const killedCreated = all.find((e) => e.type === "session.created" && e.payload.session === c.session)!.ts;
+        h.check(
+          "a handoff for the replacement: generated after the kill, or the killed coordinator's own",
+          all.some(
+            (e) =>
+              e.type === "handoff.submitted" &&
+              e.thread === thread &&
+              (e.seq > killedAt || (e.actor.role === "coordinator" && !e.payload.generated && Date.parse(e.ts) >= Date.parse(killedCreated))),
+          ),
+        );
         const attached = await h.waitFor("session.attached", (e) => e.payload.session === next.payload.session, 180_000, "replacement attached");
         h.check("the replacement runs in another pane", attached.payload.pane !== c.pane, attached.payload.pane);
         // Its first prompt is the replacement bootstrap: typed into its pane, or queued while the agent was not ready.

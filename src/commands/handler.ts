@@ -5,7 +5,7 @@ import { canTransitionThread, canTransitionTicket, scopesOverlap, slugify, valid
 import { ROLES, type Actor, type EventBody, type Role, type ThreadStatus, type TicketStatus } from "../domain/types.ts";
 import { roleAgent, type RoleAgent } from "../agents/roles.ts";
 import { agentName, liveSessions, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure as tabEnsureFor, workerLimit } from "../orchestration/sessions.ts";
-import { isLive, type State, type Thread, type Ticket } from "../state/projection.ts";
+import { actorSession, isLive, type State, type Thread, type Ticket } from "../state/projection.ts";
 import type { Command, CommandName } from "./schema.ts";
 
 export type Effect =
@@ -39,7 +39,7 @@ export interface HandlerContext {
 }
 
 export type HandleResult =
-  | { ok: true; events: EventBody[]; effects: Effect[]; result: unknown }
+  | { ok: true; events: EventBody[]; effects: Effect[]; result: unknown; /** Set when intake attributed the actor (see attribute): store the events with it. */ actor?: Actor }
   | { ok: false; error: string };
 
 interface Decision {
@@ -90,10 +90,21 @@ function reject(message: string): never {
   throw new Rejection(message);
 }
 
+/**
+ * Fills in the session of a coordinator or worker actor that has none (the root-pane coordinator has no AGT_SESSION),
+ * so the stored events say who ran the command. Lifecycle signals keep their actor: they name their session or pane.
+ */
+function attribute(state: State, cmd: Command, actor: Actor): Actor {
+  if (actor.session || cmd.cmd === "session.signal" || (actor.role !== "coordinator" && actor.role !== "worker")) return actor;
+  const session = actorSession(state, actor);
+  return session ? { ...actor, session } : actor;
+}
+
 export function handle(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): HandleResult {
   try {
-    const d = decide(state, cmd, actor, ctx);
-    return { ok: true, events: d.events, effects: d.effects ?? [], result: d.result ?? null };
+    const who = attribute(state, cmd, actor);
+    const d = decide(state, cmd, who, ctx);
+    return { ok: true, events: d.events, effects: d.effects ?? [], result: d.result ?? null, ...(who !== actor ? { actor: who } : {}) };
   } catch (e) {
     if (e instanceof Rejection) return { ok: false, error: e.message };
     throw e;

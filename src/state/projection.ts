@@ -37,8 +37,12 @@ export interface Session {
   turns: number;
   /** The session authored an event other than its own lifecycle signals: it ran an agt command. */
   authored?: boolean;
-  /** Reported as stalled (session.stalled): finished its first turns without running any agt command. */
+  /** Reported as stalled (session.stalled): finished its first turn without running any agt command. */
   stalled?: boolean;
+  /** Turns finished with no notice (e.g. its bootstrap) still waiting for delivery: a startup spin does not count. */
+  settledTurns?: number;
+  /** Herdr reported it blocked before it finished any turn (it got a blocked notice instead). */
+  blockedEarly?: boolean;
   /** When the session was created (session.created ts). */
   createdAt: string;
 }
@@ -141,10 +145,25 @@ export function project(events: StoredEvent[]): State {
 /** Events a session's hooks or the poller report for it; they do not show that the agent ran an agt command. */
 const SIGNAL_TYPES: ReadonlySet<string> = new Set(["session.started", "session.active", "agent.idle", "session.compacting", "session.ended", "agent.blocked"]);
 
+/**
+ * The session an actor stands for. Without AGT_SESSION (a thread's first coordinator runs in the tab's root pane, whose
+ * env has none) it is the thread's acting coordinator, or the live worker of the actor's ticket.
+ */
+export function actorSession(state: State, actor: Actor): string | undefined {
+  if (actor.session) return actor.session;
+  if (!actor.thread) return undefined;
+  const live = [...state.sessions.values()].filter((s) => isLive(s) && s.thread === actor.thread);
+  if (actor.role === "coordinator") return live.find((s) => s.role === "coordinator")?.id;
+  if (actor.role === "worker" && actor.ticket) return live.find((s) => s.role === "worker" && s.ticket === actor.ticket)?.id;
+  return undefined;
+}
+
 export function applyEvent(state: State, ev: StoredEvent): void {
   state.lastSeq = ev.seq;
-  if (ev.actor.session && !SIGNAL_TYPES.has(ev.type)) {
-    const by = state.sessions.get(ev.actor.session);
+  if (!SIGNAL_TYPES.has(ev.type) && (ev.actor.role === "coordinator" || ev.actor.role === "worker" || ev.actor.session)) {
+    // Commands are attributed at intake; old logs without a session fall back to the acting session (replay backstop).
+    const sid = actorSession(state, ev.actor);
+    const by = sid ? state.sessions.get(sid) : undefined;
     if (by) by.authored = true;
   }
 
@@ -404,6 +423,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
         if (s.status === "active") {
           s.turns++;
           s.turnsSinceProgress++;
+          if (s.notices.length === 0) s.settledTurns = (s.settledTurns ?? 0) + 1;
         }
         s.status = "idle";
         s.lastActiveAt = ev.ts;
@@ -414,7 +434,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
     case "session.stalled": {
       const s = sessionOf(state, ev.seq, ev.payload.session);
       s.stalled = true;
-      threadNote(state, ev, `session ${short(s.id)} finished its first turns without running any agt command`);
+      threadNote(state, ev, `session ${short(s.id)} finished its first turn without running any agt command`);
       return true;
     }
     case "checkpoint.reminded": {
@@ -425,6 +445,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
     case "agent.blocked": {
       const s = sessionOf(state, ev.seq, ev.payload.session);
       if (isLive(s)) threadNote(state, ev, `session ${short(s.id)} is waiting for approval`);
+      if (s.turns === 0) s.blockedEarly = true;
       return true;
     }
     case "session.rotation_requested": {
