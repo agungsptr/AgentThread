@@ -53,7 +53,7 @@ describe("claude adapter", () => {
 describe("prompts", () => {
   test("coordinator prompt names its thread, files and commands", () => {
     const p = systemPrompt({ root: "/repo", role: "coordinator", thread: T });
-    for (const s of [`thread 002 ("Fix race")`, T.worktree, `${DIR}/sub.thread.md`, `${DIR}/board.md`, "agt ticket add 002", "agt worker spawn 002 --ticket <T>", "HANDOFF REQUEST", "git commit", "agt thread status 002 review"]) {
+    for (const s of [`thread 002 ("Fix race")`, T.worktree, `${DIR}/sub.thread.md`, `${DIR}/board.md`, "agt ticket add 002", "agt worker spawn 002 --ticket <T>", "HANDOFF REQUEST", "git commit", "agt thread status 002 review", 'answer each with agt answer <thread> <Q> "<answer>". Only you and the main manager ever ask the user.']) {
       expect(p).toContain(s);
     }
     expect(bootstrapPrompt({ root: "/repo", role: "coordinator", thread: T })).toBe(
@@ -63,7 +63,7 @@ describe("prompts", () => {
 
   test("worker prompt is scoped to its ticket and forbids commits", () => {
     const p = systemPrompt({ root: "/repo", role: "worker", thread: T, ticket: "T3" });
-    for (const s of ["ticket T3 of thread 002", "agt ticket claim 002/T3", "agt ticket done 002/T3", "agt ticket block 002/T3", "Do not commit", "Run tests only with commands you are allowed to run without asking for approval; if a command you need requires approval, block the ticket and name the command in the reason."]) {
+    for (const s of ["ticket T3 of thread 002", "agt ticket claim 002/T3", "agt ticket done 002/T3", "agt ticket block 002/T3", "Do not commit", `You may run any command the work needs (tests, the dev stack, installs) inside the worktree. When you need a decision you cannot make, run agt question 002 "<question>", end your turn and wait for the answer.`]) {
       expect(p).toContain(s);
     }
     expect(bootstrapPrompt({ root: "/repo", role: "worker", thread: T, ticket: "T3" })).toBe(`You are the worker for ticket T3 of thread 002. Read ${DIR}/brief.md, then follow AGENTS.md.`);

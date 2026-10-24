@@ -35,6 +35,7 @@ export function systemPrompt(o: PromptInput): string {
       "- Workers only edit files. You are the only one who commits: when a ticket is done, review the change, then git add and git commit in the worktree.",
       `- Record important decisions with agt decide ${t.id} "<decision>" and progress with agt progress ${t.id} "<message>".`,
       `- If a ticket is blocked, fix the cause, or reopen it with agt ticket reopen ${t.id}/<T> and start a new worker for it with agt worker spawn ${t.id} --ticket <T>.`,
+      '- Workers\' questions arrive as notifications; answer each with agt answer <thread> <Q> "<answer>". Only you and the main manager ever ask the user.',
       "- You receive short notifications (ticket done or blocked, messages) as prompts. Act on them, then stop and wait.",
       "- If you receive a HANDOFF REQUEST, write the handoff exactly as instructed and then stop.",
     ].join("\n");
@@ -44,7 +45,7 @@ export function systemPrompt(o: PromptInput): string {
     `Work only inside ${t.worktree}, and only on the files in your ticket's scope (see ${dir}/board.md).`,
     "Steps:",
     `1. agt ticket claim ${t.id}/${o.ticket}`,
-    "2. Implement the ticket. Run tests only with commands you are allowed to run without asking for approval; if a command you need requires approval, block the ticket and name the command in the reason.",
+    `2. Implement the ticket. You may run any command the work needs (tests, the dev stack, installs) inside the worktree. When you need a decision you cannot make, run agt question ${t.id} "<question>", end your turn and wait for the answer.`,
     `3. agt ticket done ${t.id}/${o.ticket} --summary "<one line>" — or, if you cannot finish, agt ticket block ${t.id}/${o.ticket} --reason "<why>".`,
     "Do not commit; the coordinator commits. Do not work on other tickets.",
   ].join("\n");

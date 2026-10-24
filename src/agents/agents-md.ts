@@ -1,7 +1,9 @@
-import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { type AsyncRunner, type RunResult, type Runner, spawnAsync, spawnRunner } from "../herdr/bridge.ts";
 import { paths } from "../project/paths.ts";
+import { AGENT_KINDS } from "../domain/types.ts";
+import { adapterFor } from "./adapters.ts";
 import { systemPrompt } from "./prompts.ts";
 
 type ThreadRef = { id: string; title: string; slug: string; worktree: string };
@@ -84,7 +86,9 @@ async function driveAsync<T>(steps: Steps<T>, runner: AsyncRunner, env: Env): Pr
   return next.value;
 }
 
-const FILES = ["AGENTS.md", "CLAUDE.md"] as const;
+/** AGENTS.md, then every instruction file any adapter reads (always CLAUDE.md), each a symlink to AGENTS.md. */
+const LINKS = [...new Set(["CLAUDE.md", ...AGENT_KINDS.flatMap((k) => adapterFor(k).instructionFiles)])];
+const FILES = ["AGENTS.md", ...LINKS];
 const EXCLUDE_LINES = FILES.map((f) => `/${f}`);
 const lines = (text: string) => text.split("\n").map((l) => l.replace(/\r$/, ""));
 
@@ -182,7 +186,7 @@ function* excludeInCommon(c: Ctx, wt: string): Steps<void> {
  * Hides untracked AGENTS.md/CLAUDE.md in thread worktrees only: a per-worktree core.excludesFile, so the main
  * checkout can still add its own. Also removes the lines that earlier versions put in the shared info/exclude.
  */
-function* excludeInWorktree(c: Ctx, root: string, wt: string, log: (m: string) => void): Steps<void> {
+function* excludeInWorktree(c: Ctx, root: string, wt: string, log: (m: string) => void): Steps<boolean> {
   const file = join(root, ".agentthread", "worktree-excludes");
   const kept = lines((yield* effectiveExcludes(c, root, file))).filter((l) => !EXCLUDE_LINES.includes(l));
   while (kept.length && kept[kept.length - 1] === "") kept.pop();
@@ -200,14 +204,57 @@ function* excludeInWorktree(c: Ctx, root: string, wt: string, log: (m: string) =
     if (!wasEnabled) (yield* git(c, root, ["config", "--unset", "extensions.worktreeConfig"]));
     log(`per-worktree excludes unavailable, using the shared info/exclude: ${e instanceof Error ? e.message : String(e)}`);
     (yield* excludeInCommon(c, wt));
-    return;
+    return false;
   }
 
   const info = (yield* commonInfoExclude(c, wt));
-  if (!existsSync(info)) return;
+  if (!existsSync(info)) return true;
   const current = readFileSync(info, "utf8");
   const filtered = current.split("\n").filter((l) => !EXCLUDE_LINES.includes(l.replace(/\r$/, "")));
   if (filtered.length !== current.split("\n").length) writeFileSync(info, filtered.join("\n"));
+  return true;
+}
+
+const GUARD_MESSAGE = "AgentThread: workers do not commit; the coordinator commits.";
+const shq = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
+
+function writeIfChanged(file: string, text: string): void {
+  if (!existsSync(file) || readFileSync(file, "utf8") !== text) writeFileSync(file, text);
+  chmodSync(file, 0o755);
+}
+
+/**
+ * Worker commit guard: a per-worktree core.hooksPath whose pre-commit refuses commits when $AGT_ROLE is "worker", then
+ * runs the project's own hook. Every other hook the project has is forwarded, so nothing it relies on stops running.
+ * Needs extensions.worktreeConfig (set up by excludeInWorktree); the main checkout is never touched.
+ */
+function* guardInWorktree(c: Ctx, root: string, wt: string, log: (m: string) => void): Steps<void> {
+  const dir = join(root, ".agentthread", "hooks");
+  // The repo's own hooks directory, read from the main checkout so our per-worktree value is never read back.
+  const configured = (yield* git(c, root, ["config", "--path", "--get", "core.hooksPath"]));
+  const configuredPath = configured.ok ? configured.stdout.trim() : "";
+  let orig = configuredPath ? resolve(wt, configuredPath) : join(resolve(root, (yield* mustGit(c, root, ["rev-parse", "--git-common-dir"])).trim()), "hooks");
+  if (orig === dir) orig = join(resolve(root, (yield* mustGit(c, root, ["rev-parse", "--git-common-dir"])).trim()), "hooks");
+  mkdirSync(dir, { recursive: true });
+  const forward = (name: string) => `exec ${shq(join(orig, name))} "$@"`;
+  const chain = (name: string) => `if [ -x ${shq(join(orig, name))} ]; then\n  ${forward(name)}\nfi\nexit 0\n`;
+  writeIfChanged(
+    join(dir, "pre-commit"),
+    `#!/bin/sh\nif [ "\${AGT_ROLE:-}" = "worker" ]; then\n  echo ${shq(GUARD_MESSAGE)} >&2\n  exit 1\nfi\n${chain("pre-commit")}`,
+  );
+  try {
+    for (const name of readdirSync(orig)) {
+      if (name === "pre-commit" || name.endsWith(".sample") || name.startsWith(".")) continue;
+      writeIfChanged(join(dir, name), `#!/bin/sh\n${chain(name)}`);
+    }
+  } catch {}
+  try {
+    if ((yield* git(c, wt, ["config", "--worktree", "--get", "core.hooksPath"])).stdout.trim() !== dir) {
+      (yield* mustGit(c, wt, ["config", "--worktree", "core.hooksPath", dir]));
+    }
+  } catch {
+    log("worker commit guard unavailable: git without worktree config");
+  }
 }
 
 /**
@@ -235,7 +282,10 @@ export function writeAgentsFilesAsync(o: WriteOptions & { runner?: AsyncRunner }
 function* writeSteps(o: WriteOptions): Steps<void> {
   const wt = o.worktree;
   const c: Ctx = { env: o.env ?? (process.env as Env) };
-  yield* excludeInWorktree(c, o.root, wt, o.log ?? ((m) => console.error(m)));
+  const log = o.log ?? ((m) => console.error(m));
+  const perWorktree = yield* excludeInWorktree(c, o.root, wt, log);
+  if (perWorktree) yield* guardInWorktree(c, o.root, wt, log);
+  else log("worker commit guard unavailable: git without worktree config");
   const project = yield* projectInstructions(c, wt);
   const agents = join(wt, "AGENTS.md");
   let regular = false;
@@ -244,8 +294,10 @@ function* writeSteps(o: WriteOptions): Steps<void> {
   } catch {}
   if (!regular) removeIfPresent(agents);
   writeFileSync(agents, `${project}${project ? "\n\n" : ""}${o.content}`);
-  removeIfPresent(join(wt, "CLAUDE.md"));
-  symlinkSync("AGENTS.md", join(wt, "CLAUDE.md"));
+  for (const link of LINKS) {
+    removeIfPresent(join(wt, link));
+    symlinkSync("AGENTS.md", join(wt, link));
+  }
   for (const file of FILES) {
     if ((yield* git(c, wt, ["ls-files", "--error-unmatch", "--", file])).ok) yield* mustGit(c, wt, ["update-index", "--skip-worktree", "--", file]);
   }

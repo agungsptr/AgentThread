@@ -312,6 +312,55 @@ describe("writeAgentsFiles: symlinks, excludes, git operations", () => {
   });
 });
 
+function commit(dir: string, env: Record<string, string>) {
+  writeFileSync(join(dir, "f.txt"), String(Math.random()));
+  git(dir, "add", "f.txt");
+  return Bun.spawnSync(["git", "-C", dir, "commit", "-q", "-m", "x"], { env: { ...ENV, ...env }, stdout: "pipe", stderr: "pipe" });
+}
+
+describe("worker commit guard", () => {
+  test("a worker cannot commit in a thread worktree", () => {
+    const { root, wt } = repoWith({});
+    write({ root, worktree: wt, content: SECTION });
+    const r = commit(wt, { AGT_ROLE: "worker" });
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr.toString()).toContain("AgentThread: workers do not commit; the coordinator commits.");
+  });
+
+  test("the coordinator can commit", () => {
+    const { root, wt } = repoWith({});
+    write({ root, worktree: wt, content: SECTION });
+    expect(commit(wt, { AGT_ROLE: "coordinator" }).exitCode).toBe(0);
+  });
+
+  test("the project's own pre-commit hook still runs", () => {
+    const { root, wt } = repoWith({});
+    const hook = join(root, ".git", "hooks", "pre-commit");
+    writeFileSync(hook, "#!/bin/sh\necho project-hook-ran >&2\nexit 1\n", { mode: 0o755 });
+    write({ root, worktree: wt, content: SECTION });
+    const r = commit(wt, { AGT_ROLE: "coordinator" });
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr.toString()).toContain("project-hook-ran");
+  });
+
+  test("the main checkout is not affected", () => {
+    const { root, wt } = repoWith({});
+    write({ root, worktree: wt, content: SECTION });
+    expect(Bun.spawnSync(["git", "-C", root, "config", "--get", "core.hooksPath"], { env: ENV }).exitCode).not.toBe(0);
+    expect(commit(root, { AGT_ROLE: "worker" }).exitCode).toBe(0);
+  });
+
+  test("rerunning is idempotent", () => {
+    const { root, wt } = repoWith({});
+    write({ root, worktree: wt, content: SECTION });
+    const hook = join(root, ".agentthread", "hooks", "pre-commit");
+    const before = readFileSync(hook, "utf8");
+    write({ root, worktree: wt, content: SECTION });
+    expect(readFileSync(hook, "utf8")).toBe(before);
+    expect(git(wt, "config", "--worktree", "--get-all", "core.hooksPath")).toBe(`${join(root, ".agentthread", "hooks")}\n`);
+  });
+});
+
 describe("effect runner", () => {
   const LAYOUT = { workspace: "w", mainTab: "t", managerPane: "p0", loggerPane: "p1", herdrBin: "/nonexistent/herdr" };
 
