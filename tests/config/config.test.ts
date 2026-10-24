@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_CONFIG, configPaths, deepMerge, loadConfig } from "../../src/config/config.ts";
+import { ConfigSchema, DEFAULT_CONFIG, configHash, configPaths, deepMerge, loadConfig } from "../../src/config/config.ts";
 import { isolatedConfigHome } from "../helpers.ts";
 
 function setup(files: { user?: string; project?: string } = {}) {
@@ -176,4 +176,12 @@ test("tier names must match the regex", () => {
     const { root, env } = setup({ project: `agents:\n  complexity:\n    tiers:\n      ${name}: { agent: omp }\n` });
     expect(() => loadConfig(root, env)).toThrow(/agents\.complexity\.tiers/);
   }
+});
+
+test("configHash: sha256 of the canonical JSON, independent of key order", () => {
+  const a = ConfigSchema.parse({ workers: { max_workers: 4 }, language: "en" });
+  const b = ConfigSchema.parse({ language: "en", workers: { max_workers: 4 } });
+  expect(configHash(a)).toBe(configHash(b));
+  expect(configHash(a)).not.toBe(configHash(DEFAULT_CONFIG));
+  expect(configHash(DEFAULT_CONFIG)).toMatch(/^[0-9a-f]{64}$/);
 });

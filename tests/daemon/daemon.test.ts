@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:te
 import { chmodSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { request } from "../../src/daemon/client.ts";
+import { configHash, loadConfig } from "../../src/config/config.ts";
 import { runFollowUps, startDaemon, type Daemon } from "../../src/daemon/server.ts";
 import type { Actor, StoredEvent } from "../../src/domain/types.ts";
 import { EventStore } from "../../src/store/event-store.ts";
@@ -39,8 +40,9 @@ const COORD: Actor = { role: "coordinator", thread: "001", session: "c1" };
 const HANDOFF = (risks: string) =>
   ["Goal status", "Work done", "Decisions", "Next steps"].map((s) => `## ${s}\n${s} text`).join("\n") + `\n## Risks\n${risks}`;
 
-test("ping returns the pid", async () => {
-  expect(await request(sock(), { op: "ping" })).toEqual({ ok: true, result: { pid: process.pid } });
+test("ping returns the pid and the hash of the loaded config", async () => {
+  expect(await request(sock(), { op: "ping" })).toEqual({ ok: true, result: { pid: process.pid, configHash: configHash(loadConfig(root)) } });
+  expect(configHash(loadConfig(root))).toMatch(/^[0-9a-f]{64}$/);
 });
 
 test("thread.new creates the worktree and renders markdown", async () => {

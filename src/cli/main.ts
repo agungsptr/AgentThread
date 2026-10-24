@@ -12,7 +12,7 @@ import { decodeJob, loggedArgv, runSpawnJob } from "../agents/spawn-job.ts";
 import { contextTokensFromTranscript } from "../agents/transcript.ts";
 import { isAlive, request } from "../daemon/client.ts";
 import { startDaemon } from "../daemon/server.ts";
-import { loadConfig } from "../config/config.ts";
+import { configHash, loadConfig } from "../config/config.ts";
 import { ROLES, SESSION_SIGNALS, type Actor, type AgentKind, type Layout, type StoredEvent } from "../domain/types.ts";
 import { HerdrCli, shellQuote } from "../herdr/bridge.ts";
 import { initProject } from "../project/init.ts";
@@ -120,8 +120,10 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
     }
     case "setup": {
       if (!process.stdin.isTTY) throw new UsageError("agt setup needs a terminal; edit .agentthread/config.yaml instead");
-      await setupOnTty(findRoot(cwd, env), env);
+      const setupRoot = findRoot(cwd, env);
+      await setupOnTty(setupRoot, env);
       console.log("saved .agentthread/config.yaml");
+      if (await isAlive(paths(setupRoot).socket)) console.log("run agt start to apply the new config");
       return 0;
     }
     case "daemon":
@@ -291,6 +293,22 @@ async function ensureDaemon(root: string, env: Env): Promise<"started" | "runnin
   throw new Error(`daemon failed to start; see ${p.daemonLog}`);
 }
 
+/** The running daemon's config hash, or undefined when it does not answer or predates the hash. */
+async function daemonConfigHash(socket: string): Promise<string | undefined> {
+  try {
+    const res = await request(socket, { op: "ping" }, 1_000);
+    return res.ok ? (res.result as { configHash?: string }).configHash : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function stopDaemon(socket: string): Promise<void> {
+  await request(socket, { op: "shutdown" });
+  for (let i = 0; i < 50 && (await isAlive(socket)); i++) await Bun.sleep(100);
+  if (await isAlive(socket)) throw new Error("daemon did not stop");
+}
+
 async function start(root: string, env: Env, argv: string[]): Promise<number> {
   const { values } = parse(argv, { "no-manager": { type: "boolean" } });
   const workspace = env.HERDR_WORKSPACE_ID;
@@ -304,8 +322,14 @@ async function start(root: string, env: Env, argv: string[]): Promise<number> {
   await setupIfNeeded(root, env);
   const config = loadConfig(root, env);
   for (const w of configWarnings(config)) console.error(`agt: warning: ${w}`);
-  await ensureDaemon(root, env);
   const socket = paths(root).socket;
+  // The daemon reads the config only when it starts: one running with an older config (agt setup, an edit) is
+  // replaced. Its state lives in the event log, so a restart loses nothing.
+  if ((await ensureDaemon(root, env)) === "running" && (await daemonConfigHash(socket)) !== configHash(config)) {
+    await stopDaemon(socket);
+    await ensureDaemon(root, env);
+    console.log("config changed; restarted the daemon");
+  }
   const herdr = new HerdrCli({ bin: env.HERDR_BIN_PATH ?? "herdr", env });
 
   const current = await request(socket, { op: "layout.get" });
@@ -447,9 +471,7 @@ async function daemon(sub: string | undefined, root: string, env: Env): Promise<
         console.log("daemon not running");
         return 0;
       }
-      await request(p.socket, { op: "shutdown" });
-      for (let i = 0; i < 50 && (await isAlive(p.socket)); i++) await Bun.sleep(100);
-      if (await isAlive(p.socket)) throw new Error("daemon did not stop");
+      await stopDaemon(p.socket);
       console.log("daemon stopped");
       return 0;
     }

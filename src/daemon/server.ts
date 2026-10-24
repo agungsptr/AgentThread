@@ -4,7 +4,7 @@ import { configWarnings } from "../agents/roles.ts";
 import type { SpawnJob } from "../agents/spawn-job.ts";
 import { handle, type Effect } from "../commands/handler.ts";
 import { ActorSchema, CommandSchema, type Command } from "../commands/schema.ts";
-import { durationMs, loadConfig, type Config } from "../config/config.ts";
+import { configHash, durationMs, loadConfig, type Config } from "../config/config.ts";
 import type { Actor, EventBody, StoredEvent } from "../domain/types.ts";
 import { react } from "../orchestration/reactor.ts";
 import { sweep } from "../orchestration/sweep.ts";
@@ -57,6 +57,7 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
     store.close();
     throw e;
   }
+  const loadedHash = configHash(config);
   for (const w of configWarnings(config)) (opts.log ?? console.error)(`warning: ${w}`);
   const ask = process.env.AGT_E2E_OPENCODE_ASK;
   if (ask) (opts.log ?? console.error)(`warning: AGT_E2E_OPENCODE_ASK=${ask} is set (release e2e only): OpenCode ${ask.split(",").join(", ")} sessions ask for every permission`);
@@ -146,7 +147,7 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
   const respond = async (req: Request): Promise<Response> => {
     switch (req.op) {
       case "ping":
-        return { ok: true, result: { pid: process.pid } };
+        return { ok: true, result: { pid: process.pid, configHash: loadedHash } };
       case "events.since":
         return { ok: true, result: store.since(req.seq) };
       case "shutdown":

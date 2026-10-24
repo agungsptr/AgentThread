@@ -178,3 +178,28 @@ test("the SessionStart re-print stays claude-only", () => {
     expect(agt(["event", "started"], { ...main, AGT_AGENT: agent }, { stdin: JSON.stringify({ source: "clear" }) }).out).toBe("");
   }
 });
+
+const daemonPid = () => /pid (\d+)/.exec(agt(["daemon", "status"]).out)?.[1];
+
+test("agt start restarts a running daemon whose config differs from the fresh one", () => {
+  expect(agt(["daemon", "start"]).out).toBe("daemon started");
+  const before = daemonPid();
+  writeFileSync(join(root, ".agentthread", "config.yaml"), "agents:\n  complexity:\n    tiers:\n      small: { agent: claude-code }\n");
+  const r = agt(["start", "--no-manager"]);
+  expect(r.code).toBe(0);
+  expect(r.out.split("\n")[0]).toBe("config changed; restarted the daemon");
+  const after = daemonPid();
+  expect(after).toBeDefined();
+  expect(after).not.toBe(before);
+  // the restarted daemon knows the new tier
+  expect(JSON.parse(agt(["thread", "new", "Fix", "--type", "bug", "--tier", "small", "--reason", "tiny", "--now"]).out)).toMatchObject({ tier: "small" });
+}, 20_000);
+
+test("agt start keeps a running daemon whose config is unchanged", () => {
+  agt(["daemon", "start"]);
+  const before = daemonPid();
+  const r = agt(["start", "--no-manager"]);
+  expect(r.code).toBe(0);
+  expect(r.out).not.toContain("config changed");
+  expect(daemonPid()).toBe(before);
+});

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -164,6 +165,21 @@ function readYaml(file: string): Record<string, unknown> {
   if (value === null || value === undefined) return {};
   if (!isPlainObject(value)) throw new Error(`${file} must contain a YAML mapping`);
   return value;
+}
+
+/** JSON with object keys sorted at every level, so equal configs always serialize the same way. */
+function canonicalJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(",")}]`;
+  if (isPlainObject(v)) {
+    const keys = Object.keys(v).filter((k) => v[k] !== undefined).sort();
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(v[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(v);
+}
+
+/** The sha256 of the parsed config's canonical JSON: `agt start` compares it with the running daemon's. */
+export function configHash(config: Config): string {
+  return createHash("sha256").update(canonicalJson(config)).digest("hex");
 }
 
 export function durationMs(d: string): number {
