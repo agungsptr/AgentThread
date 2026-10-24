@@ -211,3 +211,17 @@ test("agt start warns that claude-code agents will ask to trust the root when ma
   writeFileSync(join(root, ".agentthread", "config.yaml"), "agents:\n  roles:\n    main: { agent: claude-code }\n");
   expect(agt(["start", "--no-manager"]).err).not.toContain("ask to trust");
 }, 15_000);
+
+test("agt start warns once per role or tier whose agent is not installed", () => {
+  writeFileSync(
+    join(root, ".agentthread", "config.yaml"),
+    "agents:\n  roles:\n    main: { agent: claude-code }\n    coordinator: { agent: codex }\n    worker: { agent: omp }\n  complexity:\n    tiers:\n      big: { agent: codex }\n",
+  );
+  const r = agt(["start", "--no-manager"], { AGT_OMP_BIN: FAKE_AGENT });
+  expect(r.code).toBe(0);
+  expect(r.err.split("\n").filter((l) => l.includes("is not installed"))).toEqual([
+    "agt: warning: agents.roles.main: claude-code is not installed",
+    "agt: warning: agents.roles.coordinator: codex is not installed",
+    "agt: warning: agents.complexity.tiers.big: codex is not installed",
+  ]);
+});

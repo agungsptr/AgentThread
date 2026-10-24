@@ -18,7 +18,9 @@ import {
   cleanupProcesses,
   events,
   git,
+  removeConfigHome,
   removeScratch,
+  rowConfigHome,
   report,
   say,
   stopAllServers,
@@ -128,6 +130,9 @@ async function runRow(sc: Scenario): Promise<{ status: "PASS" | "FAIL"; reason?:
   };
   let server: HerdrServer | undefined;
   let root: string | undefined;
+  // Every agt call of the row (and the daemon and main that agt start launches) reads this XDG_CONFIG_HOME.
+  const xdg = rowConfigHome();
+  const withXdg = (env: Record<string, string> = {}) => ({ XDG_CONFIG_HOME: xdg, ...env });
   let watcher: ReturnType<typeof watchTrustDialogs> | undefined;
   let failure: string | undefined;
   let cleaning: Promise<void> | undefined;
@@ -137,6 +142,11 @@ async function runRow(sc: Scenario): Promise<{ status: "PASS" | "FAIL"; reason?:
       // The daemon first (it would react to the agents vanishing), then Herdr with every pane, then any straggler.
       if (root) await cleanupProcesses(root, note, { sweepCwd: false }).catch((e) => note(`cleanup: ${e}`));
       if (server) await server.stop().catch((e) => note(`herdr stop: ${e}`));
+      try {
+        removeConfigHome(xdg);
+      } catch (e) {
+        note(`removing ${xdg}: ${e}`);
+      }
       if (root) {
         const leaked = await cleanupProcesses(root, note).catch((e) => (note(`cleanup: ${e}`), [] as string[]));
         // A process outliving the Herdr shutdown is a product leak (e.g. a private agent server left running).
@@ -151,7 +161,7 @@ async function runRow(sc: Scenario): Promise<{ status: "PASS" | "FAIL"; reason?:
     note(`isolated Herdr session ${server.session}, ${socketLine} (live: ${process.env.HERDR_SOCKET_PATH ?? "none inherited"})`);
     root = await scratchRepo(sc.hints);
     writeConfig(root, sc.agents, sc.config);
-    const init = await agt(root, ["init", "--name", "e2e"]);
+    const init = await agt(root, ["init", "--name", "e2e"], withXdg());
     if (init.exitCode !== 0) throw new Error(`agt init failed: ${init.stderr}`);
     await git(root, "add", ".gitignore");
     await git(root, "commit", "-q", "-m", "agt init");
@@ -168,9 +178,9 @@ async function runRow(sc: Scenario): Promise<{ status: "PASS" | "FAIL"; reason?:
       workspace: ws.workspace.workspace_id,
       mainPane: ws.root_pane.pane_id,
       deadline,
-      agt: (args, env = {}) => agt(r, args, env),
+      agt: (args, env = {}) => agt(r, args, withXdg(env)),
       async agtOk(args, env = {}) {
-        const res = await agt(r, args, env);
+        const res = await agt(r, args, withXdg(env));
         if (res.exitCode !== 0) throw new Error(`agt ${args.join(" ")} failed: ${res.stderr.trim()}`);
         return res.stdout.trim();
       },
@@ -188,7 +198,7 @@ async function runRow(sc: Scenario): Promise<{ status: "PASS" | "FAIL"; reason?:
         h.workspace = w.workspace.workspace_id;
       },
       async startAgt(args = [], env = {}) {
-        const envPart = Object.entries(env).map(([k, v]) => `${k}=${shellQuote(v)}`).join(" ");
+        const envPart = Object.entries(withXdg(env)).map(([k, v]) => `${k}=${shellQuote(v)}`).join(" ");
         const cmd = `cd ${shellQuote(r)} && ${envPart ? `env ${envPart} ` : ""}${shellQuote(process.execPath)} ${shellQuote(AGT)} start ${args.map(shellQuote).join(" ")}`;
         await h.herdr.run(["pane", "run", h.mainPane, cmd]);
       },

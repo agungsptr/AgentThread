@@ -20,7 +20,9 @@ tickets), never on what a model writes.
   If OpenCode's default model does not work, set `AGT_E2E_MODEL_OPENCODE`.
 - Optional models and efforts per agent: `AGT_E2E_MODEL_<AGENT>` and `AGT_E2E_EFFORT_<AGENT>`, with `<AGENT>` one of
   `CLAUDE_CODE`, `OPENCODE`, `CODEX`, `OMP` (for example `AGT_E2E_MODEL_CLAUDE_CODE=sonnet`). Unset means the agent's
-  default model.
+  default model. `AGT_E2E_EFFORT_OPENCODE` needs `AGT_E2E_MODEL_OPENCODE` (an OpenCode effort is a variant of a model).
+- Every row's `agt` runs with its own `XDG_CONFIG_HOME`: a temp dir linking every entry of your `~/.config` except
+  `agentthread`, so your own `~/.config/agentthread/config.yaml` never merges into a row's config.
 - Claude Code asks once per new folder whether you trust it. Each row's scratch repo is a new temp folder, so the
   harness answers that dialog for the repo root as you would (worktrees below it inherit the trust). Your Claude
   config therefore gains a trusted-folder entry per row's temp path. The harness answers it only in main's pane: a

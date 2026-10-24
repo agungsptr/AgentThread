@@ -157,7 +157,7 @@ test("tiers parse; the timeout defaults to 10s; a timeout under 1s is rejected",
 test("effort outside the agent's list is rejected", () => {
   const { root, env } = setup({ project: "agents:\n  roles:\n    worker: { agent: omp, effort: ultra }\n" });
   expect(() => loadConfig(root, env)).toThrow("agents.roles.worker.effort: omp accepts off, minimal, low, medium, high, xhigh, max, auto");
-  const ok = setup({ project: "agents:\n  roles:\n    worker: { agent: opencode, effort: anything }\n" });
+  const ok = setup({ project: "agents:\n  roles:\n    worker: { agent: opencode, model: p/m, effort: anything }\n" });
   expect(loadConfig(ok.root, ok.env).agents.roles.worker.effort).toBe("anything");
 });
 
@@ -184,4 +184,13 @@ test("configHash: sha256 of the canonical JSON, independent of key order", () =>
   expect(configHash(a)).toBe(configHash(b));
   expect(configHash(a)).not.toBe(configHash(DEFAULT_CONFIG));
   expect(configHash(DEFAULT_CONFIG)).toMatch(/^[0-9a-f]{64}$/);
+});
+
+test("an opencode role or tier with an effort but no model is rejected", () => {
+  const roleRoot = setup({ project: "agents:\n  roles:\n    worker: { agent: opencode, effort: high }\n" });
+  expect(() => loadConfig(roleRoot.root, roleRoot.env)).toThrow("agents.roles.worker.effort: opencode effort needs a model");
+  const tierRoot = setup({ project: "agents:\n  complexity:\n    tiers:\n      big: { agent: opencode, effort: high }\n" });
+  expect(() => loadConfig(tierRoot.root, tierRoot.env)).toThrow("agents.complexity.tiers.big.effort: opencode effort needs a model");
+  const ok = setup({ project: "agents:\n  roles:\n    worker: { agent: opencode, model: p/m, effort: high }\n" });
+  expect(loadConfig(ok.root, ok.env).agents.roles.worker).toEqual({ agent: "opencode", model: "p/m", effort: "high" });
 });

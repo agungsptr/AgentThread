@@ -96,5 +96,5 @@ test("agt init on a non-TTY prints the setup hint and succeeds", () => {
   const r2 = tempRepo();
   const r = agt(["init", "--name", "x"], { env: { AGT_ROOT: r2 }, root: false });
   expect(r.code).toBe(0);
-  expect(r.err).toContain("run agt setup (or edit .agentthread/config.yaml) to choose agents per role; using claude-code for every role");
+  expect(r.err).toContain("run agt setup (or edit .agentthread/config.yaml) to choose agents per role; using the configured defaults (claude-code unless set)");
 });

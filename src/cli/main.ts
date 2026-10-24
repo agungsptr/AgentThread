@@ -6,7 +6,7 @@ import { parseArgs, type ParseArgsConfig } from "node:util";
 import { stringify } from "yaml";
 import { agentEnv } from "../agents/claude.ts";
 import { adapterFor, agentBin } from "../agents/adapters.ts";
-import { configWarnings, roleAgent, trustWarning } from "../agents/roles.ts";
+import { configWarnings, installWarnings, roleAgent, trustWarning } from "../agents/roles.ts";
 import { systemPrompt } from "../agents/prompts.ts";
 import { decodeJob, loggedArgv, runSpawnJob } from "../agents/spawn-job.ts";
 import { contextTokensFromTranscript } from "../agents/transcript.ts";
@@ -16,7 +16,7 @@ import { configHash, loadConfig } from "../config/config.ts";
 import { AGENT_KINDS, ROLES, SESSION_SIGNALS, type Actor, type AgentKind, type Layout, type StoredEvent } from "../domain/types.ts";
 import { HerdrCli, shellQuote } from "../herdr/bridge.ts";
 import { initProject } from "../project/init.ts";
-import { setupIfNeeded, setupOnTty } from "../project/setup.ts";
+import { detectAgents, setupIfNeeded, setupOnTty } from "../project/setup.ts";
 import { paths } from "../project/paths.ts";
 import { findRoot } from "../project/root.ts";
 
@@ -324,7 +324,12 @@ async function start(root: string, env: Env, argv: string[]): Promise<number> {
   }
   await setupIfNeeded(root, env);
   const config = loadConfig(root, env);
-  for (const w of [...configWarnings(config), ...[trustWarning(config, root)].filter((w) => w !== undefined)]) console.error(`agt: warning: ${w}`);
+  const warnings = [
+    ...configWarnings(config),
+    ...installWarnings(config, detectAgents(Bun.which, env)),
+    ...[trustWarning(config, root)].filter((w) => w !== undefined),
+  ];
+  for (const w of warnings) console.error(`agt: warning: ${w}`);
   const socket = paths(root).socket;
   // The daemon reads the config only when it starts: one running with an older config (agt setup, an edit) is
   // replaced. Its state lives in the event log, so a restart loses nothing.

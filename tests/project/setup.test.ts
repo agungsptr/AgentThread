@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig } from "../../src/config/config.ts";
-import { detectAgents, needsSetup, runSetup } from "../../src/project/setup.ts";
+import { SETUP_HINT, detectAgents, needsSetup, runSetup } from "../../src/project/setup.ts";
 import { isolatedConfigHome, tempRepo } from "../helpers.ts";
 
 const script = (answers: string[]) => {
@@ -81,16 +81,46 @@ test("a bad effort re-asks", async () => {
 
 test("needsSetup is true only without agents.roles", () => {
   const root = tempRepo();
-  expect(needsSetup(root)).toBe(true);
+  const e = env();
+  expect(needsSetup(root, e)).toBe(true);
   mkdirSync(join(root, ".agentthread"), { recursive: true });
   writeFileSync(cfg(root), "workers:\n  max_workers: 2\n");
-  expect(needsSetup(root)).toBe(true);
+  expect(needsSetup(root, e)).toBe(true);
   writeFileSync(cfg(root), "agents:\n  roles:\n    main: { agent: codex }\n");
-  expect(needsSetup(root)).toBe(false);
+  expect(needsSetup(root, e)).toBe(false);
 });
 
 test("detectAgents uses bin and AGT_<AGENT>_BIN overrides", () => {
   const seen: string[] = [];
   const which = (b: string) => (seen.push(b), b === "codex" || b === "/x/claude" ? `/bin/${b}` : null);
   expect(detectAgents(which, { AGT_CLAUDE_BIN: "/x/claude" })).toEqual(["claude-code", "codex"]);
+});
+
+test("needsSetup reads the merged config: agents.roles in the user file is enough", () => {
+  const root = tempRepo();
+  const xdg = isolatedConfigHome();
+  const env = { XDG_CONFIG_HOME: xdg, HOME: "/nonexistent" };
+  expect(needsSetup(root, env)).toBe(true);
+  mkdirSync(join(xdg, "agentthread"), { recursive: true });
+  writeFileSync(join(xdg, "agentthread", "config.yaml"), "agents:\n  roles:\n    main: { agent: codex }\n");
+  expect(needsSetup(root, env)).toBe(false);
+});
+
+test("SETUP_HINT does not claim claude-code for every role", () => {
+  expect(SETUP_HINT).toBe("run agt setup (or edit .agentthread/config.yaml) to choose agents per role; using the configured defaults (claude-code unless set)");
+});
+
+test("the wizard asks again for an opencode effort without a model", async () => {
+  const root = tempRepo();
+  const { ask } = script(["opencode", "", "high", "", "claude-code", "", "", "claude-code", "", "", "", "10s"]);
+  const errors: string[] = [];
+  const orig = console.error;
+  console.error = (m: string) => void errors.push(m);
+  try {
+    await runSetup({ root, ask, detected: ["claude-code", "opencode"] });
+  } finally {
+    console.error = orig;
+  }
+  expect(errors).toContain("opencode effort needs a model");
+  expect(loadConfig(root, env()).agents.roles.main).toEqual({ agent: "opencode" });
 });

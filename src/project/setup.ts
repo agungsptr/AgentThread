@@ -4,11 +4,11 @@ import { createInterface } from "node:readline/promises";
 import { parse, parseDocument } from "yaml";
 import { adapterFor, agentBin } from "../agents/adapters.ts";
 import { EFFORTS } from "../agents/roles.ts";
-import { configPaths, durationMs } from "../config/config.ts";
+import { configPaths, deepMerge, durationMs } from "../config/config.ts";
 import { AGENT_KINDS, type AgentKind } from "../domain/types.ts";
 
 export const SETUP_HINT =
-  "run agt setup (or edit .agentthread/config.yaml) to choose agents per role; using claude-code for every role";
+  "run agt setup (or edit .agentthread/config.yaml) to choose agents per role; using the configured defaults (claude-code unless set)";
 
 type Env = Record<string, string | undefined>;
 type Pick = { agent: AgentKind; model?: string; effort?: string };
@@ -18,12 +18,16 @@ export function detectAgents(which: (bin: string) => string | null = Bun.which, 
   return AGENT_KINDS.filter((a) => which(agentBin(a, env)) !== null);
 }
 
-/** True when the project config has no `agents.roles`. */
-export function needsSetup(root: string): boolean {
-  const file = configPaths(root).project;
-  if (!existsSync(file)) return true;
+/** True when the merged config (user, then project) sets no `agents.roles`. The wizard still writes only the project file. */
+export function needsSetup(root: string, env: Env = process.env): boolean {
+  const p = configPaths(root, env);
+  const read = (file: string): Record<string, unknown> => {
+    if (!existsSync(file)) return {};
+    const v = parse(readFileSync(file, "utf8")) as unknown;
+    return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+  };
   try {
-    const roles = (parse(readFileSync(file, "utf8")) as { agents?: { roles?: unknown } } | null)?.agents?.roles;
+    const roles = (deepMerge(read(p.user), read(p.project)) as { agents?: { roles?: unknown } }).agents?.roles;
     return !(typeof roles === "object" && roles !== null && Object.keys(roles).length > 0);
   } catch {
     return true;
@@ -58,8 +62,9 @@ export async function runSetup(o: {
     let effort = "";
     for (;;) {
       effort = (await ask(`${label} effort (blank for the default${list.length ? `; ${list.join(", ")}` : ""})`)).trim();
-      if (effort === "" || list.length === 0 || list.includes(effort)) break;
-      console.error(`${agent} accepts ${list.join(", ")}`);
+      if (effort !== "" && agent === "opencode" && !model) console.error("opencode effort needs a model");
+      else if (effort === "" || list.length === 0 || list.includes(effort)) break;
+      else console.error(`${agent} accepts ${list.join(", ")}`);
     }
     return { agent, ...(model ? { model } : {}), ...(effort ? { effort } : {}) };
   };
@@ -117,7 +122,7 @@ export async function setupOnTty(root: string, env: Env): Promise<void> {
 
 /** For `agt init` / `agt start`: run setup on a TTY, else print the hint and carry on with defaults. */
 export async function setupIfNeeded(root: string, env: Env, isTTY: boolean = !!process.stdin.isTTY): Promise<void> {
-  if (!needsSetup(root)) return;
+  if (!needsSetup(root, env)) return;
   if (isTTY) await setupOnTty(root, env);
   else console.error(SETUP_HINT);
 }

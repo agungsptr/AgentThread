@@ -430,3 +430,15 @@ describe("effect runner", () => {
     expect(logs.some((m) => m.includes("writing AGENTS.md for thread 001 failed"))).toBe(true);
   });
 });
+
+test("a core.hooksPath of ~/x is expanded, so the project's own hook still runs", () => {
+  const { root, wt } = repoWith({});
+  git(root, "config", "core.hooksPath", "~/x");
+  mkdirSync(join(HOME, "x"), { recursive: true });
+  writeFileSync(join(HOME, "x", "pre-commit"), "#!/bin/sh\necho home-hook-ran >&2\nexit 1\n", { mode: 0o755 });
+  write({ root, worktree: wt, content: SECTION });
+  expect(git(wt, "config", "--worktree", "--get", "agentthread.hooksPath").trim()).toBe(join(HOME, "x"));
+  const r = commit(wt, { AGT_ROLE: "coordinator" });
+  expect(r.exitCode).not.toBe(0);
+  expect(r.stderr.toString()).toContain("home-hook-ran");
+});

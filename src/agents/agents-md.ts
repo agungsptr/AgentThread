@@ -263,7 +263,8 @@ function hookStub(guardDir: string): string {
 function* guardInWorktree(c: Ctx, root: string, wt: string, log: (m: string) => void): Steps<void> {
   const dir = join(root, ".agentthread", "hooks");
   try {
-    const configured = (yield* git(c, root, ["config", "--get", "core.hooksPath"]));
+    // --path expands a leading ~/ as git itself does when it runs hooks; the stub reads the value back verbatim.
+    const configured = (yield* git(c, root, ["config", "--path", "--get", "core.hooksPath"]));
     const original = configured.ok ? configured.stdout.trim() : "";
     mkdirSync(dir, { recursive: true });
     // One script, every hook name a symlink to it: a freshly written executable costs a one-off scan on some systems.

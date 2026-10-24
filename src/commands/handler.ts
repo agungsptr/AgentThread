@@ -98,7 +98,7 @@ function reject(message: string): never {
  */
 function attribute(state: State, cmd: Command, actor: Actor): Actor {
   if (cmd.cmd === "session.signal") return actor;
-  const session = actor.session || (actor.role !== "coordinator" && actor.role !== "worker") ? undefined : actorSession(state, actor);
+  const session = (actor.session || (actor.role !== "coordinator" && actor.role !== "worker")) ? undefined : actorSession(state, actor);
   return { ...actor, ...(session ? { session } : {}), via: "command" };
 }
 

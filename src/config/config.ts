@@ -47,7 +47,12 @@ const agentsSchema = z
   })
   .strict()
   .superRefine((a, ctx) => {
-    const check = (path: (string | number)[], v: { agent: keyof typeof EFFORTS; effort?: string | undefined } | undefined) => {
+    const check = (path: (string | number)[], v: { agent: keyof typeof EFFORTS; model?: string | undefined; effort?: string | undefined } | undefined) => {
+      // OpenCode takes the effort as a variant of the model (<provider/model>#<effort>), so it needs one.
+      if (v?.agent === "opencode" && v.effort !== undefined && v.model === undefined) {
+        ctx.addIssue({ code: "custom", path: [...path, "effort"], message: "opencode effort needs a model" });
+        return;
+      }
       const list = v && EFFORTS[v.agent];
       if (!v || v.effort === undefined || !list || list.length === 0 || list.includes(v.effort)) return;
       ctx.addIssue({ code: "custom", path: [...path, "effort"], message: `${v.agent} accepts ${list.join(", ")}` });

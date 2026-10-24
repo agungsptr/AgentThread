@@ -28,6 +28,15 @@ export function configWarnings(config: Config): string[] {
   return [];
 }
 
+/** One warning per role or tier whose agent is not among `installed` (see detectAgents). */
+export function installWarnings(config: Config, installed: readonly AgentKind[]): string[] {
+  const runs: [string, RoleAgent][] = [
+    ...Object.entries(config.agents.roles).map(([r, run]): [string, RoleAgent] => [`agents.roles.${r}`, run]),
+    ...Object.entries(config.agents.complexity.tiers).map(([t, run]): [string, RoleAgent] => [`agents.complexity.tiers.${t}`, run]),
+  ];
+  return runs.filter(([, run]) => !installed.includes(run.agent)).map(([path, run]) => `${path}: ${run.agent} is not installed`);
+}
+
 /**
  * Claude Code asks once whether to trust a project directory. Main runs in the root and answers that dialog when it is
  * Claude Code; when it is not, the first Claude Code coordinator or worker would stall on the dialog in its pane.

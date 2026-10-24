@@ -72,7 +72,7 @@ function build(t: Thread, trail: GitTrail | undefined, lim: Limits, tier: string
   const findings = tail(t.findings, lim.findings).map(entry);
   const decisions = tail(t.decisions, lim.decisions).map(entry);
   const openQs = t.questions.filter((q) => !q.answer);
-  const questions = openQs.slice(-20).map((q) => entry({ ts: q.ts, message: `${q.message} (${q.id})` }));
+  const questions = openQs.slice(-20).map((q) => entry({ ts: q.ts, message: `(${q.id}) ${q.message}` }));
   const earlier = openQs.length - questions.length;
   const answered = t.questions.filter((q) => q.answer).slice(-10).map((q) => cap(`- ${q.id} ${oneLine(q.message)} — answer: ${oneLine(q.answer!.message)}`, 400));
   const goal = clampHeadings(t.goal.trim());

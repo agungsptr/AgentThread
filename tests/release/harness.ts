@@ -15,6 +15,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -222,6 +223,26 @@ export async function scratchRepo(hints: string[] = []): Promise<string> {
 }
 
 /** Runs the agt CLI as the user for `root`, outside any pane. */
+const XDG_PREFIX = "agt-e2e-xdg-";
+
+/**
+ * A row's XDG_CONFIG_HOME: every entry of the user's ~/.config linked in (agents and git keep their config), except
+ * agentthread, so the user's own ~/.config/agentthread/config.yaml never merges into a row's config.
+ */
+export function rowConfigHome(): string {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), XDG_PREFIX)));
+  const real = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
+  if (existsSync(real)) {
+    for (const name of readdirSync(real)) if (name !== "agentthread") symlinkSync(join(real, name), join(dir, name));
+  }
+  return dir;
+}
+
+export function removeConfigHome(dir: string): void {
+  if (!dir.includes(XDG_PREFIX)) throw new Error(`refusing to remove ${dir}`);
+  rmSync(dir, { recursive: true, force: true }); // removes the links, never what they point at
+}
+
 export function agt(root: string, args: string[], env: Record<string, string> = {}, timeoutMs = 60_000): Promise<RunResult> {
   return spawnAsync(process.execPath, [AGT, ...args], cleanEnv({ AGT_ROOT: root, ...env }), timeoutMs);
 }
