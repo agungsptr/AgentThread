@@ -73,15 +73,22 @@ test("opencode: the release e2e's AGT_E2E_OPENCODE_ASK makes the named roles ask
   expect(coordinator.args).toEqual(["--standalone", "--auto"]);
 });
 
-test("codex: exact sandbox args", () => {
-  const { args } = adapterFor("codex").launch({ ...base, gitCommonDir: "/r/.git", run: { agent: "codex", model: "gpt-6.1-sol", effort: "medium" } });
-  expect(args).toEqual([
+test("codex: exact sandbox args; only the coordinator may write the git dir", () => {
+  const coordinator = adapterFor("codex").launch({ ...base, role: "coordinator", gitCommonDir: "/r/.git", run: { agent: "codex", model: "gpt-6.1-sol", effort: "medium" } });
+  expect(coordinator.args).toEqual([
     "-m", "gpt-6.1-sol", "-c", 'model_reasoning_effort="medium"',
     "-s", "workspace-write", "-a", "never",
     "-c", "sandbox_workspace_write.network_access=true",
-    "--add-dir", "/r/.git", "--add-dir", "/r/.agentthread", "--search",
+    "--add-dir", "/r/.git", "--search",
     "-c", 'projects={"/r"={trust_level="trusted"}}',
   ]);
+  // A worker never commits; write access to the git dir would let it rewrite its worktree's config.worktree (the guard).
+  for (const role of ["worker", "main"] as const) {
+    const { args } = adapterFor("codex").launch({ ...base, role, gitCommonDir: "/r/.git", run: { agent: "codex" } });
+    expect(args).not.toContain("--add-dir");
+  }
+  // without gitCommonDir the coordinator falls back to <root>/.git
+  expect(adapterFor("codex").launch({ ...base, role: "coordinator", run: { agent: "codex" } }).args).toContain("/r/.git");
   expect(adapterFor("codex").launch({ ...base, run: { agent: "codex" } }).args.slice(0, 2)).toEqual(["-s", "workspace-write"]);
 });
 

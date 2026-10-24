@@ -89,7 +89,7 @@ const codexAdapter: AgentAdapter = {
   bin: "codex",
   instructionFiles: [],
   prompt: "positional",
-  launch({ run, config, root, worktree, gitCommonDir }) {
+  launch({ role, run, config, root, worktree, gitCommonDir }) {
     // Codex asks once per project whether to trust it, keyed by the main checkout (a worktree resolves to it), and
     // would stall a pane on that dialog. A `-c` dotted path splits on every '.', so the path keys go in an inline table.
     const trusted = [...new Set([root, ...(worktree ? [worktree] : [])])].map((p) => `${JSON.stringify(p)}={trust_level="trusted"}`);
@@ -100,8 +100,10 @@ const codexAdapter: AgentAdapter = {
         "-s", "workspace-write",
         "-a", config.agents.autonomous ? "never" : "on-request",
         "-c", "sandbox_workspace_write.network_access=true",
-        "--add-dir", gitCommonDir ?? join(root, ".git"),
-        "--add-dir", join(root, ".agentthread"),
+        // Commits from a worktree write the main repository's git dir, outside the sandbox. Only the coordinator commits:
+        // a worker that could write it could also rewrite its worktree's config.worktree and unhook the commit guard.
+        // No add-dir for <root>/.agentthread: agents only read it, and the daemon socket is in /tmp/agt-<uid>.
+        ...(role === "coordinator" ? ["--add-dir", gitCommonDir ?? join(root, ".git")] : []),
         "--search",
         "-c", `projects={${trusted.join(",")}}`,
       ],
