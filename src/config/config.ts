@@ -3,7 +3,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { parse } from "yaml";
 import { z } from "zod";
-import { AGENT_KINDS } from "../domain/types.ts";
+import { AGENT_KINDS, type SessionRole } from "../domain/types.ts";
+import { EFFORTS } from "../agents/roles.ts";
 
 type Env = Record<string, string | undefined>;
 
@@ -14,26 +15,70 @@ const durationAtLeast = (min: string) => duration.refine((d) => !DURATION.test(d
 const agent = z.enum(AGENT_KINDS);
 export const PERMISSION_MODES = ["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"] as const;
 
-export const ConfigSchema = z
+const roleAgentSchema = z
+  .object({ agent, model: z.string().trim().min(1).optional(), effort: z.string().trim().min(1).optional() })
+  .strict();
+const ROLE_NAMES = ["main", "coordinator", "worker"] as const satisfies readonly SessionRole[];
+
+const agentsSchema = z
   .object({
-    language: z.enum(["en"]).default("en"),
-    agents: z
+    main_manager: agent.optional(),
+    default_coordinator: agent.optional(),
+    default_worker: agent.optional(),
+    roles: z.object({ main: roleAgentSchema.optional(), coordinator: roleAgentSchema.optional(), worker: roleAgentSchema.optional() }).strict().default({}),
+    complexity: z
       .object({
-        main_manager: agent.default("claude-code"),
-        default_coordinator: agent.default("claude-code"),
-        default_worker: agent.default("claude-code"),
-        claude: z
-          .object({
-            permission_mode: z.enum(PERMISSION_MODES).default("acceptEdits"),
-            extra_allowed_tools: z.array(z.string().trim().min(1)).default([]),
-            model: z.string().trim().min(1).optional(),
-            config_dir: z.string().trim().min(1).optional(),
-          })
-          .strict()
-          .default({}),
+        timeout: durationAtLeast("1s").default("10s"),
+        tiers: z.record(z.string().regex(/^[a-z][a-z0-9_-]*$/, "tier name must match /^[a-z][a-z0-9_-]*$/"), roleAgentSchema).default({}),
       })
       .strict()
       .default({}),
+    autonomous: z.boolean().default(true),
+    claude: z
+      .object({
+        permission_mode: z.enum(PERMISSION_MODES).default("acceptEdits"),
+        extra_allowed_tools: z.array(z.string().trim().min(1)).default([]),
+        model: z.string().trim().min(1).optional(),
+        config_dir: z.string().trim().min(1).optional(),
+      })
+      .strict()
+      .default({}),
+  })
+  .strict()
+  .superRefine((a, ctx) => {
+    const check = (path: (string | number)[], v: { agent: keyof typeof EFFORTS; effort?: string | undefined } | undefined) => {
+      const list = v && EFFORTS[v.agent];
+      if (!v || v.effort === undefined || !list || list.length === 0 || list.includes(v.effort)) return;
+      ctx.addIssue({ code: "custom", path: [...path, "effort"], message: `${v.agent} accepts ${list.join(", ")}` });
+    };
+    for (const r of ROLE_NAMES) check(["roles", r], a.roles[r]);
+    for (const [name, t] of Object.entries(a.complexity.tiers)) check(["complexity", "tiers", name], t);
+  })
+  .transform((a) => {
+    const legacy = { main: a.main_manager, coordinator: a.default_coordinator, worker: a.default_worker };
+    const roles = {} as Record<SessionRole, RoleAgent>;
+    for (const r of ROLE_NAMES) {
+      const set = a.roles[r];
+      if (set) roles[r] = set;
+      else roles[r] = { agent: legacy[r] ?? "claude-code", ...(a.claude.model ? { model: a.claude.model } : {}) };
+    }
+    return {
+      main_manager: roles.main.agent,
+      default_coordinator: roles.coordinator.agent,
+      default_worker: roles.worker.agent,
+      roles,
+      complexity: a.complexity,
+      autonomous: a.autonomous,
+      claude: a.claude,
+    };
+  });
+
+export type RoleAgent = { agent: z.infer<typeof agent>; model?: string; effort?: string };
+
+export const ConfigSchema = z
+  .object({
+    language: z.enum(["en"]).default("en"),
+    agents: agentsSchema.default({}),
     workers: z
       .object({ max_workers: z.number().int().min(1).max(16).default(3) })
       .strict()

@@ -31,6 +31,9 @@ test("defaults match the spec", () => {
       main_manager: "claude-code",
       default_coordinator: "claude-code",
       default_worker: "claude-code",
+      roles: { main: { agent: "claude-code" }, coordinator: { agent: "claude-code" }, worker: { agent: "claude-code" } },
+      complexity: { timeout: "10s", tiers: {} },
+      autonomous: true,
       claude: { permission_mode: "acceptEdits", extra_allowed_tools: [] },
     },
     workers: { max_workers: 3 },
@@ -120,4 +123,45 @@ test("durationMs", async () => {
   const { durationMs } = await import("../../src/config/config.ts");
   expect([durationMs("30s"), durationMs("5m"), durationMs("24h"), durationMs("2d")]).toEqual([30_000, 300_000, 86_400_000, 172_800_000]);
   expect(() => durationMs("soon")).toThrow("invalid duration soon");
+});
+
+test("legacy keys fill roles", () => {
+  const { root, env } = setup({ project: "agents:\n  default_worker: opencode\n  claude:\n    model: claude-opus-5-5\n" });
+  const a = loadConfig(root, env).agents;
+  expect(a.roles.worker).toEqual({ agent: "opencode", model: "claude-opus-5-5" });
+  expect(a.roles.main).toEqual({ agent: "claude-code", model: "claude-opus-5-5" });
+  expect(a.default_worker).toBe("opencode");
+});
+
+test("legacy: default_worker alone leaves worker without a model", () => {
+  const { root, env } = setup({ project: "agents:\n  default_worker: opencode\n" });
+  expect(loadConfig(root, env).agents.roles.worker).toEqual({ agent: "opencode" });
+});
+
+test("roles win over legacy keys", () => {
+  const { root, env } = setup({ project: "agents:\n  default_worker: opencode\n  claude:\n    model: x\n  roles:\n    worker: { agent: codex, effort: low }\n" });
+  const a = loadConfig(root, env).agents;
+  expect(a.roles.worker).toEqual({ agent: "codex", effort: "low" });
+  expect(a.default_worker).toBe("codex");
+});
+
+test("tiers parse; the timeout defaults to 10s; a timeout under 1s is rejected", () => {
+  const { root, env } = setup({ project: "agents:\n  complexity:\n    tiers:\n      hard: { agent: claude-code, model: opus, effort: max }\n" });
+  const c = loadConfig(root, env).agents.complexity;
+  expect(c.timeout).toBe("10s");
+  expect(c.tiers.hard).toEqual({ agent: "claude-code", model: "opus", effort: "max" });
+  const bad = setup({ project: "agents:\n  complexity:\n    timeout: 500ms\n" });
+  expect(() => loadConfig(bad.root, bad.env)).toThrow(/agents\.complexity\.timeout/);
+});
+
+test("effort outside the agent's list is rejected", () => {
+  const { root, env } = setup({ project: "agents:\n  roles:\n    worker: { agent: omp, effort: ultra }\n" });
+  expect(() => loadConfig(root, env)).toThrow("agents.roles.worker.effort: omp accepts off, minimal, low, medium, high, xhigh, max, auto");
+  const ok = setup({ project: "agents:\n  roles:\n    worker: { agent: opencode, effort: anything }\n" });
+  expect(loadConfig(ok.root, ok.env).agents.roles.worker.effort).toBe("anything");
+});
+
+test("a bad tier name is rejected", () => {
+  const { root, env } = setup({ project: "agents:\n  complexity:\n    tiers:\n      Bad Name: { agent: omp }\n" });
+  expect(() => loadConfig(root, env)).toThrow(/agents\.complexity\.tiers/);
 });
