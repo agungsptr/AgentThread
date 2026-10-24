@@ -590,3 +590,28 @@ Known facts, still to be verified in the plan's research step:
 - How the e2e drives a "user" reply, for example by sending the reply to main's pane with `herdr agent prompt`.
 - The scratch-repo task design.
 - The release report format.
+
+### 12.9 Decisions after the builder check
+- **Worker questions (user):**
+  - `agt question` from a worker notifies its coordinator at once.
+  - The worker ends its turn and waits.
+  - The coordinator replies with `agt answer <thread> <question-id> "<text>"`. The answer is delivered to that worker's pane and recorded on the question.
+  - Workers never use the user as a channel.
+- **Late tier choice (user, option A):**
+  - The proposal timer pauses as soon as main's pane goes `working` after the proposal, meaning the user is replying.
+  - If main then runs `agt thread choose`, that tier starts.
+  - If main goes idle again without a choice, the full timeout restarts.
+  - The daemon watches main's status from the poller.
+- **Codex / omp (user):**
+  - The research step may install them and run read-only commands such as `--help`. The user handles logins and keys.
+  - An agent that cannot meet §12.5's ship bar is dropped from this revision as a follow-up. That does not block the release.
+- **Enforcement (my call):**
+  - "Only the coordinator commits" stays enforced, through a pre-commit hook installed for each thread worktree. The hook uses per-worktree `core.hooksPath`, reusing the `extensions.worktreeConfig` setup, and refuses when `AGT_ROLE=worker`.
+  - "Nothing outside the worktree" and "no push" stay as `AGENTS.md` rules, plus vendor deny rules where an agent supports them cheaply. The rules must still allow reads of `<root>/.agentthread/`, which holds brief.md and the state files, and the package caches dependency installs need.
+- **User-level config (my call):**
+  - `~/.config/agentthread/config.yaml` keeps loading under the project file, as in §9, for backward compatibility.
+  - The setup wizard runs when the merged config has no `agents.roles`. It writes only to the project config.
+  - "Per project" means the wizard asks per project. It does not forbid the user file.
+- **Legacy permission keys (my call):**
+  - Autonomous mode is the default for every role.
+  - `claude.permission_mode` and `claude.extra_allowed_tools` still load, but they no longer reduce autonomy. They are ignored with a one-time warning, unless the user sets `agents.autonomous: false` to keep the old restricted behavior.
