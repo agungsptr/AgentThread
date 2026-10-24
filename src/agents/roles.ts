@@ -27,3 +27,13 @@ export function configWarnings(config: Config): string[] {
   }
   return [];
 }
+
+/**
+ * Claude Code asks once whether to trust a project directory. Main runs in the root and answers that dialog when it is
+ * Claude Code; when it is not, the first Claude Code coordinator or worker would stall on the dialog in its pane.
+ */
+export function trustWarning(config: Config, root: string): string | undefined {
+  const runs = [...Object.values(config.agents.roles), ...Object.values(config.agents.complexity.tiers)];
+  if (config.agents.roles.main.agent === "claude-code" || !runs.some((r) => r.agent === "claude-code")) return undefined;
+  return `claude-code agents will ask to trust ${root}; open claude once in ${root} and accept, or use claude-code for main`;
+}

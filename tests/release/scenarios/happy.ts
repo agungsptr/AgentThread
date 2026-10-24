@@ -9,7 +9,8 @@ const happy = (id: string, agents: RoleAgents): Scenario => ({ id, agents, confi
 
 /**
  * §12.7 happy flow: every agent as coordinator (workers on the daily default) and every agent as worker (coordinator
- * on the daily default), minus duplicates. `happy-claude-code` is the single-vendor row (Claude Code everywhere).
+ * on the daily default), minus duplicates. `happy-claude-code` is the single-vendor row (Claude Code everywhere);
+ * `happy-mixed-main` puts main on OpenCode over Claude Code coordinator and worker (the trust-dialog case).
  */
 export function happyScenarios(): Scenario[] {
   const rows = new Map<string, Scenario>();
@@ -19,6 +20,8 @@ export function happyScenarios(): Scenario[] {
   };
   add("happy-claude-code", { main: "claude-code", coordinator: "claude-code", worker: "claude-code" });
   add("happy-daily", DAILY);
+  // Main is not Claude Code, so nothing trusts the project for the Claude Code coordinator and worker beforehand.
+  add("happy-mixed-main", { main: "opencode", coordinator: "claude-code", worker: "claude-code" });
   for (const c of AGENT_KINDS as readonly AgentKind[]) add(`happy-coord-${c}`, { ...DAILY, coordinator: c });
   for (const w of AGENT_KINDS as readonly AgentKind[]) add(`happy-worker-${w}`, { ...DAILY, worker: w });
   return [...rows.values()];

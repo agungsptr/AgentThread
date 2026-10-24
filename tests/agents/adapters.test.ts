@@ -80,6 +80,7 @@ test("codex: exact sandbox args", () => {
     "-s", "workspace-write", "-a", "never",
     "-c", "sandbox_workspace_write.network_access=true",
     "--add-dir", "/r/.git", "--add-dir", "/r/.agentthread", "--search",
+    "-c", 'projects={"/r"={trust_level="trusted"}}',
   ]);
   expect(adapterFor("codex").launch({ ...base, run: { agent: "codex" } }).args.slice(0, 2)).toEqual(["-s", "workspace-write"]);
 });
@@ -109,4 +110,11 @@ test("autonomous false: every adapter keeps its approval prompts", () => {
 
   const omp = adapterFor("omp").launch({ ...base, config: nonAuto, run: { agent: "omp", effort: "low" } }).args;
   expect(omp).toEqual(["--thinking", "low"]);
+});
+
+// Codex asks once per project whether to trust it, keyed by the main checkout (a worktree resolves to it). A `-c`
+// dotted path splits on every '.', so a path key goes in as an inline table.
+test("codex: trusts the project root and the worktree", () => {
+  const { args } = adapterFor("codex").launch({ ...base, worktree: "/r/.worktrees/001-x", run: { agent: "codex" } });
+  expect(args.slice(-2)).toEqual(["-c", 'projects={"/r"={trust_level="trusted"},"/r/.worktrees/001-x"={trust_level="trusted"}}']);
 });

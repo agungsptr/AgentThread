@@ -85,7 +85,10 @@ const codexAdapter: AgentAdapter = {
   bin: "codex",
   instructionFiles: [],
   prompt: "positional",
-  launch({ run, config, root, gitCommonDir }) {
+  launch({ run, config, root, worktree, gitCommonDir }) {
+    // Codex asks once per project whether to trust it, keyed by the main checkout (a worktree resolves to it), and
+    // would stall a pane on that dialog. A `-c` dotted path splits on every '.', so the path keys go in an inline table.
+    const trusted = [...new Set([root, ...(worktree ? [worktree] : [])])].map((p) => `${JSON.stringify(p)}={trust_level="trusted"}`);
     return {
       args: [
         ...(run.model ? ["-m", run.model] : []),
@@ -96,6 +99,7 @@ const codexAdapter: AgentAdapter = {
         "--add-dir", gitCommonDir ?? join(root, ".git"),
         "--add-dir", join(root, ".agentthread"),
         "--search",
+        "-c", `projects={${trusted.join(",")}}`,
       ],
       env: {},
     };

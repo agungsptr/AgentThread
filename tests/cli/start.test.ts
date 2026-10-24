@@ -166,7 +166,7 @@ test("agt start prints configWarnings once to stderr", () => {
   writeFileSync(join(root, ".agentthread", "config.yaml"), "agents:\n  claude:\n    extra_allowed_tools: [\"Bash(x)\"]\n");
   const r = agt(["start", "--no-manager"]);
   expect(r.code).toBe(0);
-  expect(r.err.split("\n").filter((l) => l.includes("warning"))).toEqual(["agt: warning: agents.claude.permission_mode/extra_allowed_tools are ignored while agents.autonomous is true"]);
+  expect(r.err.split("\n").filter((l) => l.includes("ignored"))).toEqual(["agt: warning: agents.claude.permission_mode/extra_allowed_tools are ignored while agents.autonomous is true"]);
 });
 
 test("the SessionStart re-print stays claude-only", () => {
@@ -203,3 +203,11 @@ test("agt start keeps a running daemon whose config is unchanged", () => {
   expect(r.out).not.toContain("config changed");
   expect(daemonPid()).toBe(before);
 });
+
+test("agt start warns that claude-code agents will ask to trust the root when main is not claude-code", () => {
+  const line = `agt: warning: claude-code agents will ask to trust ${root}; open claude once in ${root} and accept, or use claude-code for main`;
+  writeFileSync(join(root, ".agentthread", "config.yaml"), "agents:\n  roles:\n    main: { agent: opencode }\n");
+  expect(agt(["start", "--no-manager"]).err.split("\n")).toContain(line);
+  writeFileSync(join(root, ".agentthread", "config.yaml"), "agents:\n  roles:\n    main: { agent: claude-code }\n");
+  expect(agt(["start", "--no-manager"]).err).not.toContain("ask to trust");
+}, 15_000);

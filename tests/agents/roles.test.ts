@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { EFFORTS, configWarnings, roleAgent, tierAgent } from "../../src/agents/roles.ts";
+import { EFFORTS, configWarnings, roleAgent, tierAgent, trustWarning } from "../../src/agents/roles.ts";
 import { ConfigSchema, DEFAULT_CONFIG } from "../../src/config/config.ts";
 
 const cfg = (agents: unknown) => ConfigSchema.parse({ agents });
@@ -27,4 +27,13 @@ test("configWarnings names the ignored claude permission keys only when autonomo
 test("EFFORTS follows the facts table", () => {
   expect(EFFORTS.opencode).toEqual([]);
   expect(EFFORTS.codex).toEqual(["minimal", "low", "medium", "high", "xhigh"]);
+});
+
+test("trustWarning: only when a role or tier uses claude-code and main does not", () => {
+  const msg = "claude-code agents will ask to trust /r; open claude once in /r and accept, or use claude-code for main";
+  expect(trustWarning(DEFAULT_CONFIG, "/r")).toBeUndefined();
+  expect(trustWarning(cfg({ roles: { main: { agent: "opencode" } } }), "/r")).toBe(msg);
+  const none = { main: { agent: "opencode" }, coordinator: { agent: "codex" }, worker: { agent: "omp" } };
+  expect(trustWarning(cfg({ roles: none }), "/r")).toBeUndefined();
+  expect(trustWarning(cfg({ roles: none, complexity: { tiers: { big: { agent: "claude-code" } } } }), "/r")).toBe(msg);
 });

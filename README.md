@@ -96,6 +96,14 @@ A worker with a question runs `agt question`; the coordinator replies with `agt 
 worker is reported to its coordinator. If a session's first settled turn runs no `agt` command (for example because the
 configured model does not exist), the daemon reports `session.stalled` (coordinators and workers only, not main) instead of waiting forever.
 
+### Trusting the project
+
+Claude Code asks once per folder whether you trust it. When main is Claude Code it asks in main's pane at `agt start`,
+and the worktrees below the root inherit your answer. When main is another agent but a role or tier uses Claude Code,
+`agt start` warns `claude-code agents will ask to trust <root>; open claude once in <root> and accept, or use
+claude-code for main`: otherwise the first Claude Code coordinator or worker stops at the dialog in its own pane. Codex
+is started with the project root and the worktree marked trusted, so it never asks.
+
 ### Notes on instruction files and git config
 
 - Worktrees live under `<root>/.worktrees/`. Claude Code also loads an ancestor `CLAUDE.md` (the one in the repo root)

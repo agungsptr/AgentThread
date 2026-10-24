@@ -294,11 +294,19 @@ export async function say(herdr: Herdr, pane: string, text: string): Promise<voi
 const TRUST = /trust this folder|Do you trust the files/i;
 
 /**
- * Answers Claude Code's one-time workspace-trust dialog for the scratch repo, as the user would once per project. Every
- * other dialog is left alone (a blocked worker is a scenario's subject). Returns the panes it answered.
+ * Answers Claude Code's one-time workspace-trust dialog in main's pane, as the user would once per project. A trust
+ * dialog in any other pane (a coordinator or worker) is a product failure: `foreign` is told once per pane, and the
+ * dialog is answered anyway so the row can go on. Every other dialog is left alone (a blocked worker is a scenario's
+ * subject). Returns the panes it answered.
  */
-export function watchTrustDialogs(herdr: Herdr, log: (m: string) => void): { stop(): void; answered: string[] } {
+export function watchTrustDialogs(
+  herdr: Herdr,
+  mainPane: () => string,
+  log: (m: string) => void,
+  foreign: (pane: string) => void,
+): { stop(): void; answered: string[] } {
   const answered: string[] = [];
+  const reported = new Set<string>();
   let stopped = false;
   void (async () => {
     while (!stopped) {
@@ -307,6 +315,10 @@ export function watchTrustDialogs(herdr: Herdr, log: (m: string) => void): { sto
           if (a.agent !== "claude" || a.agent_status !== "blocked") continue;
           const screen = (await herdr.run(["pane", "read", a.pane_id, "--source", "visible"])).stdout;
           if (!TRUST.test(screen)) continue;
+          if (a.pane_id !== mainPane() && !reported.has(a.pane_id)) {
+            reported.add(a.pane_id);
+            foreign(a.pane_id);
+          }
           // The dialog's cursor starts on "No, exit"; the second option trusts the folder.
           await herdr.run(["pane", "send-keys", a.pane_id, "down"]);
           await Bun.sleep(300);

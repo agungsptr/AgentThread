@@ -199,7 +199,7 @@ async function runRow(sc: Scenario): Promise<{ status: "PASS" | "FAIL"; reason?:
       note,
       left: () => deadline - Date.now(),
     };
-    watcher = watchTrustDialogs(server.herdr, note);
+    watcher = watchTrustDialogs(server.herdr, () => h.mainPane, note, (pane) => h.check("no trust dialog in a coordinator/worker pane", false, `trust dialog in pane ${pane}`));
     const manager = sc.manager !== false;
     await h.startAgt(manager ? [] : ["--no-manager"], sc.startEnv);
     const layout = await h.waitFor("layout.registered", () => true, 60_000, "agt start registered the layout");
