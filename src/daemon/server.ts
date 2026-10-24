@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
+import { configWarnings } from "../agents/roles.ts";
 import type { SpawnJob } from "../agents/spawn-job.ts";
 import { handle, type Effect } from "../commands/handler.ts";
 import { ActorSchema, CommandSchema } from "../commands/schema.ts";
@@ -47,9 +48,6 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
     state = project(store.all());
     if (!state.project) throw new Error("project not initialized; run `agt init`");
     config = loadConfig(root);
-    for (const key of ["main_manager", "default_coordinator", "default_worker"] as const) {
-      if (config.agents[key] !== "claude-code") throw new Error(`agents.${key}: ${config.agents[key]} is not supported yet`);
-    }
     ensureSocketDir(p.socketDir);
     rmSync(p.socket, { force: true });
     await trails.refresh(state.threads.values());
@@ -58,6 +56,7 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
     store.close();
     throw e;
   }
+  for (const w of configWarnings(config)) (opts.log ?? console.error)(`warning: ${w}`);
 
   // Every command runs strictly one after another: this queue is what makes the daemon the single writer.
   let chain: Promise<unknown> = Promise.resolve();

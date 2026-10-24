@@ -1,14 +1,13 @@
-import { dirname } from "node:path";
-import { AGT_BIN, agentEnv, claudeConfigDir } from "../agents/claude.ts";
+import { resolve } from "node:path";
+import { agentEnv, claudeConfigDir } from "../agents/claude.ts";
 import { adapterFor } from "../agents/adapters.ts";
-import { roleAgent } from "../agents/roles.ts";
 import { bootstrapPrompt } from "../agents/prompts.ts";
 import { agentsMd, writeAgentsFilesAsync } from "../agents/agents-md.ts";
 import { launchSpawnJob, type SpawnJob } from "../agents/spawn-job.ts";
 import type { Effect } from "../commands/handler.ts";
 import type { Config } from "../config/config.ts";
 import type { EventBody, Layout } from "../domain/types.ts";
-import { HerdrCli } from "../herdr/bridge.ts";
+import { HerdrCli, spawnAsync } from "../herdr/bridge.ts";
 import { addWorktreeAsync } from "../project/git.ts";
 import { paths } from "../project/paths.ts";
 import type { Thread } from "../state/projection.ts";
@@ -55,6 +54,14 @@ export function createEffectRunner(opts: {
 
   const configDir = claudeConfigDir(opts.config);
 
+  // The repository's git dir (shared by every worktree), asked of git once without blocking; undefined if git fails.
+  let commonDir: Promise<string | undefined> | undefined;
+  const gitCommonDir = () =>
+    (commonDir ??= spawnAsync("git", ["-C", opts.root, "rev-parse", "--git-common-dir"], process.env, 10_000).then(
+      (r) => (r.exitCode === 0 && !r.timedOut && r.stdout.trim() ? resolve(opts.root, r.stdout.trim()) : undefined),
+      () => undefined,
+    ));
+
   // AGENTS.md carries the role rules; a failure to write it is logged and never blocks the worktree or a spawn.
   const writeAgents = async (thread: { id: string; title: string; slug: string }, worktree: string) => {
     try {
@@ -76,7 +83,7 @@ export function createEffectRunner(opts: {
         const layout = opts.layout();
         if (!layout) return [];
         try {
-          return await runHerdr(effect, bridgeFor(layout), layout, opts.root, configDir);
+          return await runHerdr(effect, bridgeFor(layout), layout);
         } catch (e) {
           // Herdr is a view: a failure here must never fail the command. `agt start` reconciles missing tabs.
           log(`herdr ${effect.kind} for thread ${effect.thread} failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -91,8 +98,17 @@ export function createEffectRunner(opts: {
         if (!t) return failed(`unknown thread ${effect.thread}`);
         await writeAgents(t, t.worktree);
         const prompt = { root: opts.root, role: effect.role, thread: t, ticket: effect.ticket };
+        const common = await gitCommonDir();
         try {
-          const adapter = adapterFor("claude-code");
+          const adapter = adapterFor(effect.run.agent);
+          const launched = adapter.launch({
+            role: effect.role,
+            run: effect.run,
+            config: opts.config,
+            root: opts.root,
+            worktree: effect.cwd,
+            ...(common ? { gitCommonDir: common } : {}),
+          });
           launch({
             root: opts.root,
             herdrBin: layout.herdrBin,
@@ -107,11 +123,14 @@ export function createEffectRunner(opts: {
                     pane: effect.splitFrom,
                     direction: effect.direction ?? "right",
                     cwd: effect.cwd,
-                    env: agentEnv({ root: opts.root, role: effect.role, session: effect.session, thread: effect.thread, ticket: effect.ticket, configDir }),
+                    env: {
+                      ...agentEnv({ root: opts.root, role: effect.role, agent: effect.run.agent, session: effect.session, thread: effect.thread, ticket: effect.ticket, configDir }),
+                      ...launched.env,
+                    },
                   },
                 }
               : {}),
-            args: adapter.launch({ role: effect.role, run: roleAgent(opts.config, effect.role), config: opts.config, root: opts.root }).args,
+            args: launched.args,
             bootstrap: bootstrapPrompt(prompt, effect.bootstrap ?? "start"),
           });
           return [];
@@ -156,22 +175,10 @@ export function createEffectRunner(opts: {
   };
 }
 
-async function runHerdr(effect: HerdrEffect, bridge: EffectBridge, layout: Layout, root: string, configDir: string): Promise<EventBody[]> {
+async function runHerdr(effect: HerdrEffect, bridge: EffectBridge, layout: Layout): Promise<EventBody[]> {
   if (effect.kind === "herdr.tab.ensure") {
     if (effect.tab && (await bridge.tabExists(effect.tab))) return [];
-    const { tabId, rootPaneId } = await bridge.createTab({
-      workspace: layout.workspace,
-      cwd: effect.cwd,
-      label: effect.label,
-      env: {
-        AGT_ROOT: root,
-        AGT_THREAD: effect.thread,
-        AGT_ROLE: "coordinator",
-        AGT_AGENT: "claude-code",
-        CLAUDE_CONFIG_DIR: configDir,
-        PATH: `${dirname(AGT_BIN)}:${process.env.PATH ?? ""}`,
-      },
-    });
+    const { tabId, rootPaneId } = await bridge.createTab({ workspace: layout.workspace, cwd: effect.cwd, label: effect.label, env: effect.env });
     return [{ type: "thread.tab_opened", thread: effect.thread, payload: { tab: tabId, rootPane: rootPaneId } }];
   }
   if (await bridge.tabExists(effect.tab)) await bridge.closeTab(effect.tab);

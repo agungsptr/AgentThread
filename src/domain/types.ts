@@ -70,7 +70,17 @@ export type EventBody =
   | {
       type: "session.created";
       thread?: string;
-      payload: { session: string; role: SessionRole; agent: AgentKind; name: string; ticket?: string; replaces?: string; retirePane?: string };
+      payload: {
+        session: string;
+        role: SessionRole;
+        agent: AgentKind;
+        model?: string;
+        effort?: string;
+        name: string;
+        ticket?: string;
+        replaces?: string;
+        retirePane?: string;
+      };
     }
   | { type: "session.attached"; thread?: string; payload: { session: string; pane: string } }
   | {

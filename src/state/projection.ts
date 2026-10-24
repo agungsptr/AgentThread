@@ -6,6 +6,8 @@ export interface Session {
   id: string;
   role: SessionRole;
   agent: AgentKind;
+  model?: string;
+  effort?: string;
   name: string;
   thread?: string;
   ticket?: string;
@@ -82,6 +84,8 @@ export interface Thread {
   branch: string;
   worktree: string;
   maxWorkers?: number;
+  /** The complexity tier the thread runs at (picks the coordinator's agent). */
+  tier?: string;
   workerQueue: string[];
   tickets: Ticket[];
   decisions: Entry[];
@@ -296,6 +300,8 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
         id: p.session,
         role: p.role,
         agent: p.agent,
+        ...(p.model ? { model: p.model } : {}),
+        ...(p.effort ? { effort: p.effort } : {}),
         name: p.name,
         thread: ev.thread,
         ...(p.ticket ? { ticket: p.ticket } : {}),

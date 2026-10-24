@@ -42,7 +42,7 @@ test("lost coordinator is replaced by a fresh split from the root pane, with a g
   expect(newId).not.toBe(C);
   expect(created).toMatchObject({ payload: { role: "coordinator", replaces: C, retirePane: "w1:p2" } });
   expect(r.effects).toEqual([
-    { kind: "agent.spawn", session: newId, role: "coordinator", name: expect.any(String), thread: "001", cwd: "/repo/.worktrees/001-thread-001", splitFrom: "w1:p2", direction: "right", bootstrap: "handoff" },
+    { kind: "agent.spawn", session: newId, role: "coordinator", run: { agent: "claude-code" }, name: expect.any(String), thread: "001", cwd: "/repo/.worktrees/001-thread-001", splitFrom: "w1:p2", direction: "right", bootstrap: "handoff" },
   ]);
   expect(r.effects[0]).not.toHaveProperty("resume");
   expect(r.effects[0]).not.toHaveProperty("pane");

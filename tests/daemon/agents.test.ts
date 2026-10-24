@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AGT_BIN } from "../../src/agents/claude.ts";
 import { encodeJob, type SpawnJob } from "../../src/agents/spawn-job.ts";
@@ -26,9 +26,10 @@ afterEach(async () => {
   await daemon.stop();
 });
 
-async function boot(opts: { launch?: (job: SpawnJob) => void; seed?: Parameters<typeof fakeHerdrState>[0] } = {}) {
+async function boot(opts: { launch?: (job: SpawnJob) => void; seed?: Parameters<typeof fakeHerdrState>[0]; config?: string } = {}) {
   root = tempRepo();
   initProject(root, "demo");
+  if (opts.config) writeFileSync(join(root, ".agentthread", "config.yaml"), opts.config);
   fake = fakeHerdrState(opts.seed);
   process.env.FAKE_HERDR_STATE = fake.file;
   daemon = await startDaemon(root, { log: () => {}, ...(opts.launch ? { launch: opts.launch } : {}) });
@@ -143,11 +144,57 @@ test("a hanging agent start never blocks the daemon", async () => {
   }
 });
 
-test("non-claude agents refuse to start the daemon", async () => {
+test("the daemon starts with a non-claude role", async () => {
   await boot();
   await daemon.stop();
-  writeFileSync(join(root, ".agentthread", "config.yaml"), "agents:\n  default_worker: opencode\n");
-  await expect(startDaemon(root, { log: () => {} })).rejects.toThrow("agents.default_worker: opencode is not supported yet");
-  writeFileSync(join(root, ".agentthread", "config.yaml"), "");
+  writeFileSync(join(root, ".agentthread", "config.yaml"), "agents:\n  default_worker: opencode\n  roles:\n    coordinator: { agent: codex }\n");
   daemon = await startDaemon(root, { log: () => {} });
+  expect(await cmd({ cmd: "log", thread: "001", message: "x" })).toMatchObject({ ok: false, error: "unknown thread 001" });
+});
+
+test("configWarnings are logged once at daemon start", async () => {
+  await boot();
+  await daemon.stop();
+  writeFileSync(join(root, ".agentthread", "config.yaml"), "agents:\n  claude:\n    permission_mode: plan\n");
+  const logged: string[] = [];
+  daemon = await startDaemon(root, { log: (m) => void logged.push(m) });
+  expect(logged).toEqual(["warning: agents.claude.permission_mode/extra_allowed_tools are ignored while agents.autonomous is true"]);
+});
+
+test("a worker of a thread uses roles.worker: its kind, args and split env come from its adapter", async () => {
+  const jobs: SpawnJob[] = [];
+  await boot({ launch: (j) => void jobs.push(j), config: "agents:\n  roles:\n    worker: { agent: opencode, model: p/m }\n" });
+  await cmd({ cmd: "thread.new", title: "X", type: "bug" });
+  const c = (await sessionOf("coordinator"))!.session;
+  await cmd({ cmd: "session.attached", session: c, pane: "w1:p1" });
+  await cmd({ cmd: "ticket.add", thread: "001", title: "A", scope: ["a"] }, coord);
+  await cmd({ cmd: "worker.spawn", thread: "001", ticket: "T1" }, coord);
+  expect((await sessionOf("worker", "T1")) as object).toMatchObject({ agent: "opencode", model: "p/m" });
+  const job = jobs.at(-1)!;
+  expect(jobs[0]!.kind).toBe("claude");
+  expect(job.kind).toBe("opencode");
+  expect(job.args).toEqual(["--auto"]);
+  expect(job.split!.env).toMatchObject({ AGT_AGENT: "opencode", AGT_ROLE: "worker" });
+  expect(job.split!.env).not.toHaveProperty("CLAUDE_CONFIG_DIR");
+  expect(JSON.parse(job.split!.env.OPENCODE_CONFIG_CONTENT!)).toMatchObject({ model: "p/m", permission: { "*": "allow" } });
+});
+
+test("a codex spawn gets the git common dir of the project", async () => {
+  const jobs: SpawnJob[] = [];
+  await boot({ launch: (j) => void jobs.push(j), config: "agents:\n  roles:\n    coordinator: { agent: codex }\n" });
+  await cmd({ cmd: "thread.new", title: "X", type: "bug" });
+  const args = jobs[0]!.args;
+  expect(jobs[0]!.kind).toBe("codex");
+  expect(args[args.indexOf("--add-dir") + 1]).toBe(realpathSync(join(root, ".git")));
+});
+
+test("the tab env carries the coordinator adapter env", async () => {
+  await boot({ launch: () => {}, config: "agents:\n  roles:\n    coordinator: { agent: opencode, model: p/m }\n" });
+  await cmd({ cmd: "thread.new", title: "X", type: "bug" });
+  const create = fake.read().calls.find((c) => c[0] === "tab" && c[1] === "create")!;
+  expect(create).toContain("AGT_AGENT=opencode");
+  expect(create).toContain("AGT_ROLE=coordinator");
+  expect(create.some((a) => a.startsWith("CLAUDE_CONFIG_DIR="))).toBe(false);
+  const content = create.find((a) => a.startsWith("OPENCODE_CONFIG_CONTENT="))!;
+  expect(JSON.parse(content.slice("OPENCODE_CONFIG_CONTENT=".length))).toMatchObject({ model: "p/m" });
 });

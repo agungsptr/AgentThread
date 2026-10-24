@@ -5,15 +5,15 @@ import { resolve } from "node:path";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { stringify } from "yaml";
 import { agentEnv } from "../agents/claude.ts";
-import { adapterFor } from "../agents/adapters.ts";
-import { roleAgent } from "../agents/roles.ts";
+import { adapterFor, agentBin } from "../agents/adapters.ts";
+import { configWarnings, roleAgent } from "../agents/roles.ts";
 import { systemPrompt } from "../agents/prompts.ts";
 import { decodeJob, loggedArgv, runSpawnJob } from "../agents/spawn-job.ts";
 import { contextTokensFromTranscript } from "../agents/transcript.ts";
 import { isAlive, request } from "../daemon/client.ts";
 import { startDaemon } from "../daemon/server.ts";
 import { loadConfig } from "../config/config.ts";
-import { ROLES, SESSION_SIGNALS, type Actor, type Layout, type StoredEvent } from "../domain/types.ts";
+import { ROLES, SESSION_SIGNALS, type Actor, type AgentKind, type Layout, type StoredEvent } from "../domain/types.ts";
 import { HerdrCli, shellQuote } from "../herdr/bridge.ts";
 import { initProject } from "../project/init.ts";
 import { paths } from "../project/paths.ts";
@@ -266,6 +266,7 @@ async function start(root: string, env: Env, argv: string[]): Promise<number> {
     throw new Error("agt start must run from the main tab, not a subthread pane");
   }
   const config = loadConfig(root, env);
+  for (const w of configWarnings(config)) console.error(`agt: warning: ${w}`);
   await ensureDaemon(root, env);
   const socket = paths(root).socket;
   const herdr = new HerdrCli({ bin: env.HERDR_BIN_PATH ?? "herdr", env });
@@ -300,22 +301,33 @@ async function start(root: string, env: Env, argv: string[]): Promise<number> {
   const session = randomUUID();
   await commandOrThrow(socket, { cmd: "session.open_main", session, pane: managerPane });
   console.log(`main manager session ${session}`);
-  const bin = env.AGT_CLAUDE_BIN ?? "claude";
+  const run = roleAgent(config, "main");
+  const adapter = adapterFor(run.agent);
+  const bin = agentBin(run.agent, env);
   let code: number;
   try {
-    const launched = adapterFor(config.agents.main_manager).launch({ role: "main", run: roleAgent(config, "main"), config, root });
-    const proc = Bun.spawn([bin, ...launched.args, systemPrompt({ root, role: "main" })], {
+    const launched = adapter.launch({ role: "main", run, config, root, ...gitCommonDir(root) });
+    const proc = Bun.spawn([bin, ...launched.args, ...adapter.promptArgs(systemPrompt({ root, role: "main" }))], {
       stdio: ["inherit", "inherit", "inherit"],
       cwd: root,
-      env: { ...env, ...launched.env, ...agentEnv({ root, role: "main", session }) },
+      env: { ...env, ...launched.env, ...agentEnv({ root, role: "main", agent: run.agent, session }) },
     });
     code = await proc.exited;
   } catch (e) {
     await endMainSession(socket, session);
-    throw new Error(`cannot start Claude Code (${bin}): ${e instanceof Error ? e.message : String(e)}`);
+    throw new Error(`cannot start ${AGENT_NAMES[run.agent]} (${bin}): ${e instanceof Error ? e.message : String(e)}`);
   }
   await endMainSession(socket, session);
   return code;
+}
+
+const AGENT_NAMES: Record<AgentKind, string> = { "claude-code": "Claude Code", opencode: "OpenCode", codex: "Codex", omp: "omp" };
+
+/** `{ gitCommonDir }` for an agent launched in `root`, or nothing when git cannot tell (the adapter falls back to <root>/.git). */
+function gitCommonDir(root: string): { gitCommonDir?: string } {
+  const r = Bun.spawnSync(["git", "-C", root, "rev-parse", "--git-common-dir"], { stdout: "pipe", stderr: "pipe" });
+  const out = r.stdout.toString().trim();
+  return r.exitCode === 0 && out ? { gitCommonDir: resolve(root, out) } : {};
 }
 
 async function endMainSession(socket: string, session: string): Promise<void> {
@@ -342,7 +354,8 @@ async function hookEvent(signal: string | undefined, env: Env, cwd: string): Pro
     }
     // Claude Code adds SessionStart hook stdout to the context: after /clear or a compaction the main manager would
     // otherwise lose its role, which it only gets as its first message.
-    if (signal === "started" && env.AGT_ROLE === "main" && (source === "clear" || source === "compact")) {
+    // Only Claude Code has this hook; a session without AGT_AGENT predates it and is Claude Code.
+    if (signal === "started" && env.AGT_ROLE === "main" && (env.AGT_AGENT ?? "claude-code") === "claude-code" && (source === "clear" || source === "compact")) {
       console.log(systemPrompt({ root: findRoot(cwd, env), role: "main" }));
     }
     // The vendor's own session_id is never ours; identify by AGT_SESSION, else by the Herdr pane.

@@ -42,10 +42,11 @@ describe("claude adapter", () => {
   });
 
   test("agent env puts agt on PATH and identifies the session", () => {
-    const env = agentEnv({ root: "/repo", role: "worker", session: "s-1", thread: "002", ticket: "T3" });
+    const env = agentEnv({ root: "/repo", role: "worker", agent: "claude-code", session: "s-1", thread: "002", ticket: "T3" });
     expect(env).toMatchObject({ AGT_ROOT: "/repo", AGT_ROLE: "worker", AGT_SESSION: "s-1", AGT_AGENT: "claude-code", AGT_THREAD: "002", AGT_TICKET: "T3" });
     expect(env.PATH!.startsWith(`${dirname(AGT_BIN)}:`)).toBe(true);
-    expect(agentEnv({ root: "/repo", role: "main", session: "m" })).not.toHaveProperty("AGT_THREAD");
+    expect(agentEnv({ root: "/repo", role: "worker", agent: "codex", session: "s-1" }).AGT_AGENT).toBe("codex");
+    expect(agentEnv({ root: "/repo", role: "main", agent: "claude-code", session: "m" })).not.toHaveProperty("AGT_THREAD");
   });
 });
 

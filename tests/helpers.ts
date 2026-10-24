@@ -61,6 +61,8 @@ export const FAKE_HERDR = join(import.meta.dir, "fixtures", "fake-herdr.ts");
 
 export const FAKE_CLAUDE = join(import.meta.dir, "fixtures", "fake-claude.ts");
 
+export const FAKE_AGENT = join(import.meta.dir, "fixtures", "fake-agent.ts");
+
 type Maybe<T> = T | undefined | false | null;
 
 /** Polls `fn` (sync or async) until it returns a truthy value. */

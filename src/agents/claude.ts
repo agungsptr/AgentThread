@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Config } from "../config/config.ts";
-import type { SessionRole, SessionSignal } from "../domain/types.ts";
+import type { AgentKind, SessionRole, SessionSignal } from "../domain/types.ts";
 import { shellQuote } from "../herdr/bridge.ts";
 
 export const AGT_BIN = fileURLToPath(new URL("../../bin/agt", import.meta.url));
@@ -37,15 +37,24 @@ export function allowedTools(role: SessionRole, config: Config, root?: string): 
   return [...base, ...stateFiles, ...config.agents.claude.extra_allowed_tools];
 }
 
-export function agentEnv(o: { root: string; role: SessionRole; session: string; thread?: string; ticket?: string; configDir?: string }): Record<string, string> {
+/** The AGT_* env of an agent session; CLAUDE_CONFIG_DIR is set only for claude-code. Without `session` it is a tab's env. */
+export function agentEnv(o: {
+  root: string;
+  role: SessionRole;
+  agent: AgentKind;
+  session?: string;
+  thread?: string;
+  ticket?: string;
+  configDir?: string;
+}): Record<string, string> {
   return {
     AGT_ROOT: o.root,
-    AGT_ROLE: o.role,
-    AGT_SESSION: o.session,
-    AGT_AGENT: "claude-code",
     ...(o.thread ? { AGT_THREAD: o.thread } : {}),
+    AGT_ROLE: o.role,
+    ...(o.session ? { AGT_SESSION: o.session } : {}),
+    AGT_AGENT: o.agent,
     ...(o.ticket ? { AGT_TICKET: o.ticket } : {}),
-    ...(o.configDir ? { CLAUDE_CONFIG_DIR: o.configDir } : {}),
+    ...(o.configDir && o.agent === "claude-code" ? { CLAUDE_CONFIG_DIR: o.configDir } : {}),
     PATH: `${dirname(AGT_BIN)}:${process.env.PATH ?? ""}`,
   };
 }

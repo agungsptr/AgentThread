@@ -101,6 +101,8 @@ if (group === "agent" && sub === "start") {
   state.agents = [...(state.agents ?? []), target ?? ""];
   state.agentPanes = [...(state.agentPanes ?? []), pane];
   state.status = { ...state.status, [pane]: "idle" };
+  const kind = args.indexOf("--kind");
+  if (kind >= 0) state.kinds = { ...state.kinds, [pane]: args[kind + 1] ?? "" };
   ok({ type: "agent_started", agent: { name: target, pane_id: pane } });
 }
 if (group === "pane" && sub === "close") {

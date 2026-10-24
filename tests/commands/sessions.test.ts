@@ -47,7 +47,7 @@ describe("worker.spawn", () => {
     expect(first.ok && first.result).toEqual({ session: "00000000-0000-4000-8000-000000000001", queued: false });
     expect(first.ok && first.effects).toEqual([
       {
-        kind: "agent.spawn", session: "00000000-0000-4000-8000-000000000001", role: "worker", name: `agt-${H}-w001-t1-0000`,
+        kind: "agent.spawn", session: "00000000-0000-4000-8000-000000000001", role: "worker", run: { agent: "claude-code" }, name: `agt-${H}-w001-t1-0000`,
         thread: "001", ticket: "T1", cwd: "/repo/.worktrees/001-thread-001", splitFrom: "w1:p2", direction: "right",
       },
     ]);

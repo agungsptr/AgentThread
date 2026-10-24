@@ -128,3 +128,18 @@ export function adapterFor(agent: AgentKind): AgentAdapter {
   if (!a) throw new Error(`no adapter for agent ${agent}`);
   return a;
 }
+
+const BIN_ENV: Record<AgentKind, string> = {
+  "claude-code": "AGT_CLAUDE_BIN",
+  opencode: "AGT_OPENCODE_BIN",
+  codex: "AGT_CODEX_BIN",
+  omp: "AGT_OMP_BIN",
+};
+
+/**
+ * The executable `agt start` runs for main: AGT_<AGENT>_BIN, else the adapter's default. Coordinators and workers
+ * start through `herdr agent start --kind`, so Herdr picks their executable.
+ */
+export function agentBin(agent: AgentKind, env: Record<string, string | undefined> = process.env): string {
+  return env[BIN_ENV[agent]] || adapterFor(agent).bin;
+}

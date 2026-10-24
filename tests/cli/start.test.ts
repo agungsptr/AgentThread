@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { systemPrompt } from "../../src/agents/prompts.ts";
 import { shellQuote } from "../../src/herdr/bridge.ts";
 import { initProject } from "../../src/project/init.ts";
-import { FAKE_HERDR, fakeHerdrState, isolatedConfigHome, tempRepo } from "../helpers.ts";
+import { FAKE_AGENT, FAKE_HERDR, fakeHerdrState, isolatedConfigHome, tempRepo } from "../helpers.ts";
 
 const BIN = join(import.meta.dir, "../../bin/agt");
 
@@ -11,13 +12,18 @@ let root: string;
 let fake: ReturnType<typeof fakeHerdrState>;
 let xdg: string;
 
-function agt(args: string[], extra: Record<string, string> = {}, opts: { herdr?: boolean } = {}) {
+function agt(args: string[], extra: Record<string, string> = {}, opts: { herdr?: boolean; stdin?: string } = {}) {
   const env: Record<string, string> = {
     PATH: process.env.PATH ?? "",
     HOME: "/nonexistent",
     XDG_CONFIG_HOME: xdg,
     AGT_ROOT: root,
     FAKE_HERDR_STATE: fake.file,
+    // never the real agent binaries
+    AGT_CLAUDE_BIN: "/nonexistent/claude",
+    AGT_OPENCODE_BIN: "/nonexistent/opencode",
+    AGT_CODEX_BIN: "/nonexistent/codex",
+    AGT_OMP_BIN: "/nonexistent/omp",
   };
   if (opts.herdr !== false) {
     Object.assign(env, {
@@ -30,7 +36,7 @@ function agt(args: string[], extra: Record<string, string> = {}, opts: { herdr?:
     });
   }
   Object.assign(env, extra);
-  const r = Bun.spawnSync([process.execPath, BIN, ...args], { cwd: root, env, stdout: "pipe", stderr: "pipe" });
+  const r = Bun.spawnSync([process.execPath, BIN, ...args], { cwd: root, env, stdin: opts.stdin === undefined ? "ignore" : Buffer.from(opts.stdin), stdout: "pipe", stderr: "pipe" });
   return { code: r.exitCode, out: r.stdout.toString().trim(), err: r.stderr.toString().trim() };
 }
 
@@ -132,4 +138,43 @@ test("the daemon runs in its own session, not the caller's", () => {
   const daemonPgid = ps(pid).split(/\s+/)[0];
   expect(daemonPgid).toBe(pid);
   expect(daemonPgid).not.toBe(String(Bun.spawnSync(["ps", "-o", "pgid=", "-p", String(process.pid)]).stdout.toString().trim()));
+});
+
+test("agt start launches main with adapterFor(roles.main)", () => {
+  writeFileSync(join(root, ".agentthread", "config.yaml"), "agents:\n  roles:\n    main: { agent: opencode }\n");
+  const log = join(xdg, "agent.jsonl");
+  const r = agt(["start"], { AGT_OPENCODE_BIN: FAKE_AGENT, FAKE_AGENT_LOG: log, AGT_CLAUDE_BIN: "/nonexistent/claude" });
+  expect(r.code).toBe(0);
+  const run = JSON.parse(readFileSync(log, "utf8").trim()) as { argv: string[]; cwd: string; env: Record<string, string> };
+  expect(run.argv).toEqual(["--auto", "--prompt", systemPrompt({ root, role: "main" })]);
+  expect(realpathSync(run.cwd)).toBe(realpathSync(root));
+  expect(run.env).toMatchObject({ AGT_ROLE: "main", AGT_AGENT: "opencode" });
+  expect(JSON.parse(run.env.OPENCODE_CONFIG_CONTENT!)).toMatchObject({ permission: { "*": "allow" } });
+}, 15_000);
+
+test("the AGT_<AGENT>_BIN override applies to codex and omp main launches", () => {
+  for (const [agent, key] of [["codex", "AGT_CODEX_BIN"], ["omp", "AGT_OMP_BIN"]] as const) {
+    writeFileSync(join(root, ".agentthread", "config.yaml"), `agents:\n  roles:\n    main: { agent: ${agent} }\n`);
+    const log = join(xdg, `${agent}.jsonl`);
+    expect(agt(["start"], { [key]: FAKE_AGENT, FAKE_AGENT_LOG: log }).code).toBe(0);
+    const run = JSON.parse(readFileSync(log, "utf8").trim()) as { argv: string[] };
+    expect(run.argv.at(-1)).toBe(systemPrompt({ root, role: "main" }));
+  }
+}, 15_000);
+
+test("agt start prints configWarnings once to stderr", () => {
+  writeFileSync(join(root, ".agentthread", "config.yaml"), "agents:\n  claude:\n    extra_allowed_tools: [\"Bash(x)\"]\n");
+  const r = agt(["start", "--no-manager"]);
+  expect(r.code).toBe(0);
+  expect(r.err).toBe("agt: warning: agents.claude.permission_mode/extra_allowed_tools are ignored while agents.autonomous is true");
+});
+
+test("the SessionStart re-print stays claude-only", () => {
+  agt(["daemon", "start"]);
+  const main = { AGT_ROLE: "main", AGT_SESSION: "00000000-0000-4000-8000-0000000000aa" };
+  const prompt = systemPrompt({ root, role: "main" });
+  expect(agt(["event", "started"], { ...main, AGT_AGENT: "claude-code" }, { stdin: JSON.stringify({ source: "clear" }) }).out).toBe(prompt);
+  for (const agent of ["opencode", "codex", "omp"]) {
+    expect(agt(["event", "started"], { ...main, AGT_AGENT: agent }, { stdin: JSON.stringify({ source: "clear" }) }).out).toBe("");
+  }
 });

@@ -36,7 +36,7 @@ describe("thread.new with and without a layout", () => {
     const r = run([INIT, REGISTERED], { cmd: "thread.new", title: "Fix race", type: "bug" });
     expect(r.ok && r.effects).toEqual([
       { kind: "git.worktree.add", branch: "thread/001-fix-race", path: "/repo/.worktrees/001-fix-race", thread: { id: "001", title: "Fix race", slug: "fix-race" } },
-      { kind: "herdr.tab.ensure", thread: "001", label: "001-fix-race", cwd: "/repo/.worktrees/001-fix-race" },
+      { kind: "herdr.tab.ensure", thread: "001", label: "001-fix-race", cwd: "/repo/.worktrees/001-fix-race", env: expect.objectContaining({ AGT_THREAD: "001", AGT_ROLE: "coordinator", AGT_AGENT: "claude-code" }) },
     ]);
   });
 });
@@ -85,8 +85,8 @@ describe("layout.reconcile", () => {
     );
     expect(r.ok && r.result).toEqual({ threads: 2 });
     expect(r.ok && r.effects.filter((e) => e.kind === "herdr.tab.ensure")).toEqual([
-      { kind: "herdr.tab.ensure", thread: "001", label: "001-thread-001", cwd: "/repo/.worktrees/001-thread-001", tab: "w7:t3" },
-      { kind: "herdr.tab.ensure", thread: "003", label: "003-thread-003", cwd: "/repo/.worktrees/003-thread-003" },
+      { kind: "herdr.tab.ensure", thread: "001", label: "001-thread-001", cwd: "/repo/.worktrees/001-thread-001", env: expect.objectContaining({ AGT_THREAD: "001" }), tab: "w7:t3" },
+      { kind: "herdr.tab.ensure", thread: "003", label: "003-thread-003", cwd: "/repo/.worktrees/003-thread-003", env: expect.objectContaining({ AGT_THREAD: "003" }) },
     ]);
   });
 

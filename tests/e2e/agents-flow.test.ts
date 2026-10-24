@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
 import { initProject } from "../../src/project/init.ts";
@@ -80,3 +80,27 @@ test("coordinator spawns, workers queue and rotate, notices reach the idle coord
   const prompts = fake.read().calls.filter((x) => x[0] === "agent" && x[1] === "prompt" && x[2] === "w1:p2").map((x) => x[3]);
   expect(prompts).toContain("Ticket T1 is done: endpoint added.");
 });
+
+test("every role starts through its own agent kind", async () => {
+  agt(["daemon", "stop"]);
+  root = tempRepo();
+  initProject(root, "mixed");
+  writeFileSync(join(root, ".agentthread", "config.yaml"), "agents:\n  roles:\n    coordinator: { agent: opencode, model: p/m }\n    worker: { agent: codex, effort: high }\n");
+  fake = fakeHerdrState({ tabs: ["w1:t0"], panes: ["w1:p0"] });
+  try {
+    agt(["start", "--no-manager"]);
+    agt(["thread", "new", "Login", "--type", "feature"]);
+    const c = await waitFor(() => spawned("coordinator"), 10_000);
+    expect(fake.read().kinds).toEqual({ [c.pane!]: "opencode" });
+    agt(["ticket", "add", "001", "API", "--scope", "src/api"], coordEnv);
+    agt(["worker", "spawn", "001", "--ticket", "T1"], coordEnv);
+    const w = await waitFor(() => spawned("worker", "T1"), 10_000);
+    expect(fake.read().kinds).toEqual({ [c.pane!]: "opencode", [w.pane!]: "codex" });
+    const start = fake.read().calls.find((x) => x[0] === "agent" && x[1] === "start" && x[x.indexOf("--pane") + 1] === w.pane)!;
+    expect(start).toContain('model_reasoning_effort="high"');
+    const tab = fake.read().calls.find((x) => x[0] === "tab" && x[1] === "create")!;
+    expect(tab).toContain("AGT_AGENT=opencode");
+  } finally {
+    agt(["daemon", "stop"]);
+  }
+}, 30_000);

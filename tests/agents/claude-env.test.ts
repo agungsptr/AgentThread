@@ -14,8 +14,10 @@ test("config dir precedence", () => {
 });
 
 test("CLAUDE_CONFIG_DIR env", () => {
-  expect(agentEnv({ root: "/repo", role: "worker", session: "s", configDir: "/c" }).CLAUDE_CONFIG_DIR).toBe("/c");
-  expect(agentEnv({ root: "/repo", role: "worker", session: "s" })).not.toHaveProperty("CLAUDE_CONFIG_DIR");
+  expect(agentEnv({ root: "/repo", role: "worker", agent: "claude-code", session: "s", configDir: "/c" }).CLAUDE_CONFIG_DIR).toBe("/c");
+  expect(agentEnv({ root: "/repo", role: "worker", agent: "claude-code", session: "s" })).not.toHaveProperty("CLAUDE_CONFIG_DIR");
+  // only claude-code reads CLAUDE_CONFIG_DIR
+  expect(agentEnv({ root: "/repo", role: "worker", agent: "opencode", session: "s", configDir: "/c" })).not.toHaveProperty("CLAUDE_CONFIG_DIR");
 });
 
 test("context tokens from the last assistant usage; robust to junk", () => {

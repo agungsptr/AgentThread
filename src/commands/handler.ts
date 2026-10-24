@@ -3,18 +3,20 @@ import { join } from "node:path";
 import { DEFAULT_CONFIG, type Config } from "../config/config.ts";
 import { canTransitionThread, canTransitionTicket, scopesOverlap, slugify, validateHandoff } from "../domain/rules.ts";
 import { ROLES, type Actor, type EventBody, type Role, type ThreadStatus, type TicketStatus } from "../domain/types.ts";
-import { agentName, liveSessions, spawnCoordinator, spawnReplacement, spawnWorker, workerLimit } from "../orchestration/sessions.ts";
+import { roleAgent, type RoleAgent } from "../agents/roles.ts";
+import { agentName, liveSessions, spawnCoordinator, spawnReplacement, spawnWorker, tabEnv, workerLimit } from "../orchestration/sessions.ts";
 import { isLive, type State, type Thread, type Ticket } from "../state/projection.ts";
 import type { Command, CommandName } from "./schema.ts";
 
 export type Effect =
   | { kind: "git.worktree.add"; branch: string; path: string; thread: { id: string; title: string; slug: string } }
-  | { kind: "herdr.tab.ensure"; thread: string; label: string; cwd: string; tab?: string }
+  | { kind: "herdr.tab.ensure"; thread: string; label: string; cwd: string; env: Record<string, string>; tab?: string }
   | { kind: "herdr.tab.close"; thread: string; tab: string }
   | {
       kind: "agent.spawn";
       session: string;
       role: "coordinator" | "worker";
+      run: RoleAgent;
       name: string;
       thread: string;
       ticket?: string;
@@ -112,7 +114,7 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
       .filter((s) => isLive(s) && (s.role === "coordinator" || s.role === "worker") && s.pane)
       .map((s) => ({ kind: "session.probe", session: s.id, ...(s.thread ? { thread: s.thread } : {}), pane: s.pane! }));
     const recovery = recoverCoordinators(state, open, ctx);
-    return { events: recovery.events, effects: [...open.map(tabEnsure), ...closes, ...probes, ...recovery.effects], result: { threads: open.length } };
+    return { events: recovery.events, effects: [...open.map((t) => tabEnsure(t, ctx)), ...closes, ...probes, ...recovery.effects], result: { threads: open.length } };
   }
 
   if (cmd.cmd === "tell") {
@@ -153,10 +155,21 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
   if (cmd.cmd === "session.open_main") {
     if (state.sessions.has(cmd.session)) reject(`session ${cmd.session} already exists`);
     const stale: EventBody[] = liveSessions(state, undefined, "main").map((s) => ({ type: "session.ended", payload: { session: s.id } }));
+    const run = roleAgent(ctx.config ?? DEFAULT_CONFIG, "main");
     return {
       events: [
         ...stale,
-        { type: "session.created", payload: { session: cmd.session, role: "main", agent: "claude-code", name: agentName(ctx.root, "main") } },
+        {
+          type: "session.created",
+          payload: {
+            session: cmd.session,
+            role: "main",
+            agent: run.agent,
+            ...(run.model ? { model: run.model } : {}),
+            ...(run.effort ? { effort: run.effort } : {}),
+            name: agentName(ctx.root, "main"),
+          },
+        },
         { type: "session.attached", payload: { session: cmd.session, pane: cmd.pane } },
       ],
       result: { session: cmd.session },
@@ -212,7 +225,7 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
       if (workers.length >= workerLimit(t, ctx.config ?? DEFAULT_CONFIG)) {
         return { events: [{ type: "worker.queued", thread: t.id, payload: { ticket: k.id } }], result: { queued: true } };
       }
-      const spawned = spawnWorker(state, t, k.id, { root: ctx.root, newId: ctx.newId ?? randomUUID });
+      const spawned = spawnWorker(state, t, k.id, spawnContext(ctx));
       const session = (spawned.events[0] as Extract<EventBody, { type: "session.created" }>).payload.session;
       return { ...spawned, result: { session, queued: false } };
     }
@@ -241,7 +254,7 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
 function recoverCoordinators(state: State, open: Thread[], ctx: HandlerContext): Decision & { effects: Effect[] } {
   const events: EventBody[] = [];
   const effects: Effect[] = [];
-  const spawn = { root: ctx.root, newId: ctx.newId ?? randomUUID };
+  const spawn = spawnContext(ctx);
   for (const t of open) {
     if (!t.rootPane || liveSessions(state, t.id, "coordinator").length > 0) continue;
     const latest = [...state.sessions.values()].filter((s) => s.thread === t.id && s.role === "coordinator").at(-1);
@@ -292,7 +305,7 @@ function newThread(state: State, cmd: Extract<Command, { cmd: "thread.new" }>, c
     ],
     effects: [
       { kind: "git.worktree.add", branch, path: worktree, thread: { id, title: cmd.title, slug } },
-      ...(state.layout ? [tabEnsure({ id, slug, worktree })] : []),
+      ...(state.layout ? [tabEnsure({ id, slug, worktree }, ctx)] : []),
     ],
     result: { thread: id, worktree },
   };
@@ -348,6 +361,11 @@ function transitionTicket(k: Ticket, to: TicketStatus): void {
   if (!canTransitionTicket(k.status, to)) reject(`ticket ${k.id} cannot go ${k.status} → ${to}`);
 }
 
-function tabEnsure(t: { id: string; slug: string; worktree: string; tab?: string }): Effect {
-  return { kind: "herdr.tab.ensure", thread: t.id, label: `${t.id}-${t.slug}`, cwd: t.worktree, ...(t.tab ? { tab: t.tab } : {}) };
+function spawnContext(ctx: HandlerContext) {
+  return { root: ctx.root, config: ctx.config ?? DEFAULT_CONFIG, newId: ctx.newId ?? randomUUID };
+}
+
+function tabEnsure(t: { id: string; slug: string; worktree: string; tab?: string; tier?: string }, ctx: HandlerContext): Effect {
+  const env = tabEnv(t, { root: ctx.root, config: ctx.config ?? DEFAULT_CONFIG });
+  return { kind: "herdr.tab.ensure", thread: t.id, label: `${t.id}-${t.slug}`, cwd: t.worktree, env, ...(t.tab ? { tab: t.tab } : {}) };
 }

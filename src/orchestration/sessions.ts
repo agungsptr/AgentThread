@@ -1,4 +1,7 @@
+import { adapterFor } from "../agents/adapters.ts";
+import { agentEnv, claudeConfigDir } from "../agents/claude.ts";
 import { HANDOFF_REQUEST_PREFIX } from "../agents/prompts.ts";
+import { roleAgent, tierAgent, type RoleAgent } from "../agents/roles.ts";
 import type { Effect } from "../commands/handler.ts";
 import type { Config } from "../config/config.ts";
 import type { EventBody, SessionRole } from "../domain/types.ts";
@@ -6,7 +9,21 @@ import { isLive, type Session, type State, type Thread } from "../state/projecti
 
 export interface SpawnContext {
   root: string;
+  config: Config;
   newId: () => string;
+}
+
+/** The agent, model and effort fields of a session.created payload (model and effort only when set). */
+const runFields = (run: RoleAgent) => ({ agent: run.agent, ...(run.model ? { model: run.model } : {}), ...(run.effort ? { effort: run.effort } : {}) });
+
+/**
+ * The env of a thread's tab, which its first coordinator inherits in the root pane: the AGT_* env with the
+ * coordinator adapter's env merged over it.
+ */
+export function tabEnv(t: { id: string; tier?: string }, ctx: { root: string; config: Config }): Record<string, string> {
+  const run = tierAgent(ctx.config, t.tier);
+  const base = agentEnv({ root: ctx.root, role: "coordinator", agent: run.agent, thread: t.id, configDir: claudeConfigDir(ctx.config) });
+  return { ...base, ...adapterFor(run.agent).launch({ role: "coordinator", run, config: ctx.config, root: ctx.root }).env };
 }
 
 export function liveSessions(state: State, thread?: string, role?: SessionRole): Session[] {
@@ -43,12 +60,14 @@ export function spawnCoordinator(
 ): { events: EventBody[]; effects: Effect[] } {
   const session = ctx.newId();
   const name = agentName(ctx.root, "coordinator", t.id, undefined, session);
+  // A thread's coordinator runs at the thread's tier, else as roles.coordinator.
+  const run = tierAgent(ctx.config, t.tier);
   return {
     events: [
       {
         type: "session.created",
         thread: t.id,
-        payload: { session, role: "coordinator", agent: "claude-code", name, ...(how.splitFrom ? { retirePane: how.splitFrom } : {}) },
+        payload: { session, role: "coordinator", ...runFields(run), name, ...(how.splitFrom ? { retirePane: how.splitFrom } : {}) },
       },
     ],
     effects: [
@@ -56,6 +75,7 @@ export function spawnCoordinator(
         kind: "agent.spawn",
         session,
         role: "coordinator",
+        run,
         name,
         thread: t.id,
         cwd: t.worktree,
@@ -72,13 +92,15 @@ export function spawnWorker(state: State, t: Thread, ticket: string, ctx: SpawnC
   const last = liveSessions(state, t.id, "worker")
     .filter((s) => s.pane)
     .at(-1);
+  const run = roleAgent(ctx.config, "worker");
   return {
-    events: [{ type: "session.created", thread: t.id, payload: { session, role: "worker", agent: "claude-code", name, ticket } }],
+    events: [{ type: "session.created", thread: t.id, payload: { session, role: "worker", ...runFields(run), name, ticket } }],
     effects: [
       {
         kind: "agent.spawn",
         session,
         role: "worker",
+        run,
         name,
         thread: t.id,
         ticket,
@@ -99,12 +121,14 @@ export function spawnReplacement(
   const session = ctx.newId();
   const name = agentName(ctx.root, "coordinator", t.id, undefined, session);
   const carried = old.notices.filter((n) => !n.startsWith(HANDOFF_REQUEST_PREFIX));
+  // A replacement keeps the agent of the session it replaces, even when the config has changed since.
+  const run: RoleAgent = { agent: old.agent, ...(old.model ? { model: old.model } : {}), ...(old.effort ? { effort: old.effort } : {}) };
   return {
     events: [
       {
         type: "session.created",
         thread: t.id,
-        payload: { session, role: "coordinator", agent: "claude-code", name, replaces: old.id, ...(how.retirePane ? { retirePane: how.retirePane } : {}) },
+        payload: { session, role: "coordinator", ...runFields(run), name, replaces: old.id, ...(how.retirePane ? { retirePane: how.retirePane } : {}) },
       },
       ...(carried.length ? [{ type: "notice.queued" as const, thread: t.id, payload: { session, text: carried.join("\n") } }] : []),
     ],
@@ -113,6 +137,7 @@ export function spawnReplacement(
         kind: "agent.spawn",
         session,
         role: "coordinator",
+        run,
         name,
         thread: t.id,
         cwd: t.worktree,

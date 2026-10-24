@@ -335,7 +335,7 @@ describe("effect runner", () => {
     expect(status(wt)).toBe("");
 
     rmSync(join(wt, "AGENTS.md"));
-    const spawn = { kind: "agent.spawn", session: "s-1", role: "coordinator", name: "coord", thread: "001", cwd: wt, pane: "p2" } as const;
+    const spawn = { kind: "agent.spawn", session: "s-1", role: "coordinator", run: { agent: "claude-code" }, name: "coord", thread: "001", cwd: wt, pane: "p2" } as const;
     expect(await run(spawn)).toEqual([]);
     expect(readFileSync(join(wt, "AGENTS.md"), "utf8")).toBe(agentsMd({ root, thread }));
     expect(launched).toEqual(["s-1"]);
