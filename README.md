@@ -18,7 +18,7 @@ bun link        # puts `agt` on your PATH
 
 | Agent | Install |
 |---|---|
-| Claude Code (`claude-code`) | see Claude Code's own docs |
+| Claude Code (`claude-code`) | [Claude Code docs](https://docs.claude.com/en/docs/claude-code) |
 | OpenCode (`opencode`) | see opencode.ai; runs with `--standalone` |
 | Codex (`codex`) | `brew install --cask codex`, then `codex login` |
 | omp (`omp`) | the standalone binary from [omp.sh](https://omp.sh) (the npm build needs a newer Bun than 1.1.34) |
@@ -33,7 +33,7 @@ coordinators and workers are started by Herdr, which picks the executable itself
 cd your-repo
 agt init        # creates .agentthread/ (runs the setup wizard on a terminal when agents.roles is missing)
 agt start       # run inside a Herdr pane: sets up the main tab, then opens the main manager
-agt setup       # re-run the per-project wizard: agent, model and effort per role, and complexity tiers
+agt setup       # (agt start also runs it on a terminal when roles are missing; without a terminal it prints a hint and uses claude-code for every role) re-run the per-project wizard: agent, model and effort per role, and complexity tiers
 ```
 
 Describe a feature or bug to the main manager. After you confirm, it creates a thread; the coordinator and workers take it from there.
@@ -46,14 +46,15 @@ User config: `~/.config/agentthread/config.yaml`. Project config (overrides it):
 ```yaml
 agents:
   roles:                                # agent, model and effort per role
-    main:        { agent: claude-code, model: opus, effort: high }
-    coordinator: { agent: claude-code, model: sonnet }
-    worker:      { agent: opencode, model: anthropic/claude-sonnet-4 }
+    main:        { agent: claude-code, model: claude-opus-5-5, effort: high }
+    coordinator: { agent: claude-code, model: claude-sonnet-5-5 }
+    worker:      { agent: opencode, model: anthropic/claude-sonnet-5-5 }
   complexity:
     timeout: 10s                        # how long main's tier proposal waits for your choice (at least 1s)
     tiers:                              # names match /^[a-z][a-z0-9_-]*$/
-      simple:  { agent: opencode, model: anthropic/claude-haiku-4 }
-      complex: { agent: claude-code, model: opus, effort: high }
+      simple:  { agent: claude-code, model: claude-haiku-5-5 }
+      complex: { agent: claude-code, model: claude-opus-5-5, effort: high }
+      gemini:  { agent: opencode, model: myrouter/gemini-flash }
   autonomous: true                      # default: agents run without approval prompts
 workers:
   max_workers: 3                        # workers per thread; extra spawn requests are queued
@@ -88,7 +89,7 @@ does not implement tickets itself; it delegates them to workers.
 
 A worker with a question runs `agt question`; the coordinator replies with `agt answer <thread> <Q> "<text>"`. A blocked
 worker is reported to its coordinator. If a session's first settled turn runs no `agt` command (for example because the
-configured model does not exist), the daemon reports `session.stalled` instead of waiting forever.
+configured model does not exist), the daemon reports `session.stalled` (coordinators and workers only, not main) instead of waiting forever.
 
 ### Notes on instruction files and git config
 
@@ -107,12 +108,12 @@ see [docs/release-e2e.md](docs/release-e2e.md). `bun test` never starts real age
 
 The test suite never runs the real `herdr` or agent binaries. Run this once in a scratch git repo:
 
-1. `agt init`, then `agt start` inside a Herdr pane. Claude Code opens as the main manager.
-2. Ask the main manager to create a small thread and confirm it. A new tab appears, and a coordinator Claude starts in it.
-3. Check that the coordinator can run `agt …` without a permission prompt (this confirms the `Bash(agt *)` allowlist pattern), and that `git commit` works for the coordinator but prompts for a worker.
+1. `agt init`, then `agt start` inside a Herdr pane. The main manager's agent (per `agents.roles.main`) opens.
+2. Ask the main manager to create a small thread and confirm it. A new tab appears, and the coordinator's agent starts in it.
+3. Check that the coordinator can run `agt …` without a permission prompt and that `git commit` works for the coordinator, and that a worker's `git commit` is refused by the pre-commit guard (nothing prompts the worker).
 4. Close the main-manager pane and run `agt daemon status` from another pane. The daemon must still be running.
 5. In a coordinator pane, run `/compact`. The pane should get a HANDOFF REQUEST, the coordinator should submit it with `agt handoff … --stdin`, and a new coordinator pane should replace it.
-6. Quit a coordinator's Claude (`/exit`), then run `agt start` from the main tab. A fresh coordinator should start in a new pane (nothing is resumed).
+6. Quit the coordinator's agent, then run `agt start` from the main tab. A fresh coordinator should start in a new pane (nothing is resumed).
 7. In a thread's worktree, check that `AGENTS.md` and `CLAUDE.md -> AGENTS.md` exist and that `git status` there is clean.
-8. Let a coordinator work, then kill its Claude (`/exit`) and run `agt start`. A fresh coordinator should start in a new pane and continue from `brief.md`.
-9. Remove the hooks from a coordinator's settings. It must still become idle and receive ticket notices (status comes from Herdr alone).
+8. Let a coordinator work, then kill its agent and run `agt start`. A fresh coordinator should start in a new pane and continue from `brief.md`.
+9. With Claude Code as coordinator, remove the hooks from its settings. It must still become idle and receive ticket notices (status comes from Herdr alone).
