@@ -45,7 +45,7 @@ test("agt start runs the main manager in the foreground with hooks, role and the
   expect(r.code).toBe(0);
   const id = /main manager session ([0-9a-f-]{36})/.exec(r.out)![1]!;
   const run = JSON.parse(readFileSync(claudeLog, "utf8").trim()) as { argv: string[]; env: Record<string, string> };
-  expect(run.argv.slice(0, 2)).toEqual(["--permission-mode", "acceptEdits"]);
+  expect(run.argv.slice(0, 2)).toEqual(["--permission-mode", "bypassPermissions"]);
   expect(run.argv).not.toContain("--session-id");
   expect(run.argv).not.toContain("--append-system-prompt");
   expect(run.argv[run.argv.length - 1]).toBe(systemPrompt({ root, role: "main" }));

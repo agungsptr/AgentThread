@@ -6,6 +6,7 @@ import { parseArgs, type ParseArgsConfig } from "node:util";
 import { stringify } from "yaml";
 import { agentEnv } from "../agents/claude.ts";
 import { adapterFor } from "../agents/adapters.ts";
+import { roleAgent } from "../agents/roles.ts";
 import { systemPrompt } from "../agents/prompts.ts";
 import { decodeJob, runSpawnJob } from "../agents/spawn-job.ts";
 import { contextTokensFromTranscript } from "../agents/transcript.ts";
@@ -307,10 +308,11 @@ async function start(root: string, env: Env, argv: string[]): Promise<number> {
   const bin = env.AGT_CLAUDE_BIN ?? "claude";
   let code: number;
   try {
-    const proc = Bun.spawn([bin, ...adapterFor(config.agents.main_manager).startArgs({ role: "main", config, root }), systemPrompt({ root, role: "main" })], {
+    const launched = adapterFor(config.agents.main_manager).launch({ role: "main", run: roleAgent(config, "main"), config, root });
+    const proc = Bun.spawn([bin, ...launched.args, systemPrompt({ root, role: "main" })], {
       stdio: ["inherit", "inherit", "inherit"],
       cwd: root,
-      env: { ...env, ...agentEnv({ root, role: "main", session }) },
+      env: { ...env, ...launched.env, ...agentEnv({ root, role: "main", session }) },
     });
     code = await proc.exited;
   } catch (e) {

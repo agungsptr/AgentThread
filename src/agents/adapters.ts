@@ -1,34 +1,130 @@
+import { join } from "node:path";
 import type { Config } from "../config/config.ts";
 import type { AgentKind, SessionRole } from "../domain/types.ts";
 import { allowedTools, hookSettings } from "./claude.ts";
+import type { RoleAgent } from "./roles.ts";
+
+export interface LaunchInput {
+  role: SessionRole;
+  run: RoleAgent;
+  config: Config;
+  root: string;
+  worktree?: string;
+  gitCommonDir?: string;
+}
 
 export interface AgentAdapter {
   agent: AgentKind;
   /** The `--kind` Herdr is given, e.g. "claude". */
-  herdrKind: string;
-  startArgs(o: { role: SessionRole; config: Config; root: string }): string[];
+  herdrKind: "claude" | "opencode" | "codex" | "omp";
+  /** Default executable; overridden by the env var AGT_<AGENT>_BIN. */
+  bin: string;
+  /** Extra symlinks to AGENTS.md this agent reads. */
+  instructionFiles: string[];
+  /** How a first message is passed on the command line (main only). */
+  prompt: "positional" | "flag";
+  launch(o: LaunchInput): { args: string[]; env: Record<string, string> };
+  promptArgs(text: string): string[];
   capabilities: { hooks: boolean; contextSize: boolean; preCompact: boolean };
 }
+
+const positional = (text: string): string[] => [text];
+const NO_HOOKS = { hooks: false, contextSize: false, preCompact: false };
 
 const claudeAdapter: AgentAdapter = {
   agent: "claude-code",
   herdrKind: "claude",
-  startArgs({ role, config, root }) {
-    const claude = config.agents.claude;
-    return [
-      "--permission-mode", claude.permission_mode,
-      "--allowed-tools", allowedTools(role, config, root).join(","),
-      "--settings", JSON.stringify(hookSettings()),
-      ...(claude.model ? ["--model", claude.model] : []),
-    ];
+  bin: "claude",
+  instructionFiles: ["CLAUDE.md"],
+  prompt: "positional",
+  launch({ role, run, config, root }) {
+    const settings = hookSettings();
+    const args = config.agents.autonomous
+      ? ["--permission-mode", "bypassPermissions", "--settings", JSON.stringify({ ...settings, skipDangerousModePermissionPrompt: true })]
+      : [
+          "--permission-mode", config.agents.claude.permission_mode,
+          "--allowed-tools", allowedTools(role, config, root).join(","),
+          "--settings", JSON.stringify(settings),
+        ];
+    if (run.model) args.push("--model", run.model);
+    if (run.effort) args.push("--effort", run.effort);
+    return { args, env: {} };
   },
+  promptArgs: positional,
   capabilities: { hooks: true, contextSize: true, preCompact: true },
 };
 
-const ADAPTERS: Partial<Record<AgentKind, AgentAdapter>> = { "claude-code": claudeAdapter };
+const opencodeAdapter: AgentAdapter = {
+  agent: "opencode",
+  herdrKind: "opencode",
+  bin: "opencode",
+  instructionFiles: [],
+  prompt: "flag",
+  launch({ run }) {
+    const content = {
+      ...(run.model ? { model: run.effort ? `${run.model}#${run.effort}` : run.model } : {}),
+      permission: { "*": "allow", external_directory: "allow", doom_loop: "allow" },
+    };
+    return { args: ["--auto"], env: { OPENCODE_CONFIG_CONTENT: JSON.stringify(content) } };
+  },
+  promptArgs: (text) => ["--prompt", text],
+  capabilities: NO_HOOKS,
+};
+
+const codexAdapter: AgentAdapter = {
+  agent: "codex",
+  herdrKind: "codex",
+  bin: "codex",
+  instructionFiles: [],
+  prompt: "positional",
+  launch({ run, root, gitCommonDir }) {
+    return {
+      args: [
+        ...(run.model ? ["-m", run.model] : []),
+        ...(run.effort ? ["-c", `model_reasoning_effort="${run.effort}"`] : []),
+        "-s", "workspace-write",
+        "-a", "never",
+        "-c", "sandbox_workspace_write.network_access=true",
+        "--add-dir", gitCommonDir ?? join(root, ".git"),
+        "--add-dir", join(root, ".agentthread"),
+        "--search",
+      ],
+      env: {},
+    };
+  },
+  promptArgs: positional,
+  capabilities: NO_HOOKS,
+};
+
+const ompAdapter: AgentAdapter = {
+  agent: "omp",
+  herdrKind: "omp",
+  bin: "omp",
+  instructionFiles: [],
+  prompt: "positional",
+  launch({ run }) {
+    return {
+      args: [
+        ...(run.model ? ["--model", run.model] : []),
+        ...(run.effort ? ["--thinking", run.effort] : []),
+        "--approval-mode", "yolo",
+      ],
+      env: {},
+    };
+  },
+  promptArgs: positional,
+  capabilities: NO_HOOKS,
+};
+
+const ADAPTERS: Record<AgentKind, AgentAdapter> = {
+  "claude-code": claudeAdapter,
+  opencode: opencodeAdapter,
+  codex: codexAdapter,
+  omp: ompAdapter,
+};
 
 export function adapterFor(agent: AgentKind): AgentAdapter {
-  const a = ADAPTERS[agent];
+  const a = (ADAPTERS as Partial<Record<string, AgentAdapter>>)[agent];
   if (!a) throw new Error(`no adapter for agent ${agent}`);
   return a;
 }

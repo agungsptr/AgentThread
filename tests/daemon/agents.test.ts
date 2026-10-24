@@ -53,7 +53,7 @@ test("a new thread gets a coordinator that is started through the spawner child"
   expect(start.slice(0, 9)).toEqual(["agent", "start", expect.stringMatching(/^agt-[0-9a-f]{4}-c001-[0-9a-f]{4}$/), "--kind", "claude", "--pane", "w1:p1", "--timeout", "60000"]);
   expect(start).not.toContain("--session-id");
   expect(start).not.toContain("--append-system-prompt");
-  expect(start).toContain("acceptEdits");
+  expect(start).toContain("bypassPermissions");
   expect(fake.read().calls.some((c) => c[0] === "agent" && c[1] === "prompt" && c[3]!.startsWith("You are the coordinator of thread 001. Read ") && c[3]!.endsWith("/brief.md, then follow AGENTS.md."))).toBe(true);
 });
 

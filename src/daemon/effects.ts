@@ -1,6 +1,7 @@
 import { dirname } from "node:path";
 import { AGT_BIN, agentEnv, claudeConfigDir } from "../agents/claude.ts";
 import { adapterFor } from "../agents/adapters.ts";
+import { roleAgent } from "../agents/roles.ts";
 import { bootstrapPrompt } from "../agents/prompts.ts";
 import { agentsMd, writeAgentsFilesAsync } from "../agents/agents-md.ts";
 import { launchSpawnJob, type SpawnJob } from "../agents/spawn-job.ts";
@@ -110,7 +111,7 @@ export function createEffectRunner(opts: {
                   },
                 }
               : {}),
-            args: adapter.startArgs({ role: effect.role, config: opts.config, root: opts.root }),
+            args: adapter.launch({ role: effect.role, run: roleAgent(opts.config, effect.role), config: opts.config, root: opts.root }).args,
             bootstrap: bootstrapPrompt(prompt, effect.bootstrap ?? "start"),
           });
           return [];
