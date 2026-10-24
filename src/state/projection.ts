@@ -28,6 +28,11 @@ export interface Session {
   turnsSinceProgress: number;
   /** A checkpoint reminder was sent since the last progress (cleared by progress.recorded). */
   remindedSinceProgress?: boolean;
+  /**
+   * The poller saw the first start, and nothing has happened since: the agent's own start hook, which may arrive just
+   * after, is the same first start (not a resume).
+   */
+  polledStart?: boolean;
   /** Finished turns (real active to idle transitions). */
   turns: number;
   /** When the session was created (session.created ts). */
@@ -373,7 +378,9 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
       const s = sessionOf(state, ev.seq, ev.payload.session);
       if (isLive(s)) {
         // A first start, or a manual /compact, leaves the agent at an empty prompt: no turn runs, so no Stop hook follows.
-        const atPrompt = ev.type === "session.started" && (s.status === "starting" || ev.payload.source === "compact");
+        const atPrompt = ev.type === "session.started" && (s.status === "starting" || ev.payload.source === "compact" || s.polledStart === true);
+        if (ev.type === "session.started" && ev.payload.source === "poll" && s.status === "starting") s.polledStart = true;
+        else delete s.polledStart;
         s.status = atPrompt ? "idle" : "active";
         s.lastActiveAt = ev.ts;
       }
@@ -382,6 +389,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
     case "agent.idle": {
       const s = sessionOf(state, ev.seq, ev.payload.session);
       if (isLive(s)) {
+        delete s.polledStart;
         if (s.status === "active") {
           s.turns++;
           s.turnsSinceProgress++;
@@ -467,6 +475,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
       const s = sessionOf(state, ev.seq, ev.payload.session);
       s.notices.splice(0, ev.payload.count);
       if (isLive(s)) {
+        delete s.polledStart;
         s.status = "active"; // a pasted notice starts a turn
         s.lastActiveAt = ev.ts;
       }

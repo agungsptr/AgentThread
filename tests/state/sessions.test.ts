@@ -121,3 +121,24 @@ test("a first session.started makes any role idle; a later one (compact/resume) 
   );
   expect(s3.sessions.get(S1)!.status).toBe("active");
 });
+
+test("a first start seen by the poller and then by the agent's hook stays idle; a start after real work is a resume", () => {
+  const twice = stateOf(
+    INIT,
+    threadCreated("001"),
+    created(S1, "coordinator"),
+    { type: "session.started", thread: "001", payload: { session: S1, source: "poll" } },
+    { type: "session.started", thread: "001", payload: { session: S1 } },
+  );
+  expect(twice.sessions.get(S1)!.status).toBe("idle");
+  const resumed = stateOf(
+    INIT,
+    threadCreated("001"),
+    created(S1, "coordinator"),
+    { type: "session.started", thread: "001", payload: { session: S1, source: "poll" } },
+    { type: "session.active", thread: "001", payload: { session: S1 } },
+    { type: "agent.idle", thread: "001", payload: { session: S1 } },
+    { type: "session.started", thread: "001", payload: { session: S1 } },
+  );
+  expect(resumed.sessions.get(S1)!.status).toBe("active");
+});
