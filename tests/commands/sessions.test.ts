@@ -71,6 +71,24 @@ describe("worker.spawn", () => {
     expect(exec(s, { cmd: "worker.spawn", thread: "001", ticket: "T2" }, COORD, config)).toMatchObject({ result: { queued: true } });
   });
 
+  test("--agent overrides the worker role with that adapter's defaults; model and effort are not carried across", () => {
+    const s = threadWithTab(1);
+    const config = { ...DEFAULT_CONFIG, agents: { ...DEFAULT_CONFIG.agents, roles: { ...DEFAULT_CONFIG.agents.roles, worker: { agent: "claude-code" as const, model: "opus", effort: "high" } } } };
+    const r = exec(s, { cmd: "worker.spawn", thread: "001", ticket: "T1", agent: "codex" }, COORD, config);
+    expect(r.ok && r.effects[0]).toMatchObject({ kind: "agent.spawn", run: { agent: "codex" } });
+    expect(r.ok && (r.effects[0] as { run: object }).run).toEqual({ agent: "codex" });
+    expect(r.ok && r.events[0]).toMatchObject({ type: "session.created", payload: { agent: "codex" } });
+    expect(r.ok && r.events[0]!.payload).not.toHaveProperty("model");
+    // queued with an override: the override is kept until the ticket's worker is spawned
+    const q = exec(s, { cmd: "worker.spawn", thread: "001", ticket: "T2", agent: "omp" }, COORD, config);
+    expect(q.ok && q.events).toEqual([{ type: "worker.queued", thread: "001", payload: { ticket: "T2", agent: "omp" } }]);
+    expect(s.threads.get("001")!.workerAgents).toEqual({ T2: "omp" });
+    // without --agent the role's run applies
+    const plain = exec(threadWithTab(1), { cmd: "worker.spawn", thread: "001", ticket: "T1" }, COORD, config);
+    expect(plain.ok && (plain.effects[0] as { run: object }).run).toEqual({ agent: "claude-code", model: "opus", effort: "high" });
+    expect(() => CommandSchema.parse({ cmd: "worker.spawn", thread: "001", ticket: "T1", agent: "gpt" })).toThrow();
+  });
+
   test("rejections", () => {
     const s = threadWithTab(1);
     exec(s, { cmd: "worker.spawn", thread: "001", ticket: "T1" }, COORD);

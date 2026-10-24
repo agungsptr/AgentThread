@@ -76,7 +76,10 @@ test("thread new --max-workers, worker spawn and tell", () => {
   agt(["ticket", "add", "001", "A", "--scope", "a"], coord);
   agt(["ticket", "add", "001", "B", "--scope", "b"], coord);
   expect(JSON.parse(agt(["worker", "spawn", "001", "--ticket", "T1"], coord).out)).toMatchObject({ queued: false });
-  expect(agt(["worker", "spawn", "001", "--ticket", "T2"], coord).out).toBe('{"queued":true}');
+  expect(agt(["worker", "spawn", "001", "--ticket", "T2", "--agent", "omp"], coord).out).toBe('{"queued":true}');
+  const bad = agt(["worker", "spawn", "001", "--ticket", "T2", "--agent", "gpt"], coord);
+  expect(bad.code).toBe(2);
+  expect(bad.err).toContain("--agent must be one of claude-code, opencode, codex, omp");
   expect(agt(["tell", "001", "please", "hurry"]).out).toBe("ok");
 });
 

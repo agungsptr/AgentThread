@@ -46,7 +46,7 @@ export const CommandSchema = z.discriminatedUnion("cmd", [
     herdrSocket: z.string().optional(),
   }),
   z.object({ cmd: z.literal("layout.reconcile") }),
-  z.object({ cmd: z.literal("worker.spawn"), thread: threadId, ticket: ticketId }),
+  z.object({ cmd: z.literal("worker.spawn"), thread: threadId, ticket: ticketId, agent: z.enum(AGENT_KINDS).optional() }),
   z.object({ cmd: z.literal("tell"), target: z.union([threadId, z.literal("main")]), message: text }),
   z.object({
     cmd: z.literal("session.signal"),

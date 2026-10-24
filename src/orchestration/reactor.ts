@@ -87,7 +87,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
       if (spawnedTickets.has(`${t.id}/${ticket}`)) continue; // already spawned earlier in this call; state isn't updated yet
       if (t.tickets.find((k) => k.id === ticket)?.status !== "open") continue;
       spawnedTickets.add(`${t.id}/${ticket}`);
-      take(spawnWorker(state, t, ticket, ctx));
+      take(spawnWorker(state, t, ticket, ctx, t.workerAgents[ticket]));
       spawnedPerThread.set(t.id, (spawnedPerThread.get(t.id) ?? 0) + 1);
       free--;
     }

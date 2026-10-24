@@ -4,7 +4,7 @@ import { HANDOFF_REQUEST_PREFIX } from "../agents/prompts.ts";
 import { roleAgent, tierAgent, type RoleAgent } from "../agents/roles.ts";
 import type { Effect } from "../commands/handler.ts";
 import type { Config } from "../config/config.ts";
-import type { EventBody, SessionRole } from "../domain/types.ts";
+import type { AgentKind, EventBody, SessionRole } from "../domain/types.ts";
 import { isLive, type Session, type State, type Thread } from "../state/projection.ts";
 
 export interface SpawnContext {
@@ -91,13 +91,14 @@ export function spawnCoordinator(
   };
 }
 
-export function spawnWorker(state: State, t: Thread, ticket: string, ctx: SpawnContext): { events: EventBody[]; effects: Effect[] } {
+/** `agent` (agt worker spawn --agent) replaces the worker role with that adapter's defaults: no model or effort is carried across vendors. */
+export function spawnWorker(state: State, t: Thread, ticket: string, ctx: SpawnContext, agent?: AgentKind): { events: EventBody[]; effects: Effect[] } {
   const session = ctx.newId();
   const name = agentName(ctx.root, "worker", t.id, ticket, session);
   const last = liveSessions(state, t.id, "worker")
     .filter((s) => s.pane)
     .at(-1);
-  const run = roleAgent(ctx.config, "worker");
+  const run: RoleAgent = agent ? { agent } : roleAgent(ctx.config, "worker");
   return {
     events: [{ type: "session.created", thread: t.id, payload: { session, role: "worker", ...runFields(run), name, ticket } }],
     effects: [

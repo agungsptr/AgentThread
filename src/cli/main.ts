@@ -13,7 +13,7 @@ import { contextTokensFromTranscript } from "../agents/transcript.ts";
 import { isAlive, request } from "../daemon/client.ts";
 import { startDaemon } from "../daemon/server.ts";
 import { configHash, loadConfig } from "../config/config.ts";
-import { ROLES, SESSION_SIGNALS, type Actor, type AgentKind, type Layout, type StoredEvent } from "../domain/types.ts";
+import { AGENT_KINDS, ROLES, SESSION_SIGNALS, type Actor, type AgentKind, type Layout, type StoredEvent } from "../domain/types.ts";
 import { HerdrCli, shellQuote } from "../herdr/bridge.ts";
 import { initProject } from "../project/init.ts";
 import { setupIfNeeded, setupOnTty } from "../project/setup.ts";
@@ -45,7 +45,7 @@ const USAGE = `usage: agt <command>
   question <thread> <message...>
   answer <thread> <Q> <text...>
   handoff <thread> (--file <path> | --stdin)
-  worker spawn <thread> --ticket <T>
+  worker spawn <thread> --ticket <T> [--agent claude-code|opencode|codex|omp]
   tell <thread|main> <message...>
   event started|active|idle|compacting|ended   (used by Claude Code hooks)
   logs [-f]`;
@@ -159,9 +159,12 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
     }
     case "worker": {
       if (sub !== "spawn") throw new UsageError(`unknown worker subcommand '${sub ?? ""}'`);
-      const { values, positionals } = parse(rest, { ticket: { type: "string" } });
+      const { values, positionals } = parse(rest, { ticket: { type: "string" }, agent: { type: "string" } });
       if (!positionals[0] || !values.ticket) throw new UsageError("worker spawn needs <thread> --ticket <T>");
-      return send(findRoot(cwd, env), env, { cmd: "worker.spawn", thread: positionals[0], ticket: values.ticket });
+      if (values.agent !== undefined && !(AGENT_KINDS as readonly string[]).includes(values.agent)) {
+        throw new UsageError(`--agent must be one of ${AGENT_KINDS.join(", ")}`);
+      }
+      return send(findRoot(cwd, env), env, { cmd: "worker.spawn", thread: positionals[0], ticket: values.ticket, ...(values.agent ? { agent: values.agent } : {}) });
     }
     case "tell": {
       const [target, ...words] = argv.slice(1);

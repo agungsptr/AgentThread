@@ -193,3 +193,20 @@ test("a failed coordinator notifies the live main session", () => {
   const r = react(s, apply(s, { type: "session.failed", thread: "001", payload: { session: C, reason: "pane_not_found" } }), ctx());
   expect(r.events).toEqual([{ type: "notice.queued", payload: { session: M, text: "Coordinator for thread 001 failed: pane_not_found." } }]);
 });
+
+test("a queued worker keeps its --agent override when its slot frees", () => {
+  const s = base(1);
+  apply(
+    s,
+    { type: "session.created", thread: "001", payload: { session: W1, role: "worker", agent: "claude-code", name: "w", ticket: "T1" } },
+    { type: "session.attached", thread: "001", payload: { session: W1, pane: "w1:p3" } },
+    { type: "worker.queued", thread: "001", payload: { ticket: "T2", agent: "omp" } },
+    { type: "ticket.claimed", thread: "001", payload: { ticket: "T1", assignee: W1 } },
+    { type: "ticket.completed", thread: "001", payload: { ticket: "T1" } },
+  );
+  const r = react(s, apply(s, { type: "agent.idle", thread: "001", payload: { session: W1 } }), ctx());
+  const next = react(s, apply(s, ...r.events), ctx());
+  expect(next.effects).toEqual([expect.objectContaining({ kind: "agent.spawn", ticket: "T2", run: { agent: "omp" } })]);
+  apply(s, ...next.events);
+  expect(s.threads.get("001")!.workerAgents).toEqual({});
+});

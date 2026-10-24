@@ -256,9 +256,9 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
       const workers = liveSessions(state, t.id, "worker");
       if (t.workerQueue.includes(k.id) || workers.some((s) => s.ticket === k.id)) reject(`ticket ${k.id} already has a worker`);
       if (workers.length >= workerLimit(t, ctx.config ?? DEFAULT_CONFIG)) {
-        return { events: [{ type: "worker.queued", thread: t.id, payload: { ticket: k.id } }], result: { queued: true } };
+        return { events: [{ type: "worker.queued", thread: t.id, payload: { ticket: k.id, ...(cmd.agent ? { agent: cmd.agent } : {}) } }], result: { queued: true } };
       }
-      const spawned = spawnWorker(state, t, k.id, spawnContext(ctx));
+      const spawned = spawnWorker(state, t, k.id, spawnContext(ctx), cmd.agent);
       const session = (spawned.events[0] as Extract<EventBody, { type: "session.created" }>).payload.session;
       return { ...spawned, result: { session, queued: false } };
     }

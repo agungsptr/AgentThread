@@ -105,7 +105,7 @@ export type EventBody =
   | { type: "ticket.released"; thread: string; payload: { ticket: string; reason: string } }
   | { type: "thread.root_pane_changed"; thread: string; payload: { pane: string } }
   | { type: "session.failed"; thread?: string; payload: { session: string; reason: string } }
-  | { type: "worker.queued"; thread: string; payload: { ticket: string } }
+  | { type: "worker.queued"; thread: string; payload: { ticket: string; agent?: AgentKind } }
   | { type: "notice.queued"; thread?: string; payload: { session: string; text: string } }
   | { type: "notice.delivered"; thread?: string; payload: { session: string; count: number } };
 

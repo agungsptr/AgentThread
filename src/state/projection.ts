@@ -111,6 +111,8 @@ export interface Thread {
   /** How the tier was chosen, and the reason main gave for proposing it. */
   tierChoice?: { auto: boolean; reason: string };
   workerQueue: string[];
+  /** The `agt worker spawn --agent` override of a queued ticket, by ticket; dropped when its worker is created. */
+  workerAgents: Record<string, AgentKind>;
   tickets: Ticket[];
   decisions: Entry[];
   findings: Entry[];
@@ -213,6 +215,7 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       worktree: p.worktree,
       maxWorkers: p.maxWorkers,
       workerQueue: [],
+      workerAgents: {},
       tickets: [],
       decisions: [],
       findings: [],
@@ -310,6 +313,7 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       break;
     case "worker.queued":
       t.workerQueue.push(ev.payload.ticket);
+      if (ev.payload.agent) t.workerAgents[ev.payload.ticket] = ev.payload.agent;
       note(t, ev, `${ev.payload.ticket} queued for a worker`);
       break;
     case "log.appended":
@@ -414,7 +418,10 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
         ...(p.retirePane ? { retirePane: p.retirePane } : {}),
       });
       const t = ev.thread ? state.threads.get(ev.thread) : undefined;
-      if (t && p.ticket) t.workerQueue = t.workerQueue.filter((k) => k !== p.ticket);
+      if (t && p.ticket) {
+        t.workerQueue = t.workerQueue.filter((k) => k !== p.ticket);
+        delete t.workerAgents[p.ticket];
+      }
       threadNote(state, ev, `${p.role} session ${short(p.session)} created${p.ticket ? ` for ${p.ticket}` : ""}`);
       return true;
     }

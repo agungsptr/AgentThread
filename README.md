@@ -92,6 +92,9 @@ Workers never commit. Each thread worktree gets its own `core.hooksPath` whose `
 agent runs as a worker, and then forwards to the project's own hooks. The coordinator reviews and commits. A coordinator
 does not implement tickets itself; it delegates them to workers.
 
+`agt worker spawn <thread> --ticket <T> --agent <kind>` runs one worker on another agent than `agents.roles.worker`,
+with that agent's own default model and effort (the role's model and effort are not carried across vendors).
+
 A worker with a question runs `agt question`; the coordinator replies with `agt answer <thread> <Q> "<text>"`. A blocked
 worker is reported to its coordinator. If a session's first settled turn runs no `agt` command (for example because the
 configured model does not exist), the daemon reports `session.stalled` (coordinators and workers only, not main) instead of waiting forever.
