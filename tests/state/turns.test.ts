@@ -38,12 +38,12 @@ function rig(agent: "claude-code" | "opencode" = "claude-code") {
     log.push(ev);
   };
   s.sessions.get(S)!.pane = "p1";
-  const hook = (type: keyof typeof EV) => send(type, { role: "coordinator", session: S } as StoredEvent["actor"]);
+  const hook = (type: keyof typeof EV, actor: StoredEvent["actor"] = { role: "coordinator", session: S } as StoredEvent["actor"]) => send(type, actor);
   const misses = new Map<string, number>();
   const poll = (status: string) => {
     for (const d of diffAgentStatus({ sessions: [...s.sessions.values()], listed: [{ pane: "p1", status: status as "idle" }], misses, hooks: (x) => x.agent === "claude-code" && !!x.hooksSeen })) send(d.signal, { role: "user" });
   };
-  return { s, x: () => s.sessions.get(S)!, hook, poll, log };
+  return { s, x: () => s.sessions.get(S)!, hook, misses, poll, log };
 }
 
 test("a hook idle, a lagging polled working and a polled idle count one turn", () => {
@@ -111,4 +111,35 @@ test("blockedNotified is set by agent.blocked and cleared by active, idle and st
     send(clear);
     expect(s.sessions.get(S)!.blockedNotified).toBeUndefined();
   }
+});
+
+test("a pane-identified hook (root-pane coordinator, actor without a session) sets hooksSeen", () => {
+  const r = rig();
+  const root = { role: "coordinator", thread: "001" } as StoredEvent["actor"];
+  r.poll("idle");
+  r.hook("active", root);
+  expect(r.x().hooksSeen).toBe(true);
+  r.hook("idle", root);
+  r.poll("working");
+  r.poll("idle");
+  expect(r.x().turns).toBe(1);
+});
+
+test("a polled start or turn alone never sets hooksSeen", () => {
+  const r = rig();
+  r.poll("idle");
+  r.poll("working");
+  r.poll("idle");
+  expect(r.x().hooksSeen).toBeUndefined();
+});
+
+test("no-hooks agent: blocked, working, blocked raises two blocked events", () => {
+  const r = rig("opencode");
+  r.poll("idle");
+  r.poll("working");
+  r.poll("blocked");
+  r.poll("working");
+  r.poll("blocked");
+  expect(r.log.filter((e) => e.type === "agent.blocked")).toHaveLength(2);
+  expect(r.x().turns).toBe(0);
 });
