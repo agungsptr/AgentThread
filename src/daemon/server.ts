@@ -218,7 +218,7 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
         } catch (e) {
           log(`herdr poll failed: ${e instanceof Error ? e.message : String(e)}`);
         }
-        for (const d of listed ? diffAgentStatus({ sessions: [...state.sessions.values()], listed, misses, hooks: (s) => adapterFor(s.agent).capabilities.hooks }) : []) {
+        for (const d of listed ? diffAgentStatus({ sessions: [...state.sessions.values()], listed, misses, hooks: (s) => adapterFor(s.agent).capabilities.hooks && !!s.hooksSeen }) : []) {
           // A polled start is marked, so the agent's own start hook just after it is not taken for a resume.
           await run({ cmd: "session.signal", session: d.session, signal: d.signal, ...(d.signal === "started" ? { source: "poll" } : {}) });
         }

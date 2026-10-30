@@ -8,6 +8,8 @@ const MISSES_TO_END = 2;
 /** started, active or idle from a listed status, when it changes the session's state. */
 function turnSignal(s: Session, status: AgentStatus, hooks: boolean): PollSignal | undefined {
   // A hooked agent's turns come from its hooks; counting the poller's too would double every turn.
+  // Claude has no hook for "resumed after approval": a poll seeing it work again after a block reopens the block notice.
+  if (hooks && status === "working" && s.status === "active" && s.blockedNotified) return "active";
   if (hooks) return (status === "idle" || status === "done") && s.status === "starting" ? "started" : undefined;
   if (status === "working") return s.status !== "active" ? "active" : undefined;
   if (status === "idle" || status === "done") return s.status === "starting" ? "started" : s.status === "active" ? "idle" : undefined;

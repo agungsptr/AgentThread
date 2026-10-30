@@ -45,6 +45,8 @@ export interface Session {
   blockedEarly?: boolean;
   /** A blocked notice was already raised and no active/idle/start has happened since. */
   blockedNotified?: boolean;
+  /** The session itself has signalled active or idle (its agent's hooks work); until then the poller drives its turns. */
+  hooksSeen?: boolean;
   /** Seq of the agent.blocked event that raised that notice (the only one the reactor notifies for). */
   blockedSeq?: number;
   /** When the session was created (session.created ts). */
@@ -443,6 +445,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
         else delete s.polledStart;
         delete s.blockedNotified;
         delete s.blockedSeq;
+        if (ev.type === "session.active" && ev.actor.session === s.id) s.hooksSeen = true;
         s.status = atPrompt ? "idle" : "active";
         s.lastActiveAt = ev.ts;
       }
@@ -454,6 +457,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
         delete s.polledStart;
         delete s.blockedNotified;
         delete s.blockedSeq;
+        if (ev.actor.session === s.id) s.hooksSeen = true;
         if (s.status === "active") {
           s.turns++;
           s.turnsSinceProgress++;

@@ -5,7 +5,7 @@ import { parse } from "yaml";
 import { initProject } from "../../src/project/init.ts";
 import { FAKE_CLAUDE, FAKE_HERDR, fakeHerdrState, isolatedConfigHome, tempRepo, waitFor } from "../helpers.ts";
 
-// No hook signals anywhere in this file: session state comes only from the polled (fake) Herdr status, so its agents are opencode (claude-code has hooks, so the poller leaves its turns to them).
+// No hook signals anywhere in this file: session state comes only from the polled (fake) Herdr status (claude-code with no hook seen: the poller drives its turns).
 const BIN = join(import.meta.dir, "../../bin/agt");
 let root: string;
 let fake: ReturnType<typeof fakeHerdrState>;
@@ -49,7 +49,7 @@ const git = (cwd: string, ...a: string[]) => {
 beforeAll(() => {
   root = tempRepo();
   initProject(root, "shop");
-  writeFileSync(join(root, ".agentthread", "config.yaml"), "herdr:\n  poll_interval: 100ms\nagents:\n  roles:\n    coordinator: { agent: opencode }\n    worker: { agent: opencode }\n");
+  writeFileSync(join(root, ".agentthread", "config.yaml"), "herdr:\n  poll_interval: 100ms\n");
   fake = fakeHerdrState({ tabs: ["w1:t0"], panes: ["w1:p0"] });
   xdg = isolatedConfigHome();
 });

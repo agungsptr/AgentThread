@@ -357,6 +357,8 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
       }
       case "agent.blocked": {
         const s = state.sessions.get(ev.payload.session);
+        // Limitation: state is the post-batch state, so two blocked events in one batch notify once (the first), and a block
+        // raised and cleared inside one batch is not seen at all.
         // Only the event that raised the flag notifies: a repeat with no active/idle in between is the same block.
         if (s && isLive(s) && s.blockedSeq !== ev.seq) break;
         if (s && isLive(s) && s.role === "worker") {
