@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
+import { adapterFor } from "../agents/adapters.ts";
 import { configWarnings } from "../agents/roles.ts";
 import type { SpawnJob } from "../agents/spawn-job.ts";
 import { handle, type Effect } from "../commands/handler.ts";
@@ -217,7 +218,7 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
         } catch (e) {
           log(`herdr poll failed: ${e instanceof Error ? e.message : String(e)}`);
         }
-        for (const d of listed ? diffAgentStatus({ sessions: [...state.sessions.values()], listed, misses }) : []) {
+        for (const d of listed ? diffAgentStatus({ sessions: [...state.sessions.values()], listed, misses, hooks: (s) => adapterFor(s.agent).capabilities.hooks }) : []) {
           // A polled start is marked, so the agent's own start hook just after it is not taken for a resume.
           await run({ cmd: "session.signal", session: d.session, signal: d.signal, ...(d.signal === "started" ? { source: "poll" } : {}) });
         }

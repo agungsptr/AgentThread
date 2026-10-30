@@ -137,3 +137,46 @@ test("the brief lists open questions with ids; answered ones leave and show thei
   expect(md).toContain("Q1");
   expect(md).toContain("use sqlite");
 });
+
+test("a repeated blocked event with no active or idle between raises no second notice", () => {
+  const s = base();
+  const first = react(s, apply(s, USER, { type: "agent.blocked", thread: "001", payload: { session: W1 } }), ctx());
+  expect(notices(first.events)).toHaveLength(1);
+  expect(notices(react(s, apply(s, USER, { type: "agent.blocked", thread: "001", payload: { session: W1 } }), ctx()).events)).toEqual([]);
+  apply(s, USER, { type: "session.active", thread: "001", payload: { session: W1 } });
+  expect(notices(react(s, apply(s, USER, { type: "agent.blocked", thread: "001", payload: { session: W1 } }), ctx()).events)).toHaveLength(1);
+});
+
+test("notices for a worker with no ticket say so and never contain undefined", () => {
+  const s = base();
+  const W2 = "22222222-2222-4222-8222-222222222222";
+  apply(
+    s,
+    USER,
+    { type: "session.created", thread: "001", payload: { session: W2, role: "worker", agent: "claude-code", name: "w2" } },
+    { type: "session.attached", thread: "001", payload: { session: W2, pane: "w1:p4" } },
+  );
+  const texts: string[] = [];
+  const collect = (evs: StoredEvent[]) => texts.push(...notices(react(s, evs, ctx()).events).map((x) => x.text));
+  collect(apply(s, USER, { type: "agent.blocked", thread: "001", payload: { session: W2 } }));
+  collect(apply(s, { role: "worker", thread: "001", session: W2 }, { type: "question.recorded", thread: "001", payload: { id: "Q1", message: "q" } }));
+  // A worker that was never blocked can stall (a blocked one is reported as blocked instead).
+  const W3 = "33333333-3333-4333-8333-333333333333";
+  apply(
+    s,
+    USER,
+    { type: "session.created", thread: "001", payload: { session: W3, role: "worker", agent: "claude-code", name: "w3" } },
+    { type: "session.attached", thread: "001", payload: { session: W3, pane: "w1:p5" } },
+  );
+  for (const sig of ["idle", "active", "idle", "active", "idle"] as const) {
+    const type = sig === "idle" ? "agent.idle" : "session.active";
+    collect(apply(s, USER, { type, thread: "001", payload: { session: W3 } } as EventBody));
+  }
+  collect(apply(s, USER, { type: "session.lost", thread: "001", payload: { session: W2, reason: "gone" } }));
+  expect(texts.length).toBeGreaterThanOrEqual(3);
+  for (const x of texts) expect(x).not.toContain("undefined");
+  expect(texts[0]).toStartWith("A worker with no ticket is blocked in pane w1:p4.");
+  expect(texts.some((x) => x.includes("from a worker with no ticket:"))).toBe(true);
+  expect(texts.some((x) => x.startsWith("A worker with no ticket was lost"))).toBe(true);
+  expect(texts.some((x) => x.includes("finished its first turn without running any agt command"))).toBe(true);
+});

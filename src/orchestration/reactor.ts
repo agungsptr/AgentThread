@@ -26,6 +26,13 @@ export interface ReactorContext {
 }
 
 /** Pure follow-ups for freshly applied events: spawns, notifications, deliveries, worker teardown, coordinator rotation, recovery. */
+const NO_TICKET = "a worker with no ticket";
+const cap = (x: string) => x.charAt(0).toUpperCase() + x.slice(1);
+/** A worker in a notice: `<lead> for <ticket>`, or "a worker with no ticket" when it has none. */
+function workerRef(ticket: string | undefined, lead: string, noun = ""): string {
+  return ticket ? `${lead} for ${noun}${ticket}` : NO_TICKET;
+}
+
 export function react(state: State, events: StoredEvent[], ctx: ReactorContext): { events: EventBody[]; effects: Effect[] } {
   const out: EventBody[] = [];
   const effects: Effect[] = [];
@@ -219,7 +226,8 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
           const k = t.tickets.find((x) => x.id === s.ticket);
           const release = k?.status === "in_progress" && k.assignee === s.id;
           if (release) out.push({ type: "ticket.released", thread: t.id, payload: { ticket: k.id, reason: "worker session lost" } });
-          notify(coordinatorToNotify(t.id), release ? `Worker for ${s.ticket} was lost; the ticket is open again.` : `Worker for ${s.ticket} was lost.`);
+          const w = cap(workerRef(s.ticket, "worker"));
+          notify(coordinatorToNotify(t.id), release ? `${w} was lost; the ticket is open again.` : `${w} was lost.`);
           // The released ticket is not open in `state` yet, so this only spawns other queued tickets; the coordinator decides on the released one.
           fillWorkers(t.id);
         }
@@ -246,7 +254,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         const s = state.sessions.get(ev.payload.session);
         const lostSpawn = /^spawn report lost after (.+)$/.exec(ev.payload.reason);
         const text = lostSpawn && s ? `Session ${s.id} (${s.role}) never reported back from its spawn; marked failed after ${lostSpawn[1]}.` : undefined;
-        if (s?.role === "worker") notify(coordinatorToNotify(s.thread), text ?? `Worker for ${s.ticket} failed: ${ev.payload.reason}.`);
+        if (s?.role === "worker") notify(coordinatorToNotify(s.thread), text ?? `${cap(workerRef(s.ticket, "worker"))} failed: ${ev.payload.reason}.`);
         if (s?.role === "coordinator") {
           notify(liveSessions(state, undefined, "main")[0], text ?? `Coordinator for thread ${s.thread} failed: ${ev.payload.reason}.`);
           // A coordinator whose spawn report was lost never started: a fresh one takes over (same brake as an exit loop).
@@ -281,7 +289,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
           const k = t.tickets.find((x) => x.id === s.ticket);
           if (k?.status === "in_progress" && k.assignee === s.id) {
             out.push({ type: "ticket.released", thread: t.id, payload: { ticket: k.id, reason: "worker session ended" } });
-            notify(coordinatorToNotify(t.id), `Worker for ${k.id} ended; the ticket is open again.`);
+            notify(coordinatorToNotify(t.id), `${cap(workerRef(k.id, "worker"))} ended; the ticket is open again.`);
           }
         }
         fillWorkers(s?.thread);
@@ -336,7 +344,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
       case "question.recorded": {
         const s = ev.actor.session ? state.sessions.get(ev.actor.session) : undefined;
         if (s?.role === "worker" && ev.payload.id) {
-          notify(coordinatorToNotify(ev.thread), `Question ${ev.payload.id} from the worker for ticket ${s.ticket ?? ev.actor.ticket}: ${ev.payload.message} Answer with: agt answer ${ev.thread} ${ev.payload.id} "<answer>"`);
+          notify(coordinatorToNotify(ev.thread), `Question ${ev.payload.id} from ${workerRef(s.ticket ?? ev.actor.ticket, "the worker", "ticket ")}: ${ev.payload.message} Answer with: agt answer ${ev.thread} ${ev.payload.id} "<answer>"`);
         }
         break;
       }
@@ -349,9 +357,12 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
       }
       case "agent.blocked": {
         const s = state.sessions.get(ev.payload.session);
+        // Only the event that raised the flag notifies: a repeat with no active/idle in between is the same block.
+        if (s && isLive(s) && s.blockedSeq !== ev.seq) break;
         if (s && isLive(s) && s.role === "worker") {
           const pane = s.pane ?? "unknown";
-          notify(coordinatorToNotify(s.thread), `The worker for ticket ${s.ticket} is blocked in pane ${pane}. Check it, replace it with agt worker spawn ${s.thread} --ticket ${s.ticket}, or ask the user.`);
+          const replace = s.ticket ? `, replace it with agt worker spawn ${s.thread} --ticket ${s.ticket}, or ask the user` : " or ask the user";
+          notify(coordinatorToNotify(s.thread), `${cap(workerRef(s.ticket, "the worker", "ticket "))} is blocked in pane ${pane}. Check it${replace}.`);
         } else if (s && isLive(s) && s.role !== "main") {
           notify(liveSessions(state, undefined, "main")[0], `${s.role} for thread ${s.thread} is waiting for approval in pane ${s.pane ?? "unknown"}.`);
         }

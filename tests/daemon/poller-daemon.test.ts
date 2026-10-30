@@ -34,7 +34,7 @@ const patch = (f: (s: ReturnType<typeof fake.read>) => object) => fake.update(f)
 async function boot() {
   root = tempRepo();
   initProject(root, "demo");
-  writeFileSync(join(root, ".agentthread", "config.yaml"), "herdr:\n  poll_interval: 100ms\n");
+  writeFileSync(join(root, ".agentthread", "config.yaml"), "herdr:\n  poll_interval: 100ms\nagents:\n  roles:\n    coordinator: { agent: opencode }\n");
   fake = fakeHerdrState();
   process.env.FAKE_HERDR_STATE = fake.file;
   daemon = await startDaemon(root, { log: () => {}, launch: () => {} });

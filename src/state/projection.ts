@@ -43,6 +43,10 @@ export interface Session {
   settledTurns?: number;
   /** Herdr reported it blocked before it finished any turn (it got a blocked notice instead). */
   blockedEarly?: boolean;
+  /** A blocked notice was already raised and no active/idle/start has happened since. */
+  blockedNotified?: boolean;
+  /** Seq of the agent.blocked event that raised that notice (the only one the reactor notifies for). */
+  blockedSeq?: number;
   /** When the session was created (session.created ts). */
   createdAt: string;
 }
@@ -437,6 +441,8 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
         const atPrompt = ev.type === "session.started" && (s.status === "starting" || ev.payload.source === "compact" || s.polledStart === true);
         if (ev.type === "session.started" && ev.payload.source === "poll" && s.status === "starting") s.polledStart = true;
         else delete s.polledStart;
+        delete s.blockedNotified;
+        delete s.blockedSeq;
         s.status = atPrompt ? "idle" : "active";
         s.lastActiveAt = ev.ts;
       }
@@ -446,6 +452,8 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
       const s = sessionOf(state, ev.seq, ev.payload.session);
       if (isLive(s)) {
         delete s.polledStart;
+        delete s.blockedNotified;
+        delete s.blockedSeq;
         if (s.status === "active") {
           s.turns++;
           s.turnsSinceProgress++;
@@ -470,7 +478,11 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
     }
     case "agent.blocked": {
       const s = sessionOf(state, ev.seq, ev.payload.session);
-      if (isLive(s)) threadNote(state, ev, `session ${short(s.id)} is waiting for approval`);
+      if (isLive(s) && !s.blockedNotified) {
+        s.blockedNotified = true;
+        s.blockedSeq = ev.seq;
+        threadNote(state, ev, `session ${short(s.id)} is waiting for approval`);
+      }
       if (s.turns === 0) s.blockedEarly = true;
       return true;
     }

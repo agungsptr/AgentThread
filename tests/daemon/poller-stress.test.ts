@@ -22,7 +22,7 @@ afterAll(() => {
 test("busy poll and sweep with a git worktree: stop() resolves promptly", async () => {
   const root = tempRepo();
   initProject(root, "demo");
-  writeFileSync(join(root, ".agentthread", "config.yaml"), "checkpoint:\n  reminder_turns: 1\n");
+  writeFileSync(join(root, ".agentthread", "config.yaml"), "checkpoint:\n  reminder_turns: 1\nagents:\n  roles:\n    coordinator: { agent: opencode }\n");
   const fake = fakeHerdrState();
   process.env.FAKE_HERDR_STATE = fake.file;
   const daemon = await startDaemon(root, { log: () => {}, launch: () => {}, sweepIntervalMs: 50, pollIntervalMs: 50 });
