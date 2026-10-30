@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
-import { renderBrief } from "../../src/render/brief.ts";
+import { capBytes, renderBrief } from "../../src/render/brief.ts";
 import { writeAll } from "../../src/render/write.ts";
 import { project } from "../../src/state/projection.ts";
 import { INIT, stateOf, stored, threadCreated } from "../helpers.ts";
@@ -149,4 +149,40 @@ test("brief: an open question starts with its id, so truncation never drops it",
   const s = stateOf(INIT, threadCreated("001"), { type: "question.recorded", thread: "001", payload: { message: long, id: "Q1" } });
   const line = renderBrief({ thread: s.threads.get("001")! }).split("\n").find((l) => l.includes("(Q1)"));
   expect(line).toMatch(/^- \S+ \(Q1\) why why/);
+});
+
+const BYTES = 16384;
+const must = (md: string) => {
+  expect(Buffer.byteLength(md)).toBeLessThan(BYTES);
+  for (const h of ["## Open questions", "## Git trail", "## How to continue"]) expect(md).toContain(h);
+  expect(md).toContain("Latest progress:");
+  for (const l of md.split("\n").filter((x) => x.startsWith("- ")))
+    expect(Buffer.byteLength(l)).toBeLessThanOrEqual(300);
+};
+const evs = (extra: object[], opts: { title?: string } = {}) =>
+  stateOf(INIT, threadCreated("001", { title: opts.title ?? "T", goal: "g" }), { type: "progress.recorded", thread: "001", payload: { message: "p" } }, ...(extra as any[])).threads.get("001")!;
+const openQs = Array.from({ length: 100 }, () => ({ type: "question.recorded", thread: "001", payload: { message: "é".repeat(1000) } }));
+
+test("brief stays under 16384 bytes: many multibyte open questions", () => {
+  must(renderBrief({ thread: evs(openQs), sessions: [], dir: "/d" }));
+});
+test("brief stays under 16384 bytes: 5000-char title", () => {
+  must(renderBrief({ thread: evs([], { title: "é".repeat(5000) }), sessions: [], dir: "/d" }));
+});
+test("brief stays under 16384 bytes: 50KB handoff and 40 Thai tickets", () => {
+  const tickets = Array.from({ length: 40 }, (_, i) => ({ type: "ticket.created", thread: "001", payload: { ticket: `T${i + 1}`, title: "ก".repeat(300), scope: ["src"] } }));
+  must(renderBrief({ thread: evs([...tickets, { type: "handoff.submitted", thread: "001", payload: { content: "ก".repeat(17000), generated: false } }]), sessions: [], dir: "/d" }));
+});
+test("brief stays under 16384 bytes: answered questions plus open questions", () => {
+  const answered = Array.from({ length: 10 }, (_, i) => [
+    { type: "question.recorded", thread: "001", payload: { id: `A${i}`, message: "é".repeat(1000) } },
+    { type: "question.answered", thread: "001", payload: { question: `A${i}`, answer: "é".repeat(2000) } },
+  ]).flat();
+  must(renderBrief({ thread: evs([...answered, ...openQs]), sessions: [], dir: "/d" }));
+});
+test("capBytes cuts on a UTF-8 boundary", () => {
+  const r = capBytes("é".repeat(10), 8);
+  expect(Buffer.byteLength(r)).toBeLessThanOrEqual(8);
+  expect(r.endsWith("…")).toBe(true);
+  expect(capBytes("abc", 3)).toBe("abc");
 });
