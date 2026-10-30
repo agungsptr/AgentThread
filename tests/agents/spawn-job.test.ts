@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { closeSync, existsSync, fstatSync, mkdtempSync, openSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { decodeJob, encodeJob, launchSpawnJob, runSpawnJob, type SpawnJob } from "../../src/agents/spawn-job.ts";
+import { decodeJob, encodeJob, launchSpawnJob, reportWithRetry, runSpawnJob, type SpawnJob } from "../../src/agents/spawn-job.ts";
 import { HerdrError, type HerdrBridge } from "../../src/herdr/bridge.ts";
 import { waitFor } from "../helpers.ts";
 
@@ -160,4 +160,28 @@ test("agent start in a just-split pane whose shell is not at its prompt yet (age
   await runSpawnJob(JOB, { herdr: b, report: async (c) => void failed.push(c), sleep: async () => {}, busyRetries: 3 });
   expect(calls).toEqual(["start w1:p3", "start w1:p3", "start w1:p3", "start w1:p3", "close w1:p3"]);
   expect(failed).toEqual([{ cmd: "session.failed", session: "s-1", reason: "herdr agent start: agent target pane w1:p3 is not an available shell" }]);
+});
+
+test("reportWithRetry retries a connect error and a shutting-down reply, and stops at the first ok", async () => {
+  const replies: Array<() => { ok: boolean; error?: string }> = [
+    () => { throw new Error("connect ENOENT"); },
+    () => ({ ok: false, error: "daemon is shutting down" }),
+    () => ({ ok: true }),
+    () => { throw new Error("must not be called"); },
+  ];
+  let calls = 0;
+  await reportWithRetry(async () => replies[calls++]!(), { delayMs: 1 });
+  expect(calls).toBe(3);
+});
+
+test("reportWithRetry gives up after the attempts, and never retries another refusal", async () => {
+  let calls = 0;
+  await reportWithRetry(async () => (calls++, { ok: false, error: "unknown session x" }), { delayMs: 1 });
+  expect(calls).toBe(1);
+  calls = 0;
+  await reportWithRetry(async () => { calls++; throw new Error("down"); }, { attempts: 4, delayMs: 1 });
+  expect(calls).toBe(4);
+  calls = 0;
+  await reportWithRetry(async () => (calls++, { ok: false, error: "daemon is shutting down" }), { delayMs: 1 });
+  expect(calls).toBe(20);
 });

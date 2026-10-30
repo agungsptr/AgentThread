@@ -20,6 +20,34 @@ export interface SpawnJob {
 export const encodeJob = (job: SpawnJob): string => Buffer.from(JSON.stringify(job)).toString("base64");
 export const decodeJob = (s: string): SpawnJob => JSON.parse(Buffer.from(s, "base64").toString("utf8")) as SpawnJob;
 
+/**
+ * Sends a spawn report, retrying while the daemon is down or shutting down (it may be restarting). Any other refusal is
+ * final. Gives up quietly after `attempts`; the daemon's sweep then fails the session.
+ */
+export async function reportWithRetry(
+  send: () => Promise<{ ok: boolean; error?: string }>,
+  o: { attempts?: number; delayMs?: number } = {},
+): Promise<void> {
+  const attempts = o.attempts ?? 20;
+  const delayMs = o.delayMs ?? 500;
+  for (let i = 1; i <= attempts; i++) {
+    let error: string;
+    try {
+      const res = await send();
+      if (res.ok) return;
+      error = res.error ?? "unknown error";
+      if (error !== "daemon is shutting down") {
+        console.error(`agt __spawn: ${error}`);
+        return;
+      }
+    } catch (e) {
+      error = `cannot report to daemon: ${e instanceof Error ? e.message : String(e)}`;
+    }
+    if (i === attempts) console.error(`agt __spawn: ${error}`);
+    else await Bun.sleep(delayMs);
+  }
+}
+
 /** Runs in the `agt __spawn` child so the daemon never waits for an agent to boot. */
 /** How often, every BUSY_RETRY_MS, an agent start is retried while the pane's shell is still starting (about 30s). */
 const BUSY_RETRIES = 60;

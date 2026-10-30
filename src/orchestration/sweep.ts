@@ -11,6 +11,14 @@ export function sweep(state: State, now: string, ctx: ReactorContext): { events:
   const events: EventBody[] = [];
   const effects: Effect[] = [];
   const { timeout, fallback_generate } = ctx.config.session.handoff;
+  // A spawn report the daemon never received (it restarted at that moment) would leave the session `starting` forever.
+  const spawnTimeout = ctx.config.session.spawn_timeout;
+  for (const s of liveSessions(state)) {
+    if (s.role === "main" || s.status !== "starting" || s.pane) continue;
+    if (Date.parse(now) - Date.parse(s.resumingAt ?? s.createdAt) > durationMs(spawnTimeout)) {
+      events.push({ type: "session.failed", ...(s.thread ? { thread: s.thread } : {}), payload: { session: s.id, reason: `spawn report lost after ${spawnTimeout}` } } as EventBody);
+    }
+  }
   for (const s of liveSessions(state, undefined, "coordinator")) {
     if (s.status === "starting") continue;
     if (!s.pane) continue; // not attached yet: it cannot have seen a handoff request

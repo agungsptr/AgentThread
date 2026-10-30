@@ -244,8 +244,17 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
       }
       case "session.failed": {
         const s = state.sessions.get(ev.payload.session);
-        if (s?.role === "worker") notify(coordinatorToNotify(s.thread), `Worker for ${s.ticket} failed: ${ev.payload.reason}.`);
-        if (s?.role === "coordinator") notify(liveSessions(state, undefined, "main")[0], `Coordinator for thread ${s.thread} failed: ${ev.payload.reason}.`);
+        const lostSpawn = /^spawn report lost after (.+)$/.exec(ev.payload.reason);
+        const text = lostSpawn && s ? `Session ${s.id} (${s.role}) never reported back from its spawn; marked failed after ${lostSpawn[1]}.` : undefined;
+        if (s?.role === "worker") notify(coordinatorToNotify(s.thread), text ?? `Worker for ${s.ticket} failed: ${ev.payload.reason}.`);
+        if (s?.role === "coordinator") {
+          notify(liveSessions(state, undefined, "main")[0], text ?? `Coordinator for thread ${s.thread} failed: ${ev.payload.reason}.`);
+          // A coordinator whose spawn report was lost never started: a fresh one takes over (same brake as an exit loop).
+          const t = s.thread ? state.threads.get(s.thread) : undefined;
+          if (lostSpawn && t && t.status !== "done" && !coordinatorOf(t.id) && recentReplacements(t.id, ev.ts) < MAX_AUTO_REPLACEMENTS) {
+            replaceCoordinator(s, t, "the previous coordinator never reported back from its spawn");
+          }
+        }
         fillWorkers(s?.thread);
         break;
       }

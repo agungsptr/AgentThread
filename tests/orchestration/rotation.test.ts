@@ -178,7 +178,8 @@ test("sweep is quiet after the rotation and ignores a coordinator that is not th
   const s = withWorker();
   const r = react(s, applyAs(s, "2026-10-11T10:02:00.000Z", COORD, { type: "handoff.submitted", thread: "001", payload: { content: "h", generated: false } }), ctx());
   apply(s, "2026-10-11T10:02:00.000Z", ...r.events);
-  expect(sweep(s, "2026-10-11T11:00:00.000Z", ctx()).events).toEqual([]);
+  // (the never-attached worker and replacement are failed by the spawn rule; that is not what this checks)
+  expect(sweep(s, "2026-10-11T11:00:00.000Z", ctx()).events.filter((e) => e.type !== "session.failed")).toEqual([]);
 
   // a second live coordinator with a pending rotation, behind the acting one
   const t = base();
@@ -189,7 +190,7 @@ test("sweep is quiet after the rotation and ignores a coordinator that is not th
     { type: "session.created", thread: "001", payload: { session: C2, role: "coordinator", agent: "claude-code", name: "c2" } },
     { type: "session.rotation_requested", thread: "001", payload: { session: C2, reason: "context" } },
   );
-  expect(sweep(t, "2026-10-11T11:00:00.000Z", ctx()).events).toEqual([]);
+  expect(sweep(t, "2026-10-11T11:00:00.000Z", ctx()).events.filter((e) => e.type !== "session.failed")).toEqual([]);
 });
 
 test("rotateCoordinator does nothing for a done thread or one without a root pane", () => {
@@ -266,4 +267,51 @@ test("sweep does not rotate by age a parked coordinator with 0 turns, nor one wh
   }
   apply(s, "2026-10-11T10:07:00.000Z", { type: "thread.status_changed", thread: "001", payload: { from: "blocked", to: "in_progress" } });
   expect(sweep(s, "2026-10-12T10:00:00.000Z", ctx()).events).toEqual([{ type: "session.rotation_requested", thread: "001", payload: { session: C, reason: "age" } }]);
+});
+
+const SPAWN_LOST = (session: string) => `Session ${session} (${session === W ? "worker" : "coordinator"}) never reported back from its spawn; marked failed after 3m.`;
+const MAIN = "99999999-9999-4999-8999-999999999999";
+
+test("sweep fails a starting session without a pane after spawn_timeout, workers and coordinators alike", () => {
+  const s = base();
+  apply(s, "2026-10-11T10:01:00.000Z", { type: "session.created", thread: "001", payload: { session: W, role: "worker", agent: "claude-code", name: "w", ticket: "T1" } });
+  expect(sweep(s, "2026-10-11T10:03:59.000Z", ctx()).events).toEqual([]); // 2m59s
+  expect(sweep(s, "2026-10-11T10:04:01.000Z", ctx()).events).toEqual([
+    { type: "session.failed", thread: "001", payload: { session: W, reason: "spawn report lost after 3m" } },
+  ]);
+  // a pane means the spawn reported
+  apply(s, "2026-10-11T10:01:30.000Z", { type: "session.attached", thread: "001", payload: { session: W, pane: "w1:p3" } });
+  expect(sweep(s, "2026-10-11T10:30:00.000Z", ctx()).events).toEqual([]);
+  // a coordinator that never got a pane
+  const t = stateOf(INIT, threadCreated("001", { status: "in_progress" }), { type: "thread.tab_opened", thread: "001", payload: { tab: "w1:t2", rootPane: "w1:p2" } });
+  apply(t, "2026-10-11T10:00:00.000Z", { type: "session.created", thread: "001", payload: { session: C, role: "coordinator", agent: "claude-code", name: "c" } });
+  expect(sweep(t, "2026-10-11T10:02:59.000Z", ctx()).events).toEqual([]);
+  expect(sweep(t, "2026-10-11T10:03:01.000Z", ctx()).events.map((e) => e.type)).toEqual(["session.failed"]);
+});
+
+test("a lost-spawn failure frees the worker slot and notifies the coordinator with the exact text", () => {
+  const s = base();
+  apply(s, "2026-10-11T10:01:00.000Z", { type: "session.created", thread: "001", payload: { session: W, role: "worker", agent: "claude-code", name: "w", ticket: "T1" } });
+  const failed = sweep(s, "2026-10-11T10:05:00.000Z", ctx()).events;
+  const r = react(s, apply(s, "2026-10-11T10:05:00.000Z", ...failed), ctx());
+  expect(s.sessions.get(W)!.status).toBe("failed");
+  expect(notices(r.events, C)).toEqual([SPAWN_LOST(W)]);
+});
+
+test("a lost-spawn failure of a coordinator notifies main and spawns a replacement", () => {
+  const s = base();
+  apply(
+    s,
+    "2026-10-11T10:00:00.000Z",
+    { type: "session.created", thread: "001", payload: { session: MAIN, role: "main", agent: "claude-code", name: "m" } },
+    { type: "session.attached", thread: "001", payload: { session: MAIN, pane: "w1:p0" } },
+  );
+  const C2 = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  apply(s, "2026-10-11T10:00:00.000Z", { type: "session.failed", thread: "001", payload: { session: C, reason: "x" } }, { type: "session.created", thread: "001", payload: { session: C2, role: "coordinator", agent: "claude-code", name: "c2" } });
+  const failed = sweep(s, "2026-10-11T10:05:00.000Z", ctx()).events;
+  expect(failed).toEqual([{ type: "session.failed", thread: "001", payload: { session: C2, reason: "spawn report lost after 3m" } }]);
+  const r = react(s, apply(s, "2026-10-11T10:05:00.000Z", ...failed), ctx());
+  expect(notices(r.events, MAIN)).toEqual([`Session ${C2} (coordinator) never reported back from its spawn; marked failed after 3m.`]);
+  expect(r.events.some((e) => e.type === "session.created" && e.payload.role === "coordinator" && e.payload.replaces === C2)).toBe(true);
+  expect(r.effects.map((e) => e.kind)).toContain("agent.spawn");
 });

@@ -8,7 +8,7 @@ import { agentEnv } from "../agents/claude.ts";
 import { adapterFor, agentBin } from "../agents/adapters.ts";
 import { configWarnings, installWarnings, roleAgent, trustWarning } from "../agents/roles.ts";
 import { systemPrompt } from "../agents/prompts.ts";
-import { decodeJob, loggedArgv, runSpawnJob } from "../agents/spawn-job.ts";
+import { decodeJob, loggedArgv, reportWithRetry, runSpawnJob } from "../agents/spawn-job.ts";
 import { contextTokensFromTranscript } from "../agents/transcript.ts";
 import { isAlive, request } from "../daemon/client.ts";
 import { startDaemon } from "../daemon/server.ts";
@@ -99,14 +99,7 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
       const socket = paths(job.root).socket;
       await runSpawnJob(job, {
         herdr,
-        report: async (command) => {
-          try {
-            const res = await request(socket, { op: "command", command, actor: { role: "user" } });
-            if (!res.ok) console.error(`agt __spawn: ${res.error}`);
-          } catch (e) {
-            console.error(`agt __spawn: cannot report to daemon: ${e instanceof Error ? e.message : String(e)}`);
-          }
-        },
+        report: (command) => reportWithRetry(() => request(socket, { op: "command", command, actor: { role: "user" } })),
       });
       return 0;
     }

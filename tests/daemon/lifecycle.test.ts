@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SpawnJob } from "../../src/agents/spawn-job.ts";
@@ -131,4 +132,17 @@ test("tab env carries CLAUDE_CONFIG_DIR", async () => {
   await boot();
   const create = fake.read().calls.find((x) => x[0] === "tab" && x[1] === "create")!;
   expect(create).toContain(`CLAUDE_CONFIG_DIR=${claudeDir}`);
+});
+
+test("a spawn report lost across a daemon restart: the sweep fails the starting session", async () => {
+  await boot("session:\n  spawn_timeout: 30s\n", 200);
+  const c = await coordinator(); // its fake spawn job split the pane but never reports
+  expect((await events()).some((e) => e.type === "session.failed")).toBe(false); // young: left alone
+  await daemon.stop(); // the daemon restarts between the job's split and its report
+  const db = new Database(paths(root).db);
+  db.run("UPDATE events SET ts = '2020-01-01T00:00:00.000Z' WHERE type = 'session.created' AND payload LIKE ?", [`%${c}%`]);
+  db.close();
+  daemon = await startDaemon(root, { log: () => {}, launch: (j) => void jobs.push(j), sweepIntervalMs: 200 });
+  await waitFor(async () => (await events()).some((e) => e.type === "session.failed"), 5000);
+  expect((await events()).find((e) => e.type === "session.failed")!.payload).toEqual({ session: c, reason: "spawn report lost after 30s" });
 });
