@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig } from "../../src/config/config.ts";
-import { SETUP_HINT, detectAgents, needsSetup, runSetup, setupIfNeeded } from "../../src/project/setup.ts";
+import { SETUP_HINT, detectAgents, needsSetup, initCommand, runSetup, setupIfNeeded } from "../../src/project/setup.ts";
 import { isolatedConfigHome, tempRepo } from "../helpers.ts";
 
 const script = (answers: string[]) => {
@@ -171,16 +171,44 @@ test("an opencode effort with an empty model re-asks the model", async () => {
   expect(loadConfig(root, env()).agents.roles.main).toEqual({ agent: "opencode", model: "prov/model", effort: "high" });
 });
 
-test("setupIfNeeded on a TTY with no agent installed (soft) prints a hint and returns", async () => {
+const NO_BINS = { AGT_CLAUDE_BIN: "/nonexistent/a", AGT_OPENCODE_BIN: "/nonexistent/b", AGT_CODEX_BIN: "/nonexistent/c", AGT_OMP_BIN: "/nonexistent/d" };
+const HINT = "no supported agent found; install one (see README) and run agt setup";
+
+test("initCommand on a TTY with no agent prints initialized, then the hint, and returns 0", async () => {
   const root = tempRepo();
-  const bins = { AGT_CLAUDE_BIN: "/nonexistent/a", AGT_OPENCODE_BIN: "/nonexistent/b", AGT_CODEX_BIN: "/nonexistent/c", AGT_OMP_BIN: "/nonexistent/d" };
+  const lines: string[] = [];
+  const [ol, oe] = [console.log, console.error];
+  console.log = (m: string) => void lines.push(`out:${m}`);
+  console.error = (m: string) => void lines.push(`err:${m}`);
+  let code: number;
+  try {
+    code = await initCommand(root, { ...env(), ...NO_BINS }, "x", true);
+  } finally {
+    [console.log, console.error] = [ol, oe];
+  }
+  expect(code).toBe(0);
+  expect(lines).toEqual(["out:initialized", `err:${HINT}`]);
+});
+
+test("setupIfNeeded (agt start) on a TTY with no agent prints the hint and continues instead of prompting", async () => {
+  const root = tempRepo();
   const errs: string[] = [];
   const orig = console.error;
   console.error = (m: string) => void errs.push(String(m));
   try {
-    await setupIfNeeded(root, { ...env(), ...bins }, true, true);
+    await setupIfNeeded(root, { ...env(), ...NO_BINS }, true);
   } finally {
     console.error = orig;
   }
-  expect(errs).toEqual(["no supported agent found; install one (see README) and run agt setup"]);
+  expect(errs).toEqual([HINT]);
+});
+
+test("a comment-only config.yaml keeps its comment after setup", async () => {
+  const root = tempRepo();
+  mkdirSync(join(root, ".agentthread"), { recursive: true });
+  writeFileSync(cfg(root), "# my notes\n");
+  const { ask } = script(["", "", "", "", "", "", "", "", "", "", ""]);
+  await runSetup({ root, ask, detected: ["claude-code"] });
+  expect(readFileSync(cfg(root), "utf8")).toContain("# my notes");
+  expect(loadConfig(root, env()).agents.roles.main).toEqual({ agent: "claude-code" });
 });

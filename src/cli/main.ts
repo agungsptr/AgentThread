@@ -15,8 +15,7 @@ import { startDaemon } from "../daemon/server.ts";
 import { configHash, loadConfig } from "../config/config.ts";
 import { AGENT_KINDS, ROLES, SESSION_SIGNALS, type Actor, type AgentKind, type Layout, type StoredEvent } from "../domain/types.ts";
 import { HerdrCli, shellQuote } from "../herdr/bridge.ts";
-import { initProject } from "../project/init.ts";
-import { setupIfNeeded, setupOnTty } from "../project/setup.ts";
+import { initCommand, setupIfNeeded, setupOnTty } from "../project/setup.ts";
 import { paths } from "../project/paths.ts";
 import { findRoot } from "../project/root.ts";
 
@@ -106,10 +105,7 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
     case "init": {
       const { values } = parse(argv.slice(1), { name: { type: "string" } });
       const initRoot = resolve(env.AGT_ROOT ?? cwd);
-      initProject(initRoot, values.name as string | undefined);
-      console.log("initialized");
-      await setupIfNeeded(initRoot, env, !!process.stdin.isTTY, true);
-      return 0;
+      return initCommand(initRoot, env, values.name as string | undefined);
     }
     case "setup": {
       if (!process.stdin.isTTY) throw new UsageError("agt setup needs a terminal; edit .agentthread/config.yaml instead");

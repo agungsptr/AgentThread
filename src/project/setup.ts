@@ -4,6 +4,7 @@ import { createInterface } from "node:readline/promises";
 import { isMap, parse, parseDocument } from "yaml";
 import { adapterFor, agentBin } from "../agents/adapters.ts";
 import { EFFORTS } from "../agents/roles.ts";
+import { initProject } from "./init.ts";
 import { configPaths, deepMerge, durationMs } from "../config/config.ts";
 import { AGENT_KINDS, type AgentKind } from "../domain/types.ts";
 
@@ -133,15 +134,22 @@ export async function setupOnTty(root: string, env: Env): Promise<void> {
   }
 }
 
-/** For `agt init` / `agt start`: run setup on a TTY, else print the hint and carry on with defaults. */
-export async function setupIfNeeded(
-  root: string,
-  env: Env,
-  isTTY: boolean = !!process.stdin.isTTY,
-  soft = false,
-): Promise<void> {
+/**
+ * For `agt init` / `agt start`: run setup on a TTY, else print the hint and carry on with defaults. With no agent
+ * installed there is nothing to choose, so a TTY gets the no-agent hint and the defaults too (never a wizard that
+ * cannot finish).
+ */
+export async function setupIfNeeded(root: string, env: Env, isTTY: boolean = !!process.stdin.isTTY): Promise<void> {
   if (!needsSetup(root, env)) return;
-  if (isTTY && soft && detectAgents(Bun.which, env).length === 0) console.error(NO_AGENT_HINT);
-  else if (isTTY) await setupOnTty(root, env);
-  else console.error(SETUP_HINT);
+  if (!isTTY) console.error(SETUP_HINT);
+  else if (detectAgents(Bun.which, env).length === 0) console.error(NO_AGENT_HINT);
+  else await setupOnTty(root, env);
+}
+
+/** `agt init`: create the project, print `initialized`, then offer setup. Init succeeds even with no agent installed. */
+export async function initCommand(root: string, env: Env, name: string | undefined, isTTY: boolean = !!process.stdin.isTTY): Promise<number> {
+  initProject(root, name);
+  console.log("initialized");
+  await setupIfNeeded(root, env, isTTY);
+  return 0;
 }
