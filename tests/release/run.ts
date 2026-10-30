@@ -27,7 +27,8 @@ import {
   stopAllServers,
   scratchRepo,
   startHerdr,
-  TimeoutError,
+  raceScenario,
+  trustGate,
   waitForEvent,
   watchTrustDialogs,
   writeConfig,
@@ -216,18 +217,19 @@ async function runRow(sc: Scenario): Promise<{ status: "PASS" | "FAIL"; reason?:
     };
     // A fixed-root row's folder is trusted once by the user; a dialog there means that step is missing, so say how.
     const trustCheck = sc.scratchAt ? MIXED_MAIN_TRUST : "no trust dialog in a coordinator/worker pane";
-    watcher = watchTrustDialogs(server.herdr, () => h.mainPane, note, (pane) => h.check(trustCheck, false, `trust dialog in pane ${pane}`));
+    // The dialog is left unanswered, so the row ends at once (teardown as on a timeout) instead of at its deadline.
+    const trustAbort = trustGate();
+    watcher = watchTrustDialogs(server.herdr, () => h.mainPane, note, (pane) => {
+      h.check(trustCheck, false, `trust dialog in pane ${pane}`);
+      trustAbort.fail(pane, trustCheck);
+    });
     const manager = sc.manager !== false;
     await h.startAgt(manager ? [] : ["--no-manager"], sc.startEnv);
     const layout = await h.waitFor("layout.registered", () => true, 60_000, "agt start registered the layout");
     h.check("harness: the layout names the isolated Herdr socket", layout.payload.herdrSocket === server.socket, layout.payload.herdrSocket);
     // Main is a bare process in its pane: answer its first-run trust dialog by screen as well.
     if (manager) void answerTrustIn(server.herdr, h.mainPane, 60_000, () => {}).then((a) => a && note(`answered the trust dialog in main's pane ${h.mainPane}`));
-    let timer: Timer | undefined;
-    await Promise.race([
-      sc.run(h),
-      new Promise((_, reject) => (timer = setTimeout(() => reject(new TimeoutError(`scenario timed out after ${values.timeout ?? "20m"}`)), deadline - Date.now()))),
-    ]).finally(() => clearTimeout(timer));
+    await raceScenario(sc.run(h), trustAbort.promise, deadline - Date.now(), `scenario timed out after ${values.timeout ?? "20m"}`);
   } catch (e) {
     failure = e instanceof Error ? e.message : String(e);
     log(`[${sc.id}] error: ${failure}`);

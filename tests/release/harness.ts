@@ -204,6 +204,12 @@ export const MIXED_MAIN_ROOT = join(homedir(), ".cache", "agt-e2e", "mixed-main"
 /** The check a coordinator/worker trust dialog fails in the fixed-root row: what the user has to do once. */
 export const MIXED_MAIN_TRUST = "trust the e2e folder once: cd ~/.cache/agt-e2e/mixed-main && claude, then accept the trust prompt and exit";
 
+/** How the fixed scratch root is named in messages (the user's own spelling of it). */
+const FIXED_LABEL = "~/.cache/agt-e2e/mixed-main";
+
+/** Written into the fixed scratch root after every setup: a folder holding it was made by the harness. */
+export const FIXED_MARKER = ".agt-e2e-fixed";
+
 /** True only for exactly the fixed scratch root (as given or resolved), never for anything below or beside it. */
 function isFixedScratch(dir: string): boolean {
   const r = resolve(dir);
@@ -215,10 +221,27 @@ function isFixedScratch(dir: string): boolean {
   }
 }
 
-/** Removes every entry inside the fixed scratch root and keeps the directory itself (its path is what is trusted). */
-function emptyFixedScratch(dir: string): void {
-  if (!isFixedScratch(dir)) throw new Error(`refusing to empty ${dir}`);
-  for (const name of readdirSync(dir)) rmSync(join(dir, name), { recursive: true, force: true });
+/**
+ * Empties a fixed scratch root and keeps the directory itself (its path is what the user trusted). It deletes files,
+ * so it refuses: a missing folder (the one-time trust step was not done), a symlink, and a folder holding anything but
+ * the user's `git init` (`.git`) unless the harness marker shows a previous run made it.
+ */
+export function prepareFixedScratch(dir: string): void {
+  if (!existsSync(dir) && !isSymlink(dir)) {
+    throw new Error(`${FIXED_LABEL} does not exist; one time: mkdir -p ${FIXED_LABEL} && cd ${FIXED_LABEL} && git init && claude, then accept the trust prompt and exit`);
+  }
+  if (isSymlink(dir)) throw new Error(`${FIXED_LABEL} is a symlink; refusing to empty it`);
+  const names = readdirSync(dir);
+  if (!names.includes(FIXED_MARKER) && names.some((n) => n !== ".git")) throw new Error(`${FIXED_LABEL} has unexpected files; it must only be the e2e folder`);
+  for (const name of names) rmSync(join(dir, name), { recursive: true, force: true });
+}
+
+function isSymlink(p: string): boolean {
+  try {
+    return lstatSync(p).isSymbolicLink();
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -229,9 +252,8 @@ export async function scratchRepo(hints: string[] = [], at?: string): Promise<st
   let dir: string;
   if (at !== undefined) {
     if (resolve(at) !== MIXED_MAIN_ROOT) throw new Error(`a fixed scratch root must be ${MIXED_MAIN_ROOT}: ${at}`);
-    mkdirSync(at, { recursive: true });
+    prepareFixedScratch(at); // checked before realpath, so a symlink is refused rather than followed
     dir = realpathSync(at);
-    emptyFixedScratch(dir);
   } else dir = realpathSync(mkdtempSync(join(tmpdir(), TEMP_PREFIX)));
   cpSync(FIXTURE, dir, { recursive: true });
   // Template files keep their real name out of this repo's `bun test` patterns.
@@ -254,6 +276,11 @@ export async function scratchRepo(hints: string[] = [], at?: string): Promise<st
     const r = await spawnAsync("git", ["-C", dir, ...args], cleanEnv(), 15_000);
     if (r.exitCode !== 0) throw new Error(`git ${args[0]} failed in ${dir}: ${r.stderr}`);
   }
+  if (at !== undefined) {
+    // Marks the folder as the harness's for the next run's emptying; excluded so no agent ever commits it.
+    writeFileSync(join(dir, FIXED_MARKER), "made by tests/release/harness.ts; emptied at the start of every run\n");
+    appendFileSync(join(dir, ".git", "info", "exclude"), `\n/${FIXED_MARKER}\n`);
+  }
   return dir;
 }
 
@@ -266,11 +293,16 @@ const XDG_PREFIX = "agt-e2e-xdg-";
  */
 export function rowConfigHome(): string {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), XDG_PREFIX)));
-  const real = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
-  if (existsSync(real)) {
-    for (const name of readdirSync(real)) if (name !== "agentthread") symlinkSync(join(real, name), join(dir, name));
+  try {
+    const real = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
+    if (existsSync(real)) {
+      for (const name of readdirSync(real)) if (name !== "agentthread") symlinkSync(join(real, name), join(dir, name));
+    }
+    return dir;
+  } catch (e) {
+    removeConfigHome(dir); // the caller never gets the path, so it could not remove it
+    throw e;
   }
-  return dir;
 }
 
 export function removeConfigHome(dir: string): void {
@@ -357,7 +389,7 @@ const TRUST = /trust this folder|Do you trust the files/i;
  * it. Every other dialog is left alone (a blocked worker is a scenario's subject). Returns the panes it answered.
  */
 export function watchTrustDialogs(
-  herdr: Herdr,
+  herdr: Pick<Herdr, "agents" | "run">,
   mainPane: () => string,
   log: (m: string) => void,
   foreign: (pane: string) => void,
@@ -391,6 +423,25 @@ export function watchTrustDialogs(
     }
   })();
   return { stop: () => void (stopped = true), answered };
+}
+
+/**
+ * Ends a row as soon as the trust watcher sees a coordinator/worker trust dialog: it is left unanswered, so waiting on
+ * would only burn the row's timeout. `promise` never resolves; `fail` rejects it once.
+ */
+export function trustGate(): { promise: Promise<never>; fail(pane: string, check: string): void } {
+  let reject!: (e: Error) => void;
+  const promise = new Promise<never>((_, r) => (reject = r));
+  promise.catch(() => {}); // it may fail before anyone races it
+  return { promise, fail: (pane, check) => reject(new Error(`trust dialog in coordinator/worker pane ${pane}: ${check}`)) };
+}
+
+/** Runs a scenario against its deadline and the trust gate; whichever settles first decides. */
+export async function raceScenario(run: Promise<unknown>, gate: Promise<never>, msLeft: number, timeoutMessage: string): Promise<void> {
+  let timer: Timer | undefined;
+  await Promise.race([run, gate, new Promise((_, reject) => (timer = setTimeout(() => reject(new TimeoutError(timeoutMessage)), msLeft)))]).finally(() =>
+    clearTimeout(timer),
+  );
 }
 
 /** Main's pane may host a bare process Herdr has not recognized yet; the trust dialog there is found by screen. */
@@ -493,7 +544,7 @@ export async function cleanupProcesses(root: string, log: (m: string) => void, o
 }
 
 export function removeScratch(root: string): void {
-  if (isFixedScratch(root)) return emptyFixedScratch(root);
+  if (isFixedScratch(root)) return prepareFixedScratch(MIXED_MAIN_ROOT);
   if (!root.includes(TEMP_PREFIX)) throw new Error(`refusing to remove ${root}`);
   rmSync(root, { recursive: true, force: true });
 }

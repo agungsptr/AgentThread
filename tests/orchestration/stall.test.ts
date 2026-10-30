@@ -233,11 +233,11 @@ const emittedAllowlisted = (src: string) => [...src.matchAll(/type:\s*"([a-z_.]+
 
 // Old logs credit a session by event type alone, which holds only while no follow-up (reactor, sweep, effect) emits an
 // allowlisted type: one that did would mark every session it follows as authored and hide a stall.
-test("no allowlisted command-output type is emitted by the reactor, the sweep or the effects", () => {
+test("no allowlisted command-output type is emitted by the reactor, the sweep, the session helpers or the effects", () => {
   expect(emittedAllowlisted('{ type: "ticket.created", payload: {} } { type: "notice.queued" }')).toEqual(["ticket.created"]);
   expect(COMMAND_OUTPUT_TYPES.size).toBeGreaterThan(0);
   const src = join(import.meta.dir, "../../src");
-  for (const f of ["orchestration/reactor.ts", "orchestration/sweep.ts", "daemon/effects.ts"]) {
+  for (const f of ["orchestration/reactor.ts", "orchestration/sweep.ts", "orchestration/sessions.ts", "daemon/effects.ts"]) {
     expect([f, emittedAllowlisted(readFileSync(join(src, f), "utf8"))]).toEqual([f, []]);
   }
 });

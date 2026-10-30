@@ -23,16 +23,20 @@ tickets), never on what a model writes.
   default model. `AGT_E2E_EFFORT_OPENCODE` needs `AGT_E2E_MODEL_OPENCODE` (an OpenCode effort is a variant of a model).
 - Every row's `agt` runs with its own `XDG_CONFIG_HOME`: a temp dir linking every entry of your `~/.config` except
   `agentthread`, so your own `~/.config/agentthread/config.yaml` never merges into a row's config.
-- Claude Code asks once per new folder whether you trust it. Each row's scratch repo is a new temp folder, so the
-  harness answers that dialog for the repo root as you would (worktrees below it inherit the trust). Your Claude
-  config therefore gains a trusted-folder entry per row's temp path. The harness answers it only in main's pane: a
-  trust dialog in a coordinator or worker pane is recorded as a failed check (`no trust dialog in a coordinator/worker
-  pane`) and left unanswered, so the row fails on its own instead of the harness masking it.
+- Claude Code asks once per new folder whether you trust it. Each row's scratch repo is a new temp folder, so in a
+  row whose main is Claude Code the harness answers that dialog in main's pane for the repo root, as you would
+  (worktrees below it inherit the trust). Only those rows, the ones whose main is Claude Code, add a trusted-folder
+  entry to your Claude config, one per row's temp path. The harness never answers the dialog anywhere else: a trust
+  dialog in a coordinator or worker pane fails the check `no trust dialog in a coordinator/worker pane` and ends the
+  row at once, with the usual teardown, instead of waiting for its timeout.
 - One time, for `happy-mixed-main` (main is not Claude Code, so nothing in the row trusts the folder for its Claude Code
   coordinator and worker): `mkdir -p ~/.cache/agt-e2e/mixed-main && cd ~/.cache/agt-e2e/mixed-main && git init && claude`,
-  then accept the trust prompt and exit. The harness never answers that dialog for you; without this step the row
-  fails with `trust the e2e folder once: cd ~/.cache/agt-e2e/mixed-main && claude, then accept the trust prompt and
-  exit`.
+  then accept the trust prompt and exit. Without this step the row fails at once: with the folder missing, it fails
+  with that instruction; with the folder untrusted, it fails with `trust the e2e folder once: cd
+  ~/.cache/agt-e2e/mixed-main && claude, then accept the trust prompt and exit`. Each run empties the folder, keeping
+  the folder itself, and writes a `.agt-e2e-fixed` marker into it. Before emptying, the harness refuses a symlink
+  (`… is a symlink; refusing to empty it`) and a folder holding anything but `.git`, unless the marker is there
+  (`… has unexpected files; it must only be the e2e folder`).
 
 Real runs cost money: every row runs main (except rows that create the thread as the user), a coordinator and 2–3
 workers on a small task. A full run is roughly 23 rows of 5–20 minutes each.
