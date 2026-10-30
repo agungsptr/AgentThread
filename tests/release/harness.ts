@@ -286,25 +286,26 @@ export type EventOf<T extends StoredEvent["type"]> = StoredEvent extends infer E
 
 export class TimeoutError extends Error {}
 
-/** Polls the event log until an event of `type` matches `pred`. */
+/** Polls the event log until an event of `type` (or of any of several types) matches `pred`. */
 export async function waitForEvent<T extends StoredEvent["type"]>(
   root: string,
-  type: T,
+  type: T | readonly T[],
   pred: (e: EventOf<T>, all: StoredEvent[]) => boolean = () => true,
   timeoutMs = 120_000,
   what = "",
 ): Promise<EventOf<T>> {
   const until = Date.now() + timeoutMs;
+  const types: readonly string[] = Array.isArray(type) ? type : [type];
   let all: StoredEvent[] = [];
   for (;;) {
     all = await events(root);
-    const hit = all.find((e) => e.type === type && pred(e as EventOf<T>, all));
+    const hit = all.find((e) => types.includes(e.type) && pred(e as EventOf<T>, all));
     if (hit) return hit as EventOf<T>;
     if (Date.now() > until) break;
     await Bun.sleep(2_000);
   }
   const tail = all.slice(-12).map((e) => `${e.seq} ${e.type}${e.thread ? ` ${e.thread}` : ""}`).join(", ");
-  throw new TimeoutError(`timed out after ${Math.round(timeoutMs / 1000)}s waiting for ${type}${what ? ` (${what})` : ""}; last events: ${tail}`);
+  throw new TimeoutError(`timed out after ${Math.round(timeoutMs / 1000)}s waiting for ${types.join(" or ")}${what ? ` (${what})` : ""}; last events: ${tail}`);
 }
 
 /** Acts as the user typing into main's pane: `herdr agent prompt`. */
@@ -316,9 +317,9 @@ const TRUST = /trust this folder|Do you trust the files/i;
 
 /**
  * Answers Claude Code's one-time workspace-trust dialog in main's pane, as the user would once per project. A trust
- * dialog in any other pane (a coordinator or worker) is a product failure: `foreign` is told once per pane, and the
- * dialog is answered anyway so the row can go on. Every other dialog is left alone (a blocked worker is a scenario's
- * subject). Returns the panes it answered.
+ * dialog in any other pane (a coordinator or worker) is a product failure: `foreign` is told once per pane and the
+ * dialog is left in place, so the row fails on its own (by that check or by timeout) instead of the harness masking
+ * it. Every other dialog is left alone (a blocked worker is a scenario's subject). Returns the panes it answered.
  */
 export function watchTrustDialogs(
   herdr: Herdr,
@@ -334,11 +335,14 @@ export function watchTrustDialogs(
       try {
         for (const a of await herdr.agents()) {
           if (a.agent !== "claude" || a.agent_status !== "blocked") continue;
+          if (a.pane_id !== mainPane() && reported.has(a.pane_id)) continue;
           const screen = (await herdr.run(["pane", "read", a.pane_id, "--source", "visible"])).stdout;
           if (!TRUST.test(screen)) continue;
-          if (a.pane_id !== mainPane() && !reported.has(a.pane_id)) {
+          if (a.pane_id !== mainPane()) {
             reported.add(a.pane_id);
             foreign(a.pane_id);
+            log(`left the Claude Code workspace-trust dialog in ${a.pane_id} unanswered: only main's pane is answered`);
+            continue;
           }
           // The dialog's cursor starts on "No, exit"; the second option trusts the folder.
           await herdr.run(["pane", "send-keys", a.pane_id, "down"]);

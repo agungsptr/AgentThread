@@ -194,7 +194,8 @@ export function edgeScenarios(): Scenario[] {
         const tab = (await h.events()).filter((e): e is EventOf<"thread.tab_opened"> => e.type === "thread.tab_opened" && e.thread === thread).at(-1)!.payload.tab;
         const before = (await h.events()).at(-1)!.seq;
         await h.herdr.ok(["tab", "close", tab]);
-        await h.waitFor("session.ended", (e, all) => sessionsOf(all, thread, "coordinator").some((c) => c.payload.session === e.payload.session), 60_000, "coordinator ended with its tab");
+        // Closing the tab takes the coordinator's pane with it: the daemon may record that as ended or as lost.
+        await h.waitFor(["session.ended", "session.lost"], (e, all) => sessionsOf(all, thread, "coordinator").some((c) => c.payload.session === e.payload.session), 60_000, "coordinator ended or lost with its tab");
         // agt start reconciles: the missing tab is reopened and a coordinator starts from brief.md.
         await h.startAgt(["--no-manager"]);
         const reopened = await h.waitFor("thread.tab_opened", (e) => e.thread === thread && e.seq > before, 120_000, "tab reopened");

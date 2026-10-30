@@ -49,6 +49,8 @@ TUI's onboarding shows a directory-trust prompt for a project without a trust le
   `-c 'projects."<path>".trust_level=…'` breaks on any dot in the path (`.worktrees`). The adapter passes the whole
   table instead, `-c 'projects={"<root>"={trust_level="trusted"},…}'`; the CLI layer is merged into the loaded config
   (`merge_toml_values`), so the user's other project entries stay. Not yet seen in a release run.
+- The table also holds the realpath of `<root>` and of the worktree when it differs from the given path (`/tmp` is
+  `/private/tmp` on macOS), so a trust lookup by either spelling matches.
 
 ### Push deny rules (spec §12.9)
 No agent pushes; the vendors' own rules say so in both autonomy modes:

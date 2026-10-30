@@ -167,7 +167,7 @@ export function actorSession(state: State, actor: Actor): string | undefined {
  * Event types only an agt command produces (never the reactor or an effect), for logs written before commands were
  * marked `via: "command"`.
  */
-const COMMAND_OUTPUT_TYPES: ReadonlySet<string> = new Set([
+export const COMMAND_OUTPUT_TYPES: ReadonlySet<string> = new Set([
   "thread.status_changed", "ticket.created", "ticket.claimed", "ticket.completed", "ticket.blocked", "ticket.reopened",
   "log.appended", "decision.recorded", "note.recorded", "progress.recorded", "question.recorded", "question.answered",
   "worker.queued",

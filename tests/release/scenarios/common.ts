@@ -20,7 +20,7 @@ export interface H {
   /** agt that must exit 0; returns stdout. */
   agtOk(args: string[], env?: Record<string, string>): Promise<string>;
   events(): Promise<StoredEvent[]>;
-  waitFor<T extends StoredEvent["type"]>(type: T, pred?: (e: EventOf<T>, all: StoredEvent[]) => boolean, timeoutMs?: number, what?: string): Promise<EventOf<T>>;
+  waitFor<T extends StoredEvent["type"]>(type: T | readonly T[], pred?: (e: EventOf<T>, all: StoredEvent[]) => boolean, timeoutMs?: number, what?: string): Promise<EventOf<T>>;
   /** Types into main's pane as the user. */
   say(text: string): Promise<void>;
   /** Stops the isolated Herdr server and starts it again under the same session (panes and agents are gone). */

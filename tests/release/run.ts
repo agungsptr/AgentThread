@@ -130,9 +130,10 @@ async function runRow(sc: Scenario): Promise<{ status: "PASS" | "FAIL"; reason?:
   };
   let server: HerdrServer | undefined;
   let root: string | undefined;
-  // Every agt call of the row (and the daemon and main that agt start launches) reads this XDG_CONFIG_HOME.
-  const xdg = rowConfigHome();
-  const withXdg = (env: Record<string, string> = {}) => ({ XDG_CONFIG_HOME: xdg, ...env });
+  // Every agt call of the row (and the daemon and main that agt start launches) reads this XDG_CONFIG_HOME. It is made
+  // inside the row's try, so a failure to make it fails the row (with its teardown) instead of the whole run.
+  let xdg: string | undefined;
+  const withXdg = (env: Record<string, string> = {}) => ({ ...(xdg ? { XDG_CONFIG_HOME: xdg } : {}), ...env });
   let watcher: ReturnType<typeof watchTrustDialogs> | undefined;
   let failure: string | undefined;
   let cleaning: Promise<void> | undefined;
@@ -142,10 +143,12 @@ async function runRow(sc: Scenario): Promise<{ status: "PASS" | "FAIL"; reason?:
       // The daemon first (it would react to the agents vanishing), then Herdr with every pane, then any straggler.
       if (root) await cleanupProcesses(root, note, { sweepCwd: false }).catch((e) => note(`cleanup: ${e}`));
       if (server) await server.stop().catch((e) => note(`herdr stop: ${e}`));
-      try {
-        removeConfigHome(xdg);
-      } catch (e) {
-        note(`removing ${xdg}: ${e}`);
+      if (xdg) {
+        try {
+          removeConfigHome(xdg);
+        } catch (e) {
+          note(`removing ${xdg}: ${e}`);
+        }
       }
       if (root) {
         const leaked = await cleanupProcesses(root, note).catch((e) => (note(`cleanup: ${e}`), [] as string[]));
@@ -156,6 +159,7 @@ async function runRow(sc: Scenario): Promise<{ status: "PASS" | "FAIL"; reason?:
   teardown = cleanup;
   const deadline = Date.now() + timeoutMs;
   try {
+    xdg = rowConfigHome();
     server = await startHerdr();
     const socketLine = server.proof.split("\n").find((l) => l.startsWith("socket:"));
     note(`isolated Herdr session ${server.session}, ${socketLine} (live: ${process.env.HERDR_SOCKET_PATH ?? "none inherited"})`);

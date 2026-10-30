@@ -1,9 +1,11 @@
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { DEFAULT_CONFIG } from "../../src/config/config.ts";
 import type { Actor, EventBody, StoredEvent } from "../../src/domain/types.ts";
 import { handle } from "../../src/commands/handler.ts";
 import { react } from "../../src/orchestration/reactor.ts";
-import { applyEvent, project, type State } from "../../src/state/projection.ts";
+import { COMMAND_OUTPUT_TYPES, applyEvent, project, type State } from "../../src/state/projection.ts";
 import { INIT, USER, stored, threadCreated } from "../helpers.ts";
 
 const C = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
@@ -224,4 +226,18 @@ test("replaying an old log (no via) credits session-less command output by type 
   ] as EventBody[]) expect([body.type, credited(body)]).toEqual([body.type, false]);
   // a marked (new) event counts whatever its type
   expect(credited({ type: "notice.queued", payload: { session: M, text: "t" } } as EventBody, { ...NO_SESSION_COORD, session: C, via: "command" })).toBe(true);
+});
+
+/** The allowlisted event types a source emits, found by its `type: "<t>"` literals. */
+const emittedAllowlisted = (src: string) => [...src.matchAll(/type:\s*"([a-z_.]+)"/g)].map((m) => m[1]!).filter((t) => COMMAND_OUTPUT_TYPES.has(t));
+
+// Old logs credit a session by event type alone, which holds only while no follow-up (reactor, sweep, effect) emits an
+// allowlisted type: one that did would mark every session it follows as authored and hide a stall.
+test("no allowlisted command-output type is emitted by the reactor, the sweep or the effects", () => {
+  expect(emittedAllowlisted('{ type: "ticket.created", payload: {} } { type: "notice.queued" }')).toEqual(["ticket.created"]);
+  expect(COMMAND_OUTPUT_TYPES.size).toBeGreaterThan(0);
+  const src = join(import.meta.dir, "../../src");
+  for (const f of ["orchestration/reactor.ts", "orchestration/sweep.ts", "daemon/effects.ts"]) {
+    expect([f, emittedAllowlisted(readFileSync(join(src, f), "utf8"))]).toEqual([f, []]);
+  }
 });

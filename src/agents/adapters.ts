@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import type { Config } from "../config/config.ts";
 import type { AgentKind, SessionRole } from "../domain/types.ts";
@@ -83,6 +84,16 @@ const opencodeAdapter: AgentAdapter = {
   capabilities: NO_HOOKS,
 };
 
+/** The realpath of `p` when it exists and differs from `p`. */
+function realpathOf(p: string): string[] {
+  try {
+    const real = realpathSync(p);
+    return real === p ? [] : [real];
+  } catch {
+    return [];
+  }
+}
+
 const codexAdapter: AgentAdapter = {
   agent: "codex",
   herdrKind: "codex",
@@ -92,7 +103,9 @@ const codexAdapter: AgentAdapter = {
   launch({ role, run, config, root, worktree, gitCommonDir }) {
     // Codex asks once per project whether to trust it, keyed by the main checkout (a worktree resolves to it), and
     // would stall a pane on that dialog. A `-c` dotted path splits on every '.', so the path keys go in an inline table.
-    const trusted = [...new Set([root, ...(worktree ? [worktree] : [])])].map((p) => `${JSON.stringify(p)}={trust_level="trusted"}`);
+    // Codex may key a path by its realpath (/tmp is /private/tmp on macOS), so a differing realpath is trusted too.
+    const paths = [root, ...(worktree ? [worktree] : [])].flatMap((p) => [p, ...realpathOf(p)]);
+    const trusted = [...new Set(paths)].map((p) => `${JSON.stringify(p)}={trust_level="trusted"}`);
     return {
       args: [
         ...(run.model ? ["-m", run.model] : []),

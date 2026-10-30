@@ -26,7 +26,8 @@ tickets), never on what a model writes.
 - Claude Code asks once per new folder whether you trust it. Each row's scratch repo is a new temp folder, so the
   harness answers that dialog for the repo root as you would (worktrees below it inherit the trust). Your Claude
   config therefore gains a trusted-folder entry per row's temp path. The harness answers it only in main's pane: a
-  trust dialog in a coordinator or worker pane fails the row (`no trust dialog in a coordinator/worker pane`).
+  trust dialog in a coordinator or worker pane is recorded as a failed check (`no trust dialog in a coordinator/worker
+  pane`) and left unanswered, so the row fails on its own instead of the harness masking it.
 
 Real runs cost money: every row runs main (except rows that create the thread as the user), a coordinator and 2–3
 workers on a small task. A full run is roughly 23 rows of 5–20 minutes each.
@@ -61,8 +62,8 @@ still running in the scratch repo is killed. Check afterwards with
 - Happy flow (§12.7), complexity timeout `5s`: `happy-claude-code` (Claude Code everywhere, the single-vendor row),
   `happy-daily` (main and coordinator on Claude Code, workers on OpenCode), `happy-coord-<agent>` (workers on OpenCode)
   and `happy-worker-<agent>` (coordinator on Claude Code), minus duplicates. `happy-mixed-main` puts main on OpenCode
-  over a Claude Code coordinator and worker: nothing has trusted the scratch repo for Claude Code, so it exercises the
-  trust dialog in a coordinator/worker pane.
+  over a Claude Code coordinator and worker; it asserts that `agt start` printed the trust warning.
+  pending: Claude trust step (decision with the user).
 - Daily combination: `daily-two-threads` (two threads at once, `--max-workers 1`), `daily-tier-override` (the user
   says "use tier …" over main's proposal), `daily-worker-question` (an AGENTS.md hint makes the worker ask; the
   coordinator answers), `daily-coordinator-asks-user`.

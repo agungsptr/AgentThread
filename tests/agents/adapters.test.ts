@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { adapterFor } from "../../src/agents/adapters.ts";
 import { hookSettings } from "../../src/agents/claude.ts";
 import { DEFAULT_CONFIG } from "../../src/config/config.ts";
@@ -124,6 +126,20 @@ test("autonomous false: every adapter keeps its approval prompts", () => {
 test("codex: trusts the project root and the worktree", () => {
   const { args } = adapterFor("codex").launch({ ...base, worktree: "/r/.worktrees/001-x", run: { agent: "codex" } });
   expect(args.slice(-2)).toEqual(["-c", 'projects={"/r"={trust_level="trusted"},"/r/.worktrees/001-x"={trust_level="trusted"}}']);
+});
+
+// Codex resolves a trust path through symlinks (/tmp is /private/tmp on macOS), so both spellings are trusted.
+test("codex: also trusts the realpath of the root and the worktree when it differs", () => {
+  const real = realpathSync("/tmp");
+  const wt = mkdtempSync(join("/tmp", "agt-codex-trust-"));
+  try {
+    const { args } = adapterFor("codex").launch({ ...base, root: "/tmp", worktree: wt, run: { agent: "codex" } });
+    const keys = [...new Set(["/tmp", real, wt, realpathSync(wt)])];
+    expect(real).toBe(process.platform === "darwin" ? "/private/tmp" : real);
+    expect(args.slice(-2)).toEqual(["-c", `projects={${keys.map((k) => `${JSON.stringify(k)}={trust_level="trusted"}`).join(",")}}`]);
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
 });
 
 test("push is denied by the vendor's own rules in both modes (Claude Code, OpenCode)", () => {
