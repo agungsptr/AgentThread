@@ -3,6 +3,21 @@ import { DEFAULT_CONFIG, type Config } from "../config/config.ts";
 import { tierRun } from "../orchestration/tiers.ts";
 import { displayStatus, isLive, progressBy, type Session, type State, type Thread } from "../state/projection.ts";
 
+/** Cut `s` to at most `maxBytes` UTF-8 bytes (on a character boundary), ending with `…` when cut. */
+export function capBytes(s: string, maxBytes: number): string {
+  if (Buffer.byteLength(s) <= maxBytes) return s;
+  if (maxBytes < 3) return "";
+  const room = maxBytes - 3; // "…" is 3 bytes
+  let out = "";
+  let used = 0;
+  for (const ch of s) {
+    const n = Buffer.byteLength(ch);
+    if (used + n > room) break;
+    out += ch;
+    used += n;
+  }
+  return `${out}…`;
+}
 export const oneLine = (s: string) => s.replace(/\r?\n+/g, " ").trim();
 const cell = (s: string) => oneLine(s).replace(/\|/g, "\\|");
 export const clampHeadings = (s: string) => {
@@ -47,7 +62,7 @@ export function renderMain(state: State, config: Config = DEFAULT_CONFIG): strin
 export function tierLines(t: Thread, sessions: Session[], config: Config): string[] {
   if (t.tier === undefined) return [];
   const by = t.tierChoice?.auto ? "auto" : "user";
-  const reason = t.tierChoice?.reason ? `: ${oneLine(t.tierChoice.reason)}` : "";
+  const reason = t.tierChoice?.reason ? `: ${capBytes(oneLine(t.tierChoice.reason), 300)}` : "";
   const c = sessions.filter((s) => s.thread === t.id && s.role === "coordinator").at(-1);
   const run = c ? `${c.agent} ${c.model ?? "default"} ${c.effort ?? "default"}` : tierRun(config, t.tier);
   return [`Tier: ${t.tier} (${run}), chosen by ${by}${reason}`];

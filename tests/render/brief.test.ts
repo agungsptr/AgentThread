@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
-import { capBytes, renderBrief } from "../../src/render/brief.ts";
+import { capBytes, hardFit, renderBrief } from "../../src/render/brief.ts";
 import { writeAll } from "../../src/render/write.ts";
 import { project } from "../../src/state/projection.ts";
 import { INIT, stateOf, stored, threadCreated } from "../helpers.ts";
@@ -156,7 +156,8 @@ const must = (md: string) => {
   expect(Buffer.byteLength(md)).toBeLessThan(BYTES);
   for (const h of ["## Open questions", "## Git trail", "## How to continue"]) expect(md).toContain(h);
   expect(md).toContain("Latest progress:");
-  for (const l of md.split("\n").filter((x) => x.startsWith("- ")))
+  const noHandoff = md.replace(/## Handoff[\s\S]*?## Git trail/, "## Git trail");
+  for (const l of noHandoff.split("\n").filter((x) => x.startsWith("- ")))
     expect(Buffer.byteLength(l)).toBeLessThanOrEqual(300);
 };
 const evs = (extra: object[], opts: { title?: string } = {}) =>
@@ -185,4 +186,37 @@ test("capBytes cuts on a UTF-8 boundary", () => {
   expect(Buffer.byteLength(r)).toBeLessThanOrEqual(8);
   expect(r.endsWith("…")).toBe(true);
   expect(capBytes("abc", 3)).toBe("abc");
+});
+
+test("hard fallback keeps git trail and how-to-continue, with TRUNC", () => {
+  const t = evs([...openQs, { type: "handoff.submitted", thread: "001", payload: { content: "x", generated: false } }]);
+  (t as any).tier = "standard";
+  (t as any).tierChoice = { auto: true, reason: "r".repeat(20000) };
+  t.handoff!.by = "b".repeat(20000);
+  const md = renderBrief({ thread: t, sessions: [], dir: "/d", trail: { commits: Array.from({ length: 20 }, () => "c".repeat(400)), diffStat: "d".repeat(20000), untracked: 1 } });
+  expect(Buffer.byteLength(md)).toBeLessThan(BYTES);
+  for (const h of ["## Git trail", "## How to continue"]) expect(md).toContain(h);
+  const forced = hardFit(`# Brief\n\n${"é".repeat(20000)}\n\n## Git trail\n\nx\n\n## How to continue\n\n1. go\n`);
+  expect(Buffer.byteLength(forced)).toBeLessThan(BYTES);
+  for (const h of ["## Git trail", "## How to continue", "_(truncated"]) expect(forced).toContain(h);
+});
+test("shrink order: answered goes before open, title floors at 200 bytes", () => {
+  const answered = Array.from({ length: 10 }, (_, i) => [
+    { type: "question.recorded", thread: "001", payload: { id: `A${i}`, message: "é".repeat(1000) } },
+    { type: "question.answered", thread: "001", payload: { question: `A${i}`, answer: "é".repeat(2000) } },
+  ]).flat();
+  const md = renderBrief({ thread: evs([...answered, ...openQs], { title: "é".repeat(5000) }), sessions: [], dir: "/d" });
+  const title = md.split("\n")[0]!.replace(/^# Brief — thread 001: /, "");
+  expect(Buffer.byteLength(title)).toBeLessThanOrEqual(1000);
+  expect(Buffer.byteLength(title)).toBeGreaterThanOrEqual(200);
+  const small = renderBrief({ thread: evs([], { title: "é".repeat(5000) }), sessions: [], dir: "/d" });
+  expect(Buffer.byteLength(small.split("\n")[0]!.replace(/^# Brief — thread 001: /, ""))).toBeLessThanOrEqual(1000);
+});
+test("capBytes: surrogate pairs and tiny limits", () => {
+  const r = capBytes("😀".repeat(10), 10);
+  expect(Buffer.byteLength(r)).toBeLessThanOrEqual(10);
+  expect(r).toBe("😀…");
+  expect(capBytes("abc", 0)).toBe("");
+  expect(capBytes("abc", 1)).toBe("");
+  expect(capBytes("", 0)).toBe("");
 });
