@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { parse, parseDocument } from "yaml";
+import { isMap, parse, parseDocument } from "yaml";
 import { adapterFor, agentBin } from "../agents/adapters.ts";
 import { EFFORTS } from "../agents/roles.ts";
 import { configPaths, deepMerge, durationMs } from "../config/config.ts";
@@ -9,6 +9,8 @@ import { AGENT_KINDS, type AgentKind } from "../domain/types.ts";
 
 export const SETUP_HINT =
   "run agt setup (or edit .agentthread/config.yaml) to choose agents per role; using the configured defaults (claude-code unless set)";
+
+export const NO_AGENT_HINT = "no supported agent found; install one (see README) and run agt setup";
 
 type Env = Record<string, string | undefined>;
 type Pick = { agent: AgentKind; model?: string; effort?: string };
@@ -57,14 +59,23 @@ export async function runSetup(o: {
         break;
       }
     }
-    const model = (await ask(`${label} model (blank for the agent default)`)).trim();
-    const list = EFFORTS[agent];
+    let model = "";
     let effort = "";
+    const list = EFFORTS[agent];
     for (;;) {
-      effort = (await ask(`${label} effort (blank for the default${list.length ? `; ${list.join(", ")}` : ""})`)).trim();
-      if (effort !== "" && agent === "opencode" && !model) console.error("opencode effort needs a model");
-      else if (effort === "" || list.length === 0 || list.includes(effort)) break;
-      else console.error(`${agent} accepts ${list.join(", ")}`);
+      model = (await ask(`${label} model (blank for the agent default)`)).trim();
+      let back = false;
+      for (;;) {
+        effort = (await ask(`${label} effort (blank for the default${list.length ? `; ${list.join(", ")}` : ""})`)).trim();
+        if (effort !== "" && agent === "opencode" && !model) {
+          console.error("opencode effort needs a model");
+          back = true;
+          break;
+        }
+        if (effort === "" || list.length === 0 || list.includes(effort)) break;
+        console.error(`${agent} accepts ${list.join(", ")}`);
+      }
+      if (!back) break;
     }
     return { agent, ...(model ? { model } : {}), ...(effort ? { effort } : {}) };
   };
@@ -94,7 +105,9 @@ export async function runSetup(o: {
 
   const file = configPaths(o.root).project;
   const existing = existsSync(file) ? readFileSync(file, "utf8") : "";
-  const doc = parseDocument(parse(existing) == null ? `${existing}\nagents: {}\n` : existing);
+  const doc = parseDocument(existing);
+  if (doc.contents == null) (doc as { contents: unknown }).contents = doc.createNode({});
+  if (!isMap(doc.get("agents"))) doc.set("agents", doc.createNode({}));
   doc.setIn(["agents", "roles"], doc.createNode(roles));
   doc.setIn(["agents", "complexity"], doc.createNode({ timeout, tiers }));
   doc.setIn(["agents", "autonomous"], true);
@@ -121,8 +134,14 @@ export async function setupOnTty(root: string, env: Env): Promise<void> {
 }
 
 /** For `agt init` / `agt start`: run setup on a TTY, else print the hint and carry on with defaults. */
-export async function setupIfNeeded(root: string, env: Env, isTTY: boolean = !!process.stdin.isTTY): Promise<void> {
+export async function setupIfNeeded(
+  root: string,
+  env: Env,
+  isTTY: boolean = !!process.stdin.isTTY,
+  soft = false,
+): Promise<void> {
   if (!needsSetup(root, env)) return;
-  if (isTTY) await setupOnTty(root, env);
+  if (isTTY && soft && detectAgents(Bun.which, env).length === 0) console.error(NO_AGENT_HINT);
+  else if (isTTY) await setupOnTty(root, env);
   else console.error(SETUP_HINT);
 }

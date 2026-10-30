@@ -1,3 +1,4 @@
+import { adapterFor, agentBin } from "./adapters.ts";
 import type { Config, RoleAgent } from "../config/config.ts";
 import type { AgentKind, SessionRole } from "../domain/types.ts";
 
@@ -28,13 +29,28 @@ export function configWarnings(config: Config): string[] {
   return [];
 }
 
-/** One warning per role or tier whose agent is not among `installed` (see detectAgents). */
-export function installWarnings(config: Config, installed: readonly AgentKind[]): string[] {
-  const runs: [string, RoleAgent][] = [
-    ...Object.entries(config.agents.roles).map(([r, run]): [string, RoleAgent] => [`agents.roles.${r}`, run]),
-    ...Object.entries(config.agents.complexity.tiers).map(([t, run]): [string, RoleAgent] => [`agents.complexity.tiers.${t}`, run]),
+/**
+ * One warning per role or tier whose agent's executable is missing. Main runs through agt's launch, which honours
+ * AGT_<AGENT>_BIN; Herdr starts coordinators, workers and tiers by kind with the adapter's default binary.
+ */
+export function installWarnings(
+  config: Config,
+  which: (bin: string) => string | null = Bun.which,
+  env: Record<string, string | undefined> = process.env,
+): string[] {
+  const runs: [string, RoleAgent, string][] = [
+    ...Object.entries(config.agents.roles).map(([r, run]): [string, RoleAgent, string] => [
+      `agents.roles.${r}`,
+      run,
+      r === "main" ? agentBin(run.agent, env) : adapterFor(run.agent).bin,
+    ]),
+    ...Object.entries(config.agents.complexity.tiers).map(([t, run]): [string, RoleAgent, string] => [
+      `agents.complexity.tiers.${t}`,
+      run,
+      adapterFor(run.agent).bin,
+    ]),
   ];
-  return runs.filter(([, run]) => !installed.includes(run.agent)).map(([path, run]) => `${path}: ${run.agent} is not installed`);
+  return runs.filter(([, , bin]) => which(bin) === null).map(([path, run]) => `${path}: ${run.agent} is not installed`);
 }
 
 /**

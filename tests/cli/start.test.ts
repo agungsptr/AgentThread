@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { systemPrompt } from "../../src/agents/prompts.ts";
 import { shellQuote } from "../../src/herdr/bridge.ts";
@@ -217,11 +217,20 @@ test("agt start warns once per role or tier whose agent is not installed", () =>
     join(root, ".agentthread", "config.yaml"),
     "agents:\n  roles:\n    main: { agent: claude-code }\n    coordinator: { agent: codex }\n    worker: { agent: omp }\n  complexity:\n    tiers:\n      big: { agent: codex }\n",
   );
-  const r = agt(["start", "--no-manager"], { AGT_OMP_BIN: FAKE_AGENT });
+  // a PATH holding only git, bun and sleep: no real agent binary can be found
+  const bare = join(tempRepo(), "bin");
+  mkdirSync(bare, { recursive: true });
+  symlinkSync(Bun.which("git")!, join(bare, "git"));
+  // the fake herdr starts through `env bun`, and herdr calls through sleep
+  symlinkSync(process.execPath, join(bare, "bun"));
+  symlinkSync(Bun.which("sleep")!, join(bare, "sleep"));
+  const r = agt(["start", "--no-manager"], { AGT_OMP_BIN: FAKE_AGENT, PATH: bare });
   expect(r.code).toBe(0);
   expect(r.err.split("\n").filter((l) => l.includes("is not installed"))).toEqual([
     "agt: warning: agents.roles.main: claude-code is not installed",
     "agt: warning: agents.roles.coordinator: codex is not installed",
+    // herdr starts workers with omp's default binary, so AGT_OMP_BIN does not count
+    "agt: warning: agents.roles.worker: omp is not installed",
     "agt: warning: agents.complexity.tiers.big: codex is not installed",
   ]);
 });

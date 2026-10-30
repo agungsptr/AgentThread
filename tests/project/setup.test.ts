@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig } from "../../src/config/config.ts";
-import { SETUP_HINT, detectAgents, needsSetup, runSetup } from "../../src/project/setup.ts";
+import { SETUP_HINT, detectAgents, needsSetup, runSetup, setupIfNeeded } from "../../src/project/setup.ts";
 import { isolatedConfigHome, tempRepo } from "../helpers.ts";
 
 const script = (answers: string[]) => {
@@ -112,7 +112,7 @@ test("SETUP_HINT does not claim claude-code for every role", () => {
 
 test("the wizard asks again for an opencode effort without a model", async () => {
   const root = tempRepo();
-  const { ask } = script(["opencode", "", "high", "", "claude-code", "", "", "claude-code", "", "", "", "10s"]);
+  const { ask } = script(["opencode", "", "high", "", "", "claude-code", "", "", "claude-code", "", "", "", "10s"]);
   const errors: string[] = [];
   const orig = console.error;
   console.error = (m: string) => void errors.push(m);
@@ -123,4 +123,64 @@ test("the wizard asks again for an opencode effort without a model", async () =>
   }
   expect(errors).toContain("opencode effort needs a model");
   expect(loadConfig(root, env()).agents.roles.main).toEqual({ agent: "opencode" });
+});
+
+test("a bare `agents:` (null) gets agents.roles, keeping other keys and comments", async () => {
+  const root = tempRepo();
+  mkdirSync(join(root, ".agentthread"), { recursive: true });
+  writeFileSync(cfg(root), "# top\nagents:\nworkers:\n  max_workers: 5 # keep me\n");
+  const { ask } = script(["", "", "", "", "", "", "", "", "", "", ""]);
+  await runSetup({ root, ask, detected: ["claude-code"] });
+  const text = readFileSync(cfg(root), "utf8");
+  expect(text).toContain("# top");
+  expect(text).toContain("max_workers: 5 # keep me");
+  const c = loadConfig(root, env());
+  expect(c.agents.roles.main).toEqual({ agent: "claude-code" });
+  expect(c.workers.max_workers).toBe(5);
+});
+
+test("re-running setup replaces roles and complexity with no stale tier", async () => {
+  const root = tempRepo();
+  const first = script(["", "", "", "", "", "", "", "", "", "old", "", "", "", "", "20s"]);
+  await runSetup({ root, ask: first.ask, detected: ["claude-code"] });
+  expect(loadConfig(root, env()).agents.complexity.tiers.old).toBeDefined();
+  const second = script(["", "", "", "", "", "", "", "", "", "", ""]);
+  await runSetup({ root, ask: second.ask, detected: ["claude-code"] });
+  const c = loadConfig(root, env());
+  expect(c.agents.complexity.tiers).toEqual({});
+  expect(c.agents.complexity.timeout).toBe("10s");
+  expect(readFileSync(cfg(root), "utf8")).not.toContain("old");
+});
+
+test("an opencode effort with an empty model re-asks the model", async () => {
+  const root = tempRepo();
+  const { ask, asked } = script([
+    "opencode", "", "high", "prov/model", "high",
+    "", "", "", "", "", "", "", "", "",
+  ]);
+  const errs: string[] = [];
+  const orig = console.error;
+  console.error = (m: string) => void errs.push(String(m));
+  try {
+    await runSetup({ root, ask, detected: ["opencode"] });
+  } finally {
+    console.error = orig;
+  }
+  expect(errs).toContain("opencode effort needs a model");
+  expect(asked.filter((q) => q.startsWith("main model")).length).toBe(2);
+  expect(loadConfig(root, env()).agents.roles.main).toEqual({ agent: "opencode", model: "prov/model", effort: "high" });
+});
+
+test("setupIfNeeded on a TTY with no agent installed (soft) prints a hint and returns", async () => {
+  const root = tempRepo();
+  const bins = { AGT_CLAUDE_BIN: "/nonexistent/a", AGT_OPENCODE_BIN: "/nonexistent/b", AGT_CODEX_BIN: "/nonexistent/c", AGT_OMP_BIN: "/nonexistent/d" };
+  const errs: string[] = [];
+  const orig = console.error;
+  console.error = (m: string) => void errs.push(String(m));
+  try {
+    await setupIfNeeded(root, { ...env(), ...bins }, true, true);
+  } finally {
+    console.error = orig;
+  }
+  expect(errs).toEqual(["no supported agent found; install one (see README) and run agt setup"]);
 });
