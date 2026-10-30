@@ -18,6 +18,7 @@ import {
   cleanupProcesses,
   events,
   git,
+  MIXED_MAIN_TRUST,
   removeConfigHome,
   removeScratch,
   rowConfigHome,
@@ -163,7 +164,7 @@ async function runRow(sc: Scenario): Promise<{ status: "PASS" | "FAIL"; reason?:
     server = await startHerdr();
     const socketLine = server.proof.split("\n").find((l) => l.startsWith("socket:"));
     note(`isolated Herdr session ${server.session}, ${socketLine} (live: ${process.env.HERDR_SOCKET_PATH ?? "none inherited"})`);
-    root = await scratchRepo(sc.hints);
+    root = await scratchRepo(sc.hints, sc.scratchAt);
     writeConfig(root, sc.agents, sc.config);
     const init = await agt(root, ["init", "--name", "e2e"], withXdg());
     if (init.exitCode !== 0) throw new Error(`agt init failed: ${init.stderr}`);
@@ -213,7 +214,9 @@ async function runRow(sc: Scenario): Promise<{ status: "PASS" | "FAIL"; reason?:
       note,
       left: () => deadline - Date.now(),
     };
-    watcher = watchTrustDialogs(server.herdr, () => h.mainPane, note, (pane) => h.check("no trust dialog in a coordinator/worker pane", false, `trust dialog in pane ${pane}`));
+    // A fixed-root row's folder is trusted once by the user; a dialog there means that step is missing, so say how.
+    const trustCheck = sc.scratchAt ? MIXED_MAIN_TRUST : "no trust dialog in a coordinator/worker pane";
+    watcher = watchTrustDialogs(server.herdr, () => h.mainPane, note, (pane) => h.check(trustCheck, false, `trust dialog in pane ${pane}`));
     const manager = sc.manager !== false;
     await h.startAgt(manager ? [] : ["--no-manager"], sc.startEnv);
     const layout = await h.waitFor("layout.registered", () => true, 60_000, "agt start registered the layout");

@@ -28,6 +28,11 @@ tickets), never on what a model writes.
   config therefore gains a trusted-folder entry per row's temp path. The harness answers it only in main's pane: a
   trust dialog in a coordinator or worker pane is recorded as a failed check (`no trust dialog in a coordinator/worker
   pane`) and left unanswered, so the row fails on its own instead of the harness masking it.
+- One time, for `happy-mixed-main` (main is not Claude Code, so nothing in the row trusts the folder for its Claude Code
+  coordinator and worker): `mkdir -p ~/.cache/agt-e2e/mixed-main && cd ~/.cache/agt-e2e/mixed-main && git init && claude`,
+  then accept the trust prompt and exit. The harness never answers that dialog for you; without this step the row
+  fails with `trust the e2e folder once: cd ~/.cache/agt-e2e/mixed-main && claude, then accept the trust prompt and
+  exit`.
 
 Real runs cost money: every row runs main (except rows that create the thread as the user), a coordinator and 2–3
 workers on a small task. A full run is roughly 23 rows of 5–20 minutes each.
@@ -62,8 +67,9 @@ still running in the scratch repo is killed. Check afterwards with
 - Happy flow (§12.7), complexity timeout `5s`: `happy-claude-code` (Claude Code everywhere, the single-vendor row),
   `happy-daily` (main and coordinator on Claude Code, workers on OpenCode), `happy-coord-<agent>` (workers on OpenCode)
   and `happy-worker-<agent>` (coordinator on Claude Code), minus duplicates. `happy-mixed-main` puts main on OpenCode
-  over a Claude Code coordinator and worker; it asserts that `agt start` printed the trust warning.
-  pending: Claude trust step (decision with the user).
+  over a Claude Code coordinator and worker; it asserts that `agt start` printed the trust warning. Its scratch repo is
+  the fixed folder `~/.cache/agt-e2e/mixed-main` (emptied and recreated each run; thread worktrees under its
+  `.worktrees/` inherit the trust), which needs the one-time prerequisite below.
 - Daily combination: `daily-two-threads` (two threads at once, `--max-workers 1`), `daily-tier-override` (the user
   says "use tier …" over main's proposal), `daily-worker-question` (an AGENTS.md hint makes the worker ask; the
   coordinator answers), `daily-coordinator-asks-user`.

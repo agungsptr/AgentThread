@@ -1,5 +1,5 @@
 import { AGENT_KINDS, type AgentKind } from "../../../src/domain/types.ts";
-import type { RoleAgents } from "../harness.ts";
+import { MIXED_MAIN_ROOT, type RoleAgents } from "../harness.ts";
 import { happyFlow, tiers, type H, type Scenario } from "./common.ts";
 
 /** The daily combination: main and coordinator on Claude Code, workers on OpenCode. */
@@ -36,6 +36,8 @@ export function happyScenarios(): Scenario[] {
   if (!rows.has("happy-mixed-main")) {
     rows.set("happy-mixed-main", {
       ...happy("happy-mixed-main", mixed),
+      // The folder the user trusted once (docs/release-e2e.md): its .worktrees/ inherit the trust.
+      scratchAt: MIXED_MAIN_ROOT,
       async run(h) {
         await trustWarned(h);
         await happyFlow(h);

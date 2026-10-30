@@ -38,6 +38,8 @@ export interface Scenario {
   agents: RoleAgents;
   /** Run main (default) or `agt start --no-manager`. */
   manager?: boolean;
+  /** A fixed scratch root instead of a new temp dir (only MIXED_MAIN_ROOT, which the user trusts once for Claude Code). */
+  scratchAt?: string;
   /** Lines appended to the scratch repo's AGENTS.md. */
   hints?: string[];
   /** Merged into .agentthread/config.yaml. */

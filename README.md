@@ -120,6 +120,10 @@ is started with the project root and the worktree marked trusted, so it never as
 Run `bun run e2e:release` before every release. It runs real agents against an isolated Herdr server and costs money;
 see [docs/release-e2e.md](docs/release-e2e.md). `bun test` never starts real agents.
 
+One time before the first release run, trust the folder of the `happy-mixed-main` row for Claude Code:
+`mkdir -p ~/.cache/agt-e2e/mixed-main && cd ~/.cache/agt-e2e/mixed-main && git init && claude`, then accept the trust
+prompt and exit.
+
 ## Manual smoke test
 
 The test suite never runs the real `herdr` or agent binaries. Run this once in a scratch git repo:

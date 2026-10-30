@@ -195,9 +195,44 @@ function alive(pid: number): boolean {
 
 const TEMP_PREFIX = "agt-e2e-repo-";
 
-/** A git repo made from fixture-repo/ in a temp dir; `hints` are appended to its AGENTS.md before the first commit. */
-export async function scratchRepo(hints: string[] = []): Promise<string> {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), TEMP_PREFIX)));
+/**
+ * The fixed scratch root of `happy-mixed-main`: the user trusts it for Claude Code once (docs/release-e2e.md), and its
+ * thread worktrees under `.worktrees/` inherit that trust. The path stays the same across runs; its contents do not.
+ */
+export const MIXED_MAIN_ROOT = join(homedir(), ".cache", "agt-e2e", "mixed-main");
+
+/** The check a coordinator/worker trust dialog fails in the fixed-root row: what the user has to do once. */
+export const MIXED_MAIN_TRUST = "trust the e2e folder once: cd ~/.cache/agt-e2e/mixed-main && claude, then accept the trust prompt and exit";
+
+/** True only for exactly the fixed scratch root (as given or resolved), never for anything below or beside it. */
+function isFixedScratch(dir: string): boolean {
+  const r = resolve(dir);
+  if (r === MIXED_MAIN_ROOT) return true;
+  try {
+    return existsSync(MIXED_MAIN_ROOT) && r === realpathSync(MIXED_MAIN_ROOT);
+  } catch {
+    return false;
+  }
+}
+
+/** Removes every entry inside the fixed scratch root and keeps the directory itself (its path is what is trusted). */
+function emptyFixedScratch(dir: string): void {
+  if (!isFixedScratch(dir)) throw new Error(`refusing to empty ${dir}`);
+  for (const name of readdirSync(dir)) rmSync(join(dir, name), { recursive: true, force: true });
+}
+
+/**
+ * A git repo made from fixture-repo/, in a new temp dir or, with `at` (only MIXED_MAIN_ROOT), in that fixed dir after
+ * emptying it; `hints` are appended to its AGENTS.md before the first commit.
+ */
+export async function scratchRepo(hints: string[] = [], at?: string): Promise<string> {
+  let dir: string;
+  if (at !== undefined) {
+    if (resolve(at) !== MIXED_MAIN_ROOT) throw new Error(`a fixed scratch root must be ${MIXED_MAIN_ROOT}: ${at}`);
+    mkdirSync(at, { recursive: true });
+    dir = realpathSync(at);
+    emptyFixedScratch(dir);
+  } else dir = realpathSync(mkdtempSync(join(tmpdir(), TEMP_PREFIX)));
   cpSync(FIXTURE, dir, { recursive: true });
   // Template files keep their real name out of this repo's `bun test` patterns.
   const untemplate = (d: string) => {
@@ -458,6 +493,7 @@ export async function cleanupProcesses(root: string, log: (m: string) => void, o
 }
 
 export function removeScratch(root: string): void {
+  if (isFixedScratch(root)) return emptyFixedScratch(root);
   if (!root.includes(TEMP_PREFIX)) throw new Error(`refusing to remove ${root}`);
   rmSync(root, { recursive: true, force: true });
 }
