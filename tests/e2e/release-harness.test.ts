@@ -96,7 +96,7 @@ test("the fixed scratch root: unexpected files without the marker are refused an
   try {
     mkdirSync(join(t, ".git"));
     writeFileSync(join(t, "notes.txt"), "mine");
-    expect(() => prepareFixedScratch(t)).toThrow("~/.cache/agt-e2e/mixed-main has unexpected files; it must only be the e2e folder");
+    expect(() => prepareFixedScratch(t)).toThrow("~/.cache/agt-e2e/mixed-main has unexpected files; it must only be the e2e folder (remove its contents and re-run)");
     expect(readdirSync(t).sort()).toEqual([".git", "notes.txt"]);
   } finally {
     rmSync(t, { recursive: true, force: true });

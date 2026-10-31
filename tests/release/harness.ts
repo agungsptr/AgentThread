@@ -232,7 +232,7 @@ export function prepareFixedScratch(dir: string): void {
   }
   if (isSymlink(dir)) throw new Error(`${FIXED_LABEL} is a symlink; refusing to empty it`);
   const names = readdirSync(dir);
-  if (!names.includes(FIXED_MARKER) && names.some((n) => n !== ".git")) throw new Error(`${FIXED_LABEL} has unexpected files; it must only be the e2e folder`);
+  if (!names.includes(FIXED_MARKER) && names.some((n) => n !== ".git")) throw new Error(`${FIXED_LABEL} has unexpected files; it must only be the e2e folder (remove its contents and re-run)`);
   for (const name of names) rmSync(join(dir, name), { recursive: true, force: true });
 }
 

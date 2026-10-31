@@ -4,14 +4,14 @@
 
 | Agent | Herdr kind | bin | model | effort | autonomous | first prompt | instruction file |
 |---|---|---|---|---|---|---|---|
-| Claude Code 2.1.296 | `claude` | `claude` | `--model <m>` | `--effort <low\|medium\|high\|xhigh\|max>` | `--permission-mode bypassPermissions` + `--settings` JSON with `"skipDangerousModePermissionPrompt": true` | positional | `CLAUDE.md` (symlink to `AGENTS.md`) |
+| Claude Code 2.1.314 | `claude` | `claude` | `--model <m>` | `--effort <low\|medium\|high\|xhigh\|max>` | `--permission-mode bypassPermissions` + `--settings` JSON with `"skipDangerousModePermissionPrompt": true` | positional | `CLAUDE.md` (symlink to `AGENTS.md`) |
 | OpenCode 2.0.27 | `opencode` | `opencode` | env `OPENCODE_CONFIG_CONTENT` = `{"model":"<provider/model>"}` (the TUI has no `--model`) | variant suffix in the same value: `<provider/model>#<effort>` | `--standalone --auto` + `"permission"` in `OPENCODE_CONFIG_CONTENT` | `--prompt <text>` | `AGENTS.md` |
 | Codex 0.164.0 | `codex` | `codex` | `-m <m>` | `-c model_reasoning_effort="<minimal\|low\|medium\|high\|xhigh>"` | `-s workspace-write -a never -c sandbox_workspace_write.network_access=true --add-dir <git common dir>` (coordinator only) `--search -c 'projects={"<root>"={trust_level="trusted"},"<worktree>"={trust_level="trusted"}}'` | positional | `AGENTS.md` |
-| omp 18.12.6 | `omp` | `omp` (standalone binary in `~/.local/bin`; the npm build needs a newer Bun) | `--model <m>` | `--thinking <off\|minimal\|low\|medium\|high\|xhigh\|max\|auto>` | `--approval-mode yolo` | positional | `AGENTS.md` |
+| omp 18.13.3 | `omp` | `omp` (standalone binary in `~/.local/bin`; the npm build needs a newer Bun) | `--model <m>` | `--thinking <off\|minimal\|low\|medium\|high\|xhigh\|max\|auto>` | `--approval-mode yolo` | positional | `AGENTS.md` |
 
 Claude Code (2.1.314) in every role: autonomous start (`--permission-mode bypassPermissions` with `skipDangerousModePermissionPrompt`), positional first prompt and the `CLAUDE.md` symlink are verified by the release matrix 2026-10-31 (`happy-claude-code`), and so is the failure message of a missing binary (`edge-missing-binary`).
 
-omp (18.13.3; the flags above are unchanged from 18.12.6's `--help`) as a worker under a Claude Code coordinator: autonomous start (`--approval-mode yolo`) and positional first prompt are verified by the release matrix 2026-10-31 (`happy-worker-omp`). An omp worker keeps working for 15s or more after `agt ticket done`, so its pane closes only when that turn ends. omp as a coordinator (`happy-coord-omp`, workers on OpenCode) and `--model`/`--thinking` were not part of that run; still verified from `--help` only.
+omp (18.13.3; the flags above are unchanged from 18.12.6's `--help`) as a worker under a Claude Code coordinator: autonomous start (`--approval-mode yolo`) and positional first prompt are verified by the release matrix 2026-10-31 (`happy-worker-omp`). An omp worker keeps working after `agt ticket done` (about 16s observed), so its pane closes only when that turn ends. omp as a coordinator (`happy-coord-omp`, workers on OpenCode) and `--model`/`--thinking` were not part of that run; still verified from `--help` only.
 
 Codex: autonomous start verified from `--help` only; pending the release matrix.
 
