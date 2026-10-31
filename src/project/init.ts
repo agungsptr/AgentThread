@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { DEFAULT_CONFIG, loadConfig, type Config } from "../config/config.ts";
 import { writeAll } from "../render/write.ts";
 import { project } from "../state/projection.ts";
 import { EventStore } from "../store/event-store.ts";
@@ -9,7 +10,16 @@ import { paths } from "./paths.ts";
 
 const IGNORE_LINES = [".worktrees/", ".agentthread/*", "!.agentthread/config.yaml"];
 
-export function initProject(root: string, name: string = basename(root)): void {
+/** The project's config, or the defaults when it is invalid (init never fails on it; the daemon reports it). */
+export function configOrDefault(root: string, env: Record<string, string | undefined> = process.env): Config {
+  try {
+    return loadConfig(root, env);
+  } catch {
+    return DEFAULT_CONFIG;
+  }
+}
+
+export function initProject(root: string, name: string = basename(root), env: Record<string, string | undefined> = process.env): void {
   const p = paths(root);
   if (existsSync(p.db)) throw new Error(`already initialized at ${p.dir}`);
   const repos = discoverRepos(root);
@@ -21,7 +31,8 @@ export function initProject(root: string, name: string = basename(root)): void {
   const store = new EventStore(p.db);
   try {
     const events = store.append([{ type: "project.initialized", payload: { name } }], { role: "user" });
-    writeAll(root, project(events));
+    // With the project's config, so files rendered from it (banned-words) match it from the start.
+    writeAll(root, project(events), configOrDefault(root, env));
   } finally {
     store.close();
   }

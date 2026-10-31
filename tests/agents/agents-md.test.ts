@@ -648,7 +648,7 @@ describe("commit-msg guard", () => {
     ["feat: add slugify\n\nGenerated with a tool\n", "AI attribution"],
     ["feat: add slugify\n\nsee .docs/shared/spec.md\n", "a .docs path"],
     ["feat: add slugify for T12\n", "a ticket id"],
-    ["feat(t3): add slugify\n", "a ticket id"],
+    ["fix(T3): add slugify\n", "a ticket id"],
   ];
 
   test("a worker's message with each refused form is refused with its exact reason; a clean one passes", () => {
@@ -658,7 +658,7 @@ describe("commit-msg guard", () => {
       expect(r.exitCode).not.toBe(0);
       expect(r.stderr.toString()).toContain(MSG(what));
     }
-    for (const clean of ["feat: add slugify\n", "feat: add T1000x and AT12 parsing\n", "fix: handle docs/ and .doc paths\n"]) {
+    for (const clean of ["feat: add slugify\n", "feat: add T1000x and AT12 parsing\n", "feat(t3): add slugify\n", "fix: handle docs/ and .doc paths\n"]) {
       const r = commitMsg(wt, clean, WORKER(root));
       expect(r.stderr.toString()).toBe("");
       expect(r.exitCode).toBe(0);

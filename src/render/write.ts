@@ -26,11 +26,7 @@ export function writeAll(
   const p = paths(root);
   mkdirSync(p.threadsDir, { recursive: true });
   writeAtomic(p.mainThread, renderMain(state, config));
-  // The commit-msg hook refuses an agent's message with one of these, one word per line (no file when there are none).
-  const banned = (config.workflow.banned_words ?? []).map((w) => w.replace(/[\r\n]+/g, " ").trim()).filter((w) => w !== "");
-  const bannedFile = join(root, ".agentthread", "banned-words");
-  if (banned.length) writeAtomic(bannedFile, banned.map((w) => `${w}\n`).join(""));
-  else rmSync(bannedFile, { force: true });
+  writeBannedWords(root, config);
   for (const t of state.threads.values()) {
     const dir = p.threadDir(t);
     mkdirSync(dir, { recursive: true });
@@ -49,6 +45,15 @@ export function writeAll(
     }
     writeAtomic(join(dir, "log.md"), renderLog(t));
   }
+}
+
+/** The commit-msg hook refuses an agent's message with one of these: one word per line, no file when there are none. */
+export function writeBannedWords(root: string, config: Config): void {
+  const banned = (config.workflow.banned_words ?? []).map((w) => w.replace(/[\r\n]+/g, " ").trim()).filter((w) => w !== "");
+  const file = join(root, ".agentthread", "banned-words");
+  mkdirSync(join(root, ".agentthread"), { recursive: true });
+  if (banned.length) writeAtomic(file, banned.map((w) => `${w}\n`).join(""));
+  else rmSync(file, { force: true });
 }
 
 function writeAtomic(file: string, content: string): void {

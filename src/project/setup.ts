@@ -5,7 +5,8 @@ import { isMap, parse, parseDocument } from "yaml";
 import { adapterFor, agentBin } from "../agents/adapters.ts";
 import { EFFORTS } from "../agents/roles.ts";
 import { refreshRootSkill } from "../agents/skill.ts";
-import { initProject } from "./init.ts";
+import { configOrDefault, initProject } from "./init.ts";
+import { writeBannedWords } from "../render/write.ts";
 import { prefill, stackPrefill } from "./prefill.ts";
 import { discoverRepos, isWorkspaceProject } from "./workspace.ts";
 import { configPaths, deepMerge, durationMs } from "../config/config.ts";
@@ -247,9 +248,11 @@ export async function setupIfNeeded(root: string, env: Env, isTTY: boolean = !!p
 
 /** `agt init`: create the project, print `initialized`, then offer setup. Init succeeds even with no agent installed. */
 export async function initCommand(root: string, env: Env, name: string | undefined, isTTY: boolean = !!process.stdin.isTTY): Promise<number> {
-  initProject(root, name);
+  initProject(root, name, env);
   console.log("initialized");
   await setupIfNeeded(root, env, isTTY);
+  // Setup may have just written banned_words.
+  writeBannedWords(root, configOrDefault(root, env));
   refreshRootSkill(root, env);
   return 0;
 }

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addWorktree } from "../../src/project/git.ts";
@@ -65,4 +65,13 @@ test("addWorktree creates the branch and directory", () => {
   addWorktree(root, "thread/001-x", path);
   expect(existsSync(join(path, ".git"))).toBe(true);
   expect(() => addWorktree(root, "thread/001-x", join(root, ".worktrees", "dup"))).toThrow("git worktree add failed");
+});
+
+test("init renders files from the project's config: banned-words lists its banned_words", () => {
+  const root = tempRepo();
+  mkdirSync(join(root, ".agentthread"), { recursive: true });
+  writeFileSync(join(root, ".agentthread", "config.yaml"), "workflow:\n  banned_words: [Zentro, acme corp]\n");
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "agt-home-")));
+  initProject(root, "demo", { HOME: home, XDG_CONFIG_HOME: join(home, "xdg") });
+  expect(readFileSync(join(root, ".agentthread", "banned-words"), "utf8")).toBe("Zentro\nacme corp\n");
 });
