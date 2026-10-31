@@ -298,6 +298,22 @@ test("a lost-spawn failure frees the worker slot and notifies the coordinator wi
   expect(notices(r.events, C)).toEqual([SPAWN_LOST(W)]);
 });
 
+test("a finished worker failed by the lost-spawn sweep still sends the done notice once, and its ticket stays done", () => {
+  const s = base();
+  apply(
+    s,
+    "2026-10-11T10:01:00.000Z",
+    { type: "ticket.created", thread: "001", payload: { ticket: "T1", title: "a", scope: ["a"] } },
+    { type: "session.created", thread: "001", payload: { session: W, role: "worker", agent: "claude-code", name: "w", ticket: "T1" } },
+    { type: "ticket.claimed", thread: "001", payload: { ticket: "T1", assignee: W } },
+    { type: "ticket.completed", thread: "001", payload: { ticket: "T1", summary: "ok" } },
+  );
+  const failed = sweep(s, "2026-10-11T10:05:00.000Z", ctx()).events;
+  const r = react(s, apply(s, "2026-10-11T10:05:00.000Z", ...failed), ctx());
+  expect(notices(r.events, C)).toEqual(["Ticket T1 is done: ok.", SPAWN_LOST(W)]);
+  expect(r.events.some((e) => e.type === "ticket.released")).toBe(false);
+});
+
 test("a lost-spawn failure of a coordinator notifies main and spawns a replacement", () => {
   const s = base();
   apply(

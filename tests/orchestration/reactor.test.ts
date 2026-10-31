@@ -267,6 +267,29 @@ test("a worker that ends or is lost after ticket done sends the done notice exac
   }
 });
 
+test("a worker already idle at ticket.completed is ended at once and the coordinator hears it done exactly once", () => {
+  const s = working();
+  apply(s, { type: "agent.idle", thread: "001", payload: { session: W1 } });
+  expect(s.sessions.get(W1)!.status).toBe("idle");
+  const log: StoredEvent[] = [];
+  const after = settle(s, apply(s, { type: "ticket.completed", thread: "001", payload: { ticket: "T1", summary: "ok" } }), log);
+  expect(after.filter((e) => e.type === "session.ended" && e.payload.session === W1).length).toBe(1);
+  expect(s.sessions.get(W1)!.status).toBe("ended");
+  expect(doneNotices(after)).toEqual(["Ticket T1 is done: ok."]);
+  expect(s.sessions.get(C)!.notices.filter((x) => x.startsWith("Ticket T1 is done"))).toEqual(["Ticket T1 is done: ok."]);
+  // the pane is closed through the same teardown as the finished-worker idle path
+  const r = react(s, apply(s, { type: "agent.idle", thread: "001", payload: { session: W1 } }), ctx());
+  expect(doneNotices(r.events)).toEqual([]);
+});
+
+test("an idle-at-completed worker's pane is closed like the finished-worker idle path", () => {
+  const s = working();
+  apply(s, { type: "agent.idle", thread: "001", payload: { session: W1 } });
+  const cfg = { ...DEFAULT_CONFIG, herdr: { ...DEFAULT_CONFIG.herdr, close_worker_pane_on_end: true } };
+  const r = react(s, apply(s, { type: "ticket.completed", thread: "001", payload: { ticket: "T1", summary: "ok" } }), ctx(cfg));
+  expect(r.effects).toContainEqual({ kind: "pane.close", pane: "w1:p3" });
+});
+
 test("a ticket done with no live worker notifies the coordinator at once", () => {
   const s = working();
   apply(s, { type: "session.ended", thread: "001", payload: { session: W1 } }); // e.g. replayed from an old log

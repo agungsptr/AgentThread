@@ -138,6 +138,10 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
     const k = t.tickets.find((x) => x.id === s.ticket);
     if (k?.status === "done" && k.assignee === s.id) notify(coordinatorToNotify(t.id), doneNotice(k.id, k.summary));
   };
+  /** Ends a worker that finished its ticket (the teardown of the idle that ends it), closing its pane when configured. */
+  const endFinishedWorker = (s: Session) => {
+    if (end(s) && ctx.config.herdr.close_worker_pane_on_end && s.pane) effects.push({ kind: "pane.close", pane: s.pane });
+  };
   /**
    * Replaces a lost or exited coordinator with a fresh split from the thread's root pane, at most once: never when it
    * was replaced earlier in this call or already has a replacement. Returns whether it did.
@@ -249,7 +253,11 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         // that reviews and commits at once would miss edits made after `agt ticket done`.
         const k = state.threads.get(ev.thread)?.tickets.find((x) => x.id === ev.payload.ticket);
         const w = k?.assignee ? state.sessions.get(k.assignee) : undefined;
-        if (k?.status === "done" && w && isLive(w) && w.role === "worker") break;
+        if (k?.status === "done" && w && isLive(w) && w.role === "worker") {
+          // Already idle: no further idle will come to end it, so end it now; session.ended sends the notice.
+          if (w.status === "idle") endFinishedWorker(w);
+          break;
+        }
         notify(coordinatorToNotify(ev.thread), doneNotice(ev.payload.ticket, ev.payload.summary));
         break;
       }
@@ -273,6 +281,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         const text = lostSpawn && s ? `Session ${s.id} (${s.role}) never reported back from its spawn; marked failed after ${lostSpawn[1]}.` : undefined;
         const t = s?.thread ? state.threads.get(s.thread) : undefined;
         if (s?.role === "worker") {
+          if (t) doneWorkerEnded(s, t);
           // Its agent may have claimed the ticket before the report was lost (the spawn job stops that agent): free it.
           const k = lostSpawn && t && t.status !== "done" ? t.tickets.find((x) => x.id === s.ticket) : undefined;
           if (k?.status === "in_progress" && k.assignee === s.id) out.push({ type: "ticket.released", thread: t!.id, payload: { ticket: k.id, reason: "worker spawn report lost" } });
@@ -436,8 +445,8 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
             }
           }
           deliver(s);
-        } else if (end(s) && ctx.config.herdr.close_worker_pane_on_end && s.pane) {
-          effects.push({ kind: "pane.close", pane: s.pane });
+        } else {
+          endFinishedWorker(s);
         }
         break;
       }
