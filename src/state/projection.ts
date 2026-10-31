@@ -624,6 +624,9 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
       const s = sessionOf(state, ev.seq, ev.payload.session);
       if (isLive(s)) {
         // A first start, or a manual /compact, leaves the agent at an empty prompt: no turn runs, so no Stop hook follows.
+        // A turn the user starts: the session sat idle with nothing queued for it. A delivered notice starts a turn too, but
+        // only after it was queued (the hook may come before notice.delivered), or once delivered it is already active.
+        const userTurn = s.status === "idle" && s.notices.length === 0;
         const atPrompt = ev.type === "session.started" && (s.status === "starting" || ev.payload.source === "compact" || s.polledStart === true);
         if (ev.type === "session.started" && ev.payload.source === "poll" && s.status === "starting") s.polledStart = true;
         else delete s.polledStart;
@@ -632,7 +635,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
         if (ev.type === "session.active" && ev.actor.role !== "user") s.hooksSeen = true;
         s.status = atPrompt ? "idle" : "active";
         s.lastActiveAt = ev.ts;
-        clearWaiting(state, s, ev);
+        if (userTurn) clearWaiting(state, s, ev);
       }
       return true;
     }

@@ -100,8 +100,6 @@ describe("thread waiting", () => {
     const s = world();
     const r = exec(s, waiting());
     expect(r.ok && r.events).toEqual([{ type: "thread.waiting", thread: "001", payload: { what: "which table?" } }]);
-    const evs = apply(s, []);
-    expect(evs).toEqual([]);
     const row = renderMain(s).split("\n").find((l) => l.startsWith("| 001 "))!;
     expect(row).toContain("waiting: which table?");
   });
@@ -127,6 +125,37 @@ describe("thread waiting", () => {
     apply(s, [{ type: "session.active", thread: "001", payload: { session: C } }]);
     expect(thread(s).waiting).toBeUndefined();
     expect(renderMain(s)).not.toContain("waiting:");
+  });
+
+  const waitingIdle = (): State => {
+    const s = world();
+    apply(s, [
+      { type: "session.started", thread: "001", payload: { session: C } },
+      { type: "thread.waiting", thread: "001", payload: { what: "x" } },
+      { type: "agent.idle", thread: "001", payload: { session: C } },
+    ], COORD);
+    return s;
+  };
+  const NOTICE = { type: "notice.queued", thread: "001", payload: { session: C, text: "Ticket T1 is done." } } as const;
+  const DELIVERED = { type: "notice.delivered", thread: "001", payload: { session: C, count: 1 } } as const;
+  const ACTIVE = { type: "session.active", thread: "001", payload: { session: C } } as const;
+
+  test("a user prompt at the idle coordinator's empty queue clears it", () => {
+    const s = waitingIdle();
+    apply(s, [ACTIVE]);
+    expect(thread(s).waiting).toBeUndefined();
+  });
+
+  test("a delivered notice is not the user answering: hook before notice.delivered", () => {
+    const s = waitingIdle();
+    apply(s, [NOTICE, ACTIVE, DELIVERED]);
+    expect(thread(s).waiting).toBeDefined();
+  });
+
+  test("a delivered notice is not the user answering: notice.delivered before the hook", () => {
+    const s = waitingIdle();
+    apply(s, [NOTICE, DELIVERED, ACTIVE]);
+    expect(thread(s).waiting).toBeDefined();
   });
 
   test("another session's idle or turn start does not clear it", () => {
