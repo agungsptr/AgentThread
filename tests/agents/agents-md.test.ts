@@ -522,10 +522,41 @@ describe("branch-aware commit guard and no-push hook", () => {
   });
 
   test("the coordinator commits on feat/<task> and is refused on wip/<task>", () => {
-    expect(commit(taskWt("feat/t1").wt, { AGT_ROLE: "coordinator", AGT_TASK: "t1" }).exitCode).toBe(0);
+    const f = taskWt("feat/t1");
+    const d = join(f.root, ".agentthread", "threads", "th1-some-slug");
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, "stage8"), "done\n");
+    expect(commit(f.wt, { AGT_ROLE: "coordinator", AGT_TASK: "t1", AGT_ROOT: f.root, AGT_THREAD: "th1" }).exitCode).toBe(0);
     const r = commit(taskWt("wip/t1").wt, { AGT_ROLE: "coordinator", AGT_TASK: "t1" });
     expect(r.exitCode).not.toBe(0);
     expect(err(r)).toContain(FEAT);
+  });
+
+  describe("the squash gate (stage 8)", () => {
+    const CENV = (root: string) => ({ AGT_ROOT: root, AGT_ROLE: "coordinator", AGT_TASK: "t1", AGT_THREAD: "th1" });
+    const stage8 = (root: string, content: string | null) => {
+      const d = join(root, ".agentthread", "threads", "th1-some-slug");
+      mkdirSync(d, { recursive: true });
+      if (content !== null) writeFileSync(join(d, "stage8"), content);
+    };
+
+    test("the coordinator's commit on feat/<task> is refused until stage 8 is recorded, then allowed", () => {
+      const { root, wt } = taskWt("feat/t1");
+      stage8(root, null);
+      const r = commit(wt, CENV(root));
+      expect(r.exitCode).not.toBe(0);
+      expect(err(r)).toContain("AgentThread: stage 8 (browser check) is not done; record it with agt stage th1 8 done|na first.");
+      stage8(root, "done\n");
+      expect(commit(wt, CENV(root)).exitCode).toBe(0);
+    });
+
+    test("main, the user and a legacy coordinator are not gated", () => {
+      const { root, wt } = taskWt("feat/t1");
+      expect(commit(wt, { ...CENV(root), AGT_ROLE: "main" }).exitCode).toBe(0);
+      expect(commit(wt, {}).exitCode).toBe(0);
+      const legacy = taskWt("thread/x");
+      expect(commit(legacy.wt, { AGT_ROLE: "coordinator", AGT_ROOT: legacy.root, AGT_THREAD: "th1" }).exitCode).toBe(0);
+    });
   });
 
   test("with no AGT_ROLE, or main, any branch commits", () => {

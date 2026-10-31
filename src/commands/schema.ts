@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AGENT_KINDS, ROLES, SESSION_SIGNALS, THREAD_STATUSES, THREAD_TYPES } from "../domain/types.ts";
+import { AGENT_KINDS, ROLES, SESSION_SIGNALS, STAGE_STATES, THREAD_STATUSES, THREAD_TYPES } from "../domain/types.ts";
 
 const threadId = z.string().regex(/^\d{3,}$/, "thread id must be numeric, like 002");
 const ticketId = z.string().regex(/^T\d+$/, "ticket id must look like T1");
@@ -43,6 +43,14 @@ export const CommandSchema = z.discriminatedUnion("cmd", [
   z.object({ cmd: z.literal("ticket.reopen"), thread: threadId, ticket: ticketId }),
   z.object({ cmd: z.literal("ticket.accept"), thread: threadId, ticket: ticketId }),
   z.object({ cmd: z.literal("ticket.return"), thread: threadId, ticket: ticketId, note: text }),
+  z.object({
+    cmd: z.literal("stage"),
+    thread: threadId,
+    stage: z.number().int().min(1).max(10),
+    state: z.enum(STAGE_STATES),
+    reason: z.string().trim().optional(),
+    by: z.literal("user").optional(),
+  }),
   z.object({ cmd: z.literal("log"), thread: threadId, message: text }),
   z.object({ cmd: z.literal("decide"), thread: threadId, message: text }),
   z.object({ cmd: z.literal("note"), thread: threadId, message: text }),

@@ -31,6 +31,15 @@ export interface Actor {
   via?: "command";
 }
 
+/** The ten workflow stages of a task thread, by number 1-10. */
+export const STAGE_NAMES = [
+  "discussion", "spec", "tickets", "delegation", "review", "unit and type check", "e2e", "browser check", "shared docs", "release and squash",
+] as const;
+export const STAGE_STATES = ["done", "skipped", "na", "approve"] as const;
+export type StageState = (typeof STAGE_STATES)[number];
+/** Who recorded a stage. Plan 12 adds "agt". */
+export type StageBy = "coordinator" | "user";
+
 export interface Layout {
   workspace: string;
   mainTab: string;
@@ -79,6 +88,7 @@ export type EventBody =
   | { type: "ticket.reviewed"; thread: string; payload: { ticket: string; summary: string } }
   | { type: "ticket.accepted"; thread: string; payload: { ticket: string } }
   | { type: "ticket.returned"; thread: string; payload: { ticket: string; note: string } }
+  | { type: "stage.recorded"; thread: string; payload: { stage: number; state: StageState; by: StageBy; reason?: string } }
   | { type: "log.appended"; thread: string; payload: { message: string } }
   | { type: "decision.recorded"; thread: string; payload: { message: string } }
   | { type: "note.recorded" | "progress.recorded"; thread: string; payload: { message: string } }

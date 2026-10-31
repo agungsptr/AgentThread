@@ -1,5 +1,5 @@
 import type { GitTrail } from "../project/gittrail.ts";
-import { progressBy, type Session, type Thread } from "../state/projection.ts";
+import { progressBy, stageLine, type Session, type Thread } from "../state/projection.ts";
 import { DEFAULT_CONFIG, type Config } from "../config/config.ts";
 import { capBytes, clampHeadings, oneLine, scopeOf, tierLines } from "./markdown.ts";
 
@@ -116,6 +116,7 @@ function build(t: Thread, trail: GitTrail | undefined, trails: Record<string, Gi
     "## Where things stand",
     "",
     `Status: ${t.status}`,
+    ...stageLine(t),
     ...tier,
     t.progress ? `Latest progress: ${t.progress.ts} ${progressBy(t.progress)} ${capBytes(oneLine(t.progress.message), 1000)}` : "No progress recorded yet.",
     "",

@@ -69,6 +69,7 @@ const ALLOWED: Record<CommandName, readonly Role[]> = {
   "ticket.reopen": ["coordinator"],
   "ticket.accept": ["coordinator"],
   "ticket.return": ["coordinator"],
+  stage: ["user", "coordinator"],
   log: ROLES,
   decide: ["coordinator"],
   note: ROLES,
@@ -264,6 +265,17 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
       return {
         events: [{ type: "ticket.created", thread: t.id, payload: { ticket, title: cmd.title, scope: files, repo: cmd.repo, files, ...(cmd.doc ? { doc: cmd.doc } : {}) } }],
         result: { ticket },
+      };
+    }
+    case "stage": {
+      if (t.legacy) reject("stages apply to task threads");
+      if (cmd.state === "approve") {
+        if (cmd.stage !== 7) reject("only stage 7 (e2e) is approved");
+        if (cmd.by !== "user") reject("approving stage 7 needs --by user");
+      } else if (cmd.by === "user" && cmd.state !== "skipped") reject("--by user is only for approve and skipped");
+      if ((cmd.state === "skipped" || cmd.state === "na") && !cmd.reason) reject(`stage ${cmd.stage} ${cmd.state} needs --reason <why>`);
+      return {
+        events: [{ type: "stage.recorded", thread: t.id, payload: { stage: cmd.stage, state: cmd.state, by: cmd.by ?? "coordinator", ...(cmd.reason ? { reason: cmd.reason } : {}) } }],
       };
     }
     case "ticket.files":

@@ -1,7 +1,7 @@
 import { stringify } from "yaml";
 import { DEFAULT_CONFIG, type Config } from "../config/config.ts";
 import { tierRun } from "../orchestration/tiers.ts";
-import { displayStatus, isLive, progressBy, type Session, type State, type Thread } from "../state/projection.ts";
+import { currentStage, displayStatus, isLive, progressBy, stageLine, type Session, type State, type Thread } from "../state/projection.ts";
 
 /** Cut `s` to at most `maxBytes` UTF-8 bytes (on a character boundary), ending with `…` when cut. */
 export function capBytes(s: string, maxBytes: number): string {
@@ -36,7 +36,8 @@ export function renderMain(state: State, config: Config = DEFAULT_CONFIG): strin
     const coordinator = coord ? displayStatus(coord) : "-";
     const workers = live.filter((s) => s.role === "worker").length;
     const limit = t.maxWorkers ?? config.workers.max_workers;
-    return `| ${t.id} | ${cell(t.title)} | ${t.type} | ${t.status} | ${done}/${t.tickets.length} | ${t.dependsOn.join(", ") || "-"} | ${coordinator} | ${workers}/${limit} |`;
+    const c = currentStage(t);
+    return `| ${t.id} | ${cell(t.title)} | ${t.type} | ${t.status} | ${done}/${t.tickets.length} | ${t.dependsOn.join(", ") || "-"} | ${coordinator} | ${workers}/${limit} | ${t.legacy ? "-" : c ? `${c.n} ${c.name}` : "all done"} |`;
   });
   const attention = threads.flatMap((t) =>
     t.status === "review" ? [`- ${t.id}: awaiting review`] : t.status === "blocked" ? [`- ${t.id}: blocked`] : [],
@@ -44,8 +45,8 @@ export function renderMain(state: State, config: Config = DEFAULT_CONFIG): strin
   return [
     `# Main Thread — ${oneLine(state.project?.name ?? "")}`,
     "",
-    "| ID | Title | Type | Status | Tickets | Depends | Coordinator | Workers |",
-    "|----|-------|------|--------|---------|---------|-------------|---------|",
+    "| ID | Title | Type | Status | Tickets | Depends | Coordinator | Workers | Stage |",
+    "|----|-------|------|--------|---------|---------|-------------|---------|-------|",
     ...rows,
     "",
     "## Needs user attention",
@@ -97,6 +98,7 @@ export function renderSub(t: Thread, sessions: Session[] = [], config: Config = 
     "---",
     "",
     ...(t.tier !== undefined ? [...tierLines(t, sessions, config), ""] : []),
+    ...(t.legacy ? [] : [...stageLine(t), ""]),
     "## Goal",
     "",
     clampHeadings(t.goal.trim()) || "_Not set._",

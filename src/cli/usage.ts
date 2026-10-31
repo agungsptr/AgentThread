@@ -18,6 +18,7 @@ export const USAGE = `usage: agt <command>
   ticket accept <thread>/<ticket>                  the reviewed ticket is done; its worker ends
   ticket return <thread>/<ticket> <what to fix...>   back to its worker (or a fresh one) with the note
   ticket block <thread>/<ticket> --reason <text>
+  stage <thread> <1-10> done|skipped|na|approve [--reason <why>] [--by user]   record a task thread's stage (skipped and na need a reason; approve is stage 7, --by user)
   log <thread> <message...>
   decide <thread> <message...>
   note <thread> <message...>

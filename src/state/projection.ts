@@ -1,4 +1,4 @@
-import type { Actor, AgentKind, Layout, Role, SessionRole, StoredEvent, ThreadStatus, ThreadType, TicketStatus } from "../domain/types.ts";
+import { STAGE_NAMES, type Actor, type AgentKind, type Layout, type Role, type SessionRole, type StageBy, type StageState, type StoredEvent, type ThreadStatus, type ThreadType, type TicketStatus } from "../domain/types.ts";
 
 export type SessionStatus = "starting" | "active" | "idle" | "rotated" | "ended" | "failed" | "lost";
 
@@ -144,6 +144,10 @@ export interface Thread {
   /** The `agt worker spawn --agent` override of a queued ticket, by ticket; dropped when its worker is created. */
   workerAgents: Record<string, AgentKind>;
   tickets: Ticket[];
+  /** Task threads: the latest record of each stage 1-10 (approve is not a stage state; see stage7Approved). */
+  stages: Partial<Record<number, { state: Exclude<StageState, "approve">; by: StageBy; reason?: string; ts: string }>>;
+  /** The user approved the e2e stage (`agt stage <thread> 7 approve --by user`). */
+  stage7Approved: boolean;
   decisions: Entry[];
   findings: Entry[];
   questions: Question[];
@@ -200,7 +204,7 @@ export function actorSession(state: State, actor: Actor): string | undefined {
  */
 export const COMMAND_OUTPUT_TYPES: ReadonlySet<string> = new Set([
   "thread.status_changed", "ticket.created", "ticket.claimed", "ticket.completed", "ticket.blocked", "ticket.reopened",
-  "ticket.reviewed", "ticket.accepted", "ticket.returned", "log.appended", "decision.recorded", "note.recorded", "progress.recorded", "question.recorded", "question.answered",
+  "ticket.reviewed", "ticket.accepted", "ticket.returned", "stage.recorded", "log.appended", "decision.recorded", "note.recorded", "progress.recorded", "question.recorded", "question.answered",
   "worker.queued",
 ]);
 
@@ -259,6 +263,8 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       workerQueue: [],
       workerAgents: {},
       tickets: [],
+      stages: {},
+      stage7Approved: false,
       decisions: [],
       findings: [],
       questions: [],
@@ -416,6 +422,13 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       if (ev.payload.agent) t.workerAgents[ev.payload.ticket] = ev.payload.agent;
       note(t, ev, `${ev.payload.ticket} queued for a worker`);
       break;
+    case "stage.recorded": {
+      const p = ev.payload;
+      if (p.state === "approve") t.stage7Approved = true;
+      else t.stages[p.stage] = { state: p.state, by: p.by, ...(p.reason ? { reason: p.reason } : {}), ts: ev.ts };
+      note(t, ev, `stage ${p.stage} (${STAGE_NAMES[p.stage - 1]}) ${p.state}${p.reason ? `: ${p.reason}` : ""}`);
+      break;
+    }
     case "log.appended":
       note(t, ev, ev.payload.message);
       break;
@@ -476,6 +489,20 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       note(t, ev, `handoff submitted${ev.payload.generated ? " (generated)" : ""}`);
       break;
   }
+}
+
+/** A task thread's current stage: the lowest not done, skipped or na; undefined for a legacy thread or when all ten are passed. */
+export function currentStage(t: Thread): { n: number; name: string } | undefined {
+  if (t.legacy) return undefined;
+  for (let n = 1; n <= 10; n++) if (!t.stages[n]) return { n, name: STAGE_NAMES[n - 1]! };
+  return undefined;
+}
+
+/** `Stage: <n> <name>` for a task thread (`all done` once every stage is passed), else nothing. */
+export function stageLine(t: Thread): string[] {
+  if (t.legacy) return [];
+  const c = currentStage(t);
+  return [`Stage: ${c ? `${c.n} ${c.name}` : "all done"}`];
 }
 
 function note(thread: Thread, ev: StoredEvent, message: string): void {

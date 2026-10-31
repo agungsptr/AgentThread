@@ -255,6 +255,8 @@ function* excludeInWorktree(c: Ctx, root: string, repo: string, repoName: string
 const GUARD_MESSAGE = "AgentThread: workers do not commit; the coordinator commits.";
 const WORKER_BRANCH_MESSAGE = "AgentThread: workers commit only on wip/<task>.";
 const COORDINATOR_BRANCH_MESSAGE = "AgentThread: the coordinator commits only the squash on feat/<task>.";
+const STAGE8_PREFIX = "AgentThread: stage 8 (browser check) is not done; record it with agt stage ";
+const STAGE8_SUFFIX = " 8 done|na first.";
 const NO_LIST_PREFIX = "AgentThread: no file list for ticket ";
 const PUSH_MESSAGE = "AgentThread: agents never push; the user pushes.";
 const shq = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
@@ -306,7 +308,8 @@ function hookStub(guardDir: string): string {
     "    coordinator)",
     '      case "$B" in',
     "        thread/*) ;;",
-    `        feat/*) [ -n "\${AGT_TASK:-}" ] && [ "$B" = "feat/$AGT_TASK" ] || { echo ${shq(COORDINATOR_BRANCH_MESSAGE)} >&2; exit 1; } ;;`,
+    `        feat/*) [ -n "\${AGT_TASK:-}" ] && [ "$B" = "feat/$AGT_TASK" ] || { echo ${shq(COORDINATOR_BRANCH_MESSAGE)} >&2; exit 1; }
+          [ -n "$(agt_thread_file stage8)" ] || { echo "${STAGE8_PREFIX}\${AGT_THREAD:-<thread>}${STAGE8_SUFFIX}" >&2; exit 1; } ;;`,
     `        *) echo ${shq(COORDINATOR_BRANCH_MESSAGE)} >&2; exit 1 ;;`,
     "      esac ;;",
     "  esac",

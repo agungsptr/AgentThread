@@ -13,7 +13,7 @@ import { contextTokensFromTranscript } from "../agents/transcript.ts";
 import { isAlive, request } from "../daemon/client.ts";
 import { startDaemon } from "../daemon/server.ts";
 import { configHash, DEFAULT_CONFIG, loadConfig } from "../config/config.ts";
-import { AGENT_KINDS, ROLES, SESSION_SIGNALS, type Actor, type SessionRole, type AgentKind, type Layout, type StoredEvent } from "../domain/types.ts";
+import { AGENT_KINDS, ROLES, SESSION_SIGNALS, STAGE_STATES, type Actor, type SessionRole, type AgentKind, type Layout, type StoredEvent } from "../domain/types.ts";
 import { HerdrCli, shellQuote } from "../herdr/bridge.ts";
 import { refreshRootSkill } from "../agents/skill.ts";
 import { initCommand, setupIfNeeded, setupOnTty } from "../project/setup.ts";
@@ -105,6 +105,19 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
       return thread(sub, rest, findRoot(cwd, env), env);
     case "ticket":
       return ticket(sub, rest, findRoot(cwd, env), env);
+    case "stage": {
+      const { values, positionals } = parse(argv.slice(1), { reason: { type: "string" }, by: { type: "string" } });
+      const [threadId, stage, state] = positionals;
+      if (!threadId || !stage || !state || positionals.length > 3) throw new UsageError("stage needs <thread> <1-10> done|skipped|na|approve");
+      if (!/^\d+$/.test(stage)) throw new UsageError(`stage must be a number 1-10, got '${stage}'`);
+      if (!(STAGE_STATES as readonly string[]).includes(state)) throw new UsageError(`stage state must be one of ${STAGE_STATES.join(", ")}`);
+      if (values.by !== undefined && values.by !== "user") throw new UsageError("--by must be user");
+      return send(findRoot(cwd, env), env, {
+        cmd: "stage", thread: threadId, stage: Number(stage), state,
+        ...(values.reason !== undefined ? { reason: values.reason } : {}),
+        ...(values.by ? { by: values.by } : {}),
+      });
+    }
     case "log":
     case "decide":
     case "note":
