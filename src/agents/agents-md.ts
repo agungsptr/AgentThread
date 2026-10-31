@@ -259,6 +259,9 @@ const STAGE8_PREFIX = "AgentThread: stage 8 (browser check) is not done; record 
 const STAGE8_SUFFIX = " 8 done|na first.";
 const NO_LIST_PREFIX = "AgentThread: no file list for ticket ";
 const PUSH_MESSAGE = "AgentThread: agents never push; the user pushes.";
+const MSG_PREFIX = "AgentThread: the commit message mentions ";
+const MSG_SUFFIX = "; write a plain conventional commit (no AI attribution, ticket ids, .docs paths or banned words).";
+const MSG_UNREADABLE = "AgentThread: cannot read the commit message; commit refused.";
 const shq = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
 
 function writeIfChanged(file: string, text: string): void {
@@ -284,10 +287,35 @@ function hookStub(guardDir: string): string {
     "  done",
     "  return 0",
     "}",
-    `if [ "$N" = "pre-push" ] && [ -n "\${AGT_ROLE:-}" ]; then`, `  echo ${shq(PUSH_MESSAGE)} >&2`, "  exit 1", "fi",
+    "# Role rules apply to agent processes only: a user's shell in a thread tab inherits AGT_ROLE but not this marker.",
+    '[ "${AGT_AGENT_PROCESS:-}" = 1 ] && AGENT=${AGT_ROLE:-} || AGENT=',
+    `if [ "$N" = "pre-push" ] && [ -n "$AGENT" ]; then`, `  echo ${shq(PUSH_MESSAGE)} >&2`, "  exit 1", "fi",
+    "# An agent's commit message: no AI attribution, .docs paths, ticket ids or banned words (comment lines and the",
+    "# scissors section that git commit -v appends are not part of it). Legacy thread/* branches keep no message rules.",
+    'if [ "$N" = "commit-msg" ] && [ -n "$AGENT" ]; then',
+    '  case "$(git symbolic-ref -q --short HEAD 2>/dev/null)" in',
+    "    thread/*) ;;",
+    "    *)",
+    `      agt_refuse_msg() { printf '%s%s%s\\n' ${shq(MSG_PREFIX)} "$1" ${shq(MSG_SUFFIX)} >&2; exit 1; }`,
+    `      [ -n "\${1:-}" ] && [ -f "$1" ] && [ -r "$1" ] || { echo ${shq(MSG_UNREADABLE)} >&2; exit 1; }`,
+    `      M=$(sed -e '/^# -* >8 -*$/,$d' -e '/^#/d' "$1") || { echo ${shq(MSG_UNREADABLE)} >&2; exit 1; }`,
+    "      has() { printf '%s\\n' \"$M\" | grep \"$@\" >/dev/null 2>&1; }",
+    "      has -Fi -e 'co-authored-by:' -e 'generated with' && agt_refuse_msg 'AI attribution'",
+    "      has -Fi -e '.docs/' && agt_refuse_msg 'a .docs path'",
+    "      has -Ei -e '(^|[^[:alnum:]_])t[0-9]{1,4}([^[:alnum:]_]|$)' && agt_refuse_msg 'a ticket id'",
+    '      W="${AGT_ROOT:-/nonexistent}/.agentthread/banned-words"',
+    '      if [ -f "$W" ]; then',
+    "        CR=$(printf '\\r')",
+    "        while IFS= read -r WORD || [ -n \"$WORD\" ]; do",
+    '          WORD=${WORD%"$CR"}',
+    '          [ -n "$WORD" ] && has -Fiw -e "$WORD" && agt_refuse_msg "the banned word \\"$WORD\\""',
+    '        done < "$W"',
+    "      fi ;;",
+    "  esac",
+    "fi",
     'if [ "$N" = "pre-commit" ]; then',
     "  B=$(git symbolic-ref -q --short HEAD 2>/dev/null)",
-    '  case "${AGT_ROLE:-}" in',
+    '  case "$AGENT" in',
     "    worker)",
     '      case "$B" in',
     `        thread/*) echo ${shq(GUARD_MESSAGE)} >&2; exit 1 ;;`,

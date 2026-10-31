@@ -235,3 +235,19 @@ test("the report retry window is overridable from the environment (tests keep sp
   expect(spawnReportRetry({ AGT_SPAWN_REPORT_ATTEMPTS: "3", AGT_SPAWN_REPORT_DELAY_MS: "50" })).toEqual({ attempts: 3, delayMs: 50 });
   expect(spawnReportRetry({ AGT_SPAWN_REPORT_ATTEMPTS: "x", AGT_SPAWN_REPORT_DELAY_MS: "-1" })).toEqual({ attempts: 20, delayMs: 500 });
 });
+
+test("a pane job exports its process env in that pane before the agent starts; a split job carries it in the split env", async () => {
+  const calls: string[] = [];
+  const b = {
+    splitPane: (o: { pane: string; env: Record<string, string> }) => (calls.push(`split ${o.pane} ${JSON.stringify(o.env)}`), "w1:p3"),
+    runInPane: (p: string, cmd: string) => void calls.push(`run ${p} ${cmd}`),
+    agentStart: (o: { pane: string }) => void calls.push(`start ${o.pane}`),
+    agentPrompt: () => {},
+    closePane: () => {},
+  } as unknown as HerdrBridge;
+  await runSpawnJob({ ...JOB, split: undefined, pane: "w1:p1", exportEnv: { AGT_AGENT_PROCESS: "1" }, bootstrap: "" }, { herdr: b, report: async () => true });
+  expect(calls).toEqual(["run w1:p1  export AGT_AGENT_PROCESS='1'", "start w1:p1"]);
+  calls.length = 0;
+  await runSpawnJob({ ...JOB, bootstrap: "" }, { herdr: b, report: async () => true });
+  expect(calls).toEqual([`split w1:p2 {"AGT_SESSION":"s-1"}`, "start w1:p3"]);
+});

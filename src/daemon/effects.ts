@@ -203,7 +203,7 @@ export function createEffectRunner(opts: {
             session: effect.session,
             name: effect.name,
             kind: adapter.herdrKind,
-            ...(effect.pane ? { pane: effect.pane } : {}),
+            ...(effect.pane ? { pane: effect.pane, exportEnv: launched.processEnv } : {}),
             ...(effect.splitFrom
               ? {
                   split: {
@@ -215,6 +215,7 @@ export function createEffectRunner(opts: {
                       ...agentEnv({ root: opts.root, role: effect.role, agent: effect.run.agent, session: effect.session, thread: effect.thread, ticket: effect.ticket, ...(t.dir !== undefined && t.task ? { task: t.task } : {}), configDir }),
                       ...launched.env,
                       ...threadGitEnv(t, opts.root),
+                      ...launched.processEnv,
                     },
                   },
                 }

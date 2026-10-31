@@ -9,6 +9,7 @@ import { DEFAULT_CONFIG } from "../../src/config/config.ts";
 import { createEffectRunner } from "../../src/daemon/effects.ts";
 import type { SpawnJob } from "../../src/agents/spawn-job.ts";
 import { addWorktree } from "../../src/project/git.ts";
+import { AGENT_KINDS } from "../../src/domain/types.ts";
 import { applyEvent, type Thread } from "../../src/state/projection.ts";
 import { handle } from "../../src/commands/handler.ts";
 import { CommandSchema } from "../../src/commands/schema.ts";
@@ -28,7 +29,10 @@ const SECTION = "# AgentThread\n\nsection body\n";
 // Never read the developer's global git config or excludes.
 const HOME = isolatedConfigHome();
 const envFor = (home: string) => ({ ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, "xdg"), GIT_CONFIG_GLOBAL: join(home, "gitconfig"), GIT_CONFIG_NOSYSTEM: "1" });
-const ENV = envFor(HOME);
+const ENV: Record<string, string | undefined> = envFor(HOME);
+delete ENV.AGT_AGENT_PROCESS;
+// The marker an agent process carries: the hooks apply role rules only with it.
+const AGENT = { AGT_AGENT_PROCESS: "1" };
 const write = (o: { root: string; worktree: string; content: string }, env: Record<string, string | undefined> = ENV) =>
   writeAgentsFiles({ ...o, env, config: NO_SKILL });
 
@@ -350,7 +354,7 @@ describe("worker commit guard", () => {
   test("a worker cannot commit in a thread worktree", () => {
     const { root, wt } = repoWith({});
     write({ root, worktree: wt, content: SECTION });
-    const r = commit(wt, { AGT_ROLE: "worker" });
+    const r = commit(wt, { ...AGENT, AGT_ROLE: "worker" });
     expect(r.exitCode).not.toBe(0);
     expect(r.stderr.toString()).toContain("AgentThread: workers do not commit; the coordinator commits.");
   });
@@ -358,7 +362,7 @@ describe("worker commit guard", () => {
   test("the coordinator can commit", () => {
     const { root, wt } = repoWith({});
     write({ root, worktree: wt, content: SECTION });
-    expect(commit(wt, { AGT_ROLE: "coordinator" }).exitCode).toBe(0);
+    expect(commit(wt, { ...AGENT, AGT_ROLE: "coordinator" }).exitCode).toBe(0);
   });
 
   test("the project's own pre-commit hook still runs", () => {
@@ -366,7 +370,7 @@ describe("worker commit guard", () => {
     const hook = join(root, ".git", "hooks", "pre-commit");
     writeFileSync(hook, "#!/bin/sh\necho project-hook-ran >&2\nexit 1\n", { mode: 0o755 });
     write({ root, worktree: wt, content: SECTION });
-    const r = commit(wt, { AGT_ROLE: "coordinator" });
+    const r = commit(wt, { ...AGENT, AGT_ROLE: "coordinator" });
     expect(r.exitCode).not.toBe(0);
     expect(r.stderr.toString()).toContain("project-hook-ran");
   });
@@ -375,7 +379,7 @@ describe("worker commit guard", () => {
     const { root, wt } = repoWith({});
     write({ root, worktree: wt, content: SECTION });
     expect(Bun.spawnSync(["git", "-C", root, "config", "--get", "core.hooksPath"], { env: ENV }).exitCode).not.toBe(0);
-    expect(commit(root, { AGT_ROLE: "worker" }).exitCode).toBe(0);
+    expect(commit(root, { ...AGENT, AGT_ROLE: "worker" }).exitCode).toBe(0);
   });
 
   test("a relative core.hooksPath with two worktrees: each runs its own project hook", () => {
@@ -392,7 +396,7 @@ describe("worker commit guard", () => {
       write({ root, worktree: w, content: SECTION });
     });
     wts.forEach((w, i) => {
-      const r = commit(w, { AGT_ROLE: "coordinator" });
+      const r = commit(w, { ...AGENT, AGT_ROLE: "coordinator" });
       expect(r.exitCode).not.toBe(0);
       expect(r.stdout.toString() + r.stderr.toString()).toContain(`hook-${i}`);
     });
@@ -404,7 +408,7 @@ describe("worker commit guard", () => {
     addWorktree(root, "thread/001-x", wt);
     write({ root, worktree: wt, content: SECTION });
     writeFileSync(join(root, ".git", "hooks", "commit-msg"), '#!/bin/sh\ncase "$1" in *COMMIT_EDITMSG) echo msg-arg-ok >&2;; esac\nexit 1\n', { mode: 0o755 });
-    const r = commit(wt, { AGT_ROLE: "coordinator" });
+    const r = commit(wt, { ...AGENT, AGT_ROLE: "coordinator" });
     expect(r.exitCode).not.toBe(0);
     expect(r.stderr.toString()).toContain("msg-arg-ok");
   });
@@ -432,7 +436,7 @@ describe("branch-aware commit guard and no-push hook", () => {
     return { root, wt };
   }
   const err = (r: ReturnType<typeof commit>) => r.stderr.toString();
-  const WENV = (root: string) => ({ AGT_ROOT: root, AGT_ROLE: "worker", AGT_TASK: "t1", AGT_THREAD: "th1", AGT_TICKET: "T1" });
+  const WENV = (root: string) => ({ ...AGENT, AGT_ROOT: root, AGT_ROLE: "worker", AGT_TASK: "t1", AGT_THREAD: "th1", AGT_TICKET: "T1" });
   function ticketList(root: string, ticket: string, files: string[] | null) {
     const d = join(root, ".agentthread", "threads", "th1-some-slug", "tickets");
     mkdirSync(d, { recursive: true });
@@ -443,10 +447,10 @@ describe("branch-aware commit guard and no-push hook", () => {
     const a = taskWt("wip/t1");
     ticketList(a.root, "T1", ["f.txt"]);
     expect(commit(a.wt, { ...WENV(a.root), AGT_TASK: "t1" }).exitCode).toBe(0);
-    const r = commit(taskWt("feat/t1").wt, { AGT_ROLE: "worker", AGT_TASK: "t1" });
+    const r = commit(taskWt("feat/t1").wt, { ...AGENT, AGT_ROLE: "worker", AGT_TASK: "t1" });
     expect(r.exitCode).not.toBe(0);
     expect(err(r)).toContain(WIP);
-    const other = commit(taskWt("wip/t2").wt, { AGT_ROLE: "worker", AGT_TASK: "t1" });
+    const other = commit(taskWt("wip/t2").wt, { ...AGENT, AGT_ROLE: "worker", AGT_TASK: "t1" });
     expect(other.exitCode).not.toBe(0);
     expect(err(other)).toContain(WIP);
   });
@@ -530,14 +534,14 @@ describe("branch-aware commit guard and no-push hook", () => {
     const d = join(f.root, ".agentthread", "threads", "th1-some-slug");
     mkdirSync(d, { recursive: true });
     writeFileSync(join(d, "stage8"), "done\n");
-    expect(commit(f.wt, { AGT_ROLE: "coordinator", AGT_TASK: "t1", AGT_ROOT: f.root, AGT_THREAD: "th1" }).exitCode).toBe(0);
-    const r = commit(taskWt("wip/t1").wt, { AGT_ROLE: "coordinator", AGT_TASK: "t1" });
+    expect(commit(f.wt, { ...AGENT, AGT_ROLE: "coordinator", AGT_TASK: "t1", AGT_ROOT: f.root, AGT_THREAD: "th1" }).exitCode).toBe(0);
+    const r = commit(taskWt("wip/t1").wt, { ...AGENT, AGT_ROLE: "coordinator", AGT_TASK: "t1" });
     expect(r.exitCode).not.toBe(0);
     expect(err(r)).toContain(FEAT);
   });
 
   describe("the squash gate (stage 8)", () => {
-    const CENV = (root: string) => ({ AGT_ROOT: root, AGT_ROLE: "coordinator", AGT_TASK: "t1", AGT_THREAD: "th1" });
+    const CENV = (root: string) => ({ ...AGENT, AGT_ROOT: root, AGT_ROLE: "coordinator", AGT_TASK: "t1", AGT_THREAD: "th1" });
     const stage8 = (root: string, content: string | null) => {
       const d = join(root, ".agentthread", "threads", "th1-some-slug");
       mkdirSync(d, { recursive: true });
@@ -557,7 +561,7 @@ describe("branch-aware commit guard and no-push hook", () => {
     test("writeAll's stage8 file opens the hook: refused before the stage is recorded, allowed after", () => {
       const { root, wt } = taskWt("feat/t1");
       const state = stateOf(INIT, taskThreadCreated("001", "t1"));
-      const env = { AGT_ROOT: root, AGT_ROLE: "coordinator", AGT_TASK: "t1", AGT_THREAD: "001" };
+      const env = { ...AGENT, AGT_ROOT: root, AGT_ROLE: "coordinator", AGT_TASK: "t1", AGT_THREAD: "001" };
       writeAll(root, state, undefined, () => undefined);
       const r = commit(wt, env);
       expect(r.exitCode).not.toBe(0);
@@ -574,22 +578,22 @@ describe("branch-aware commit guard and no-push hook", () => {
       expect(commit(wt, { ...CENV(root), AGT_ROLE: "main" }).exitCode).toBe(0);
       expect(commit(wt, {}).exitCode).toBe(0);
       const legacy = taskWt("thread/x");
-      expect(commit(legacy.wt, { AGT_ROLE: "coordinator", AGT_ROOT: legacy.root, AGT_THREAD: "th1" }).exitCode).toBe(0);
+      expect(commit(legacy.wt, { ...AGENT, AGT_ROLE: "coordinator", AGT_ROOT: legacy.root, AGT_THREAD: "th1" }).exitCode).toBe(0);
     });
   });
 
   test("with no AGT_ROLE, or main, any branch commits", () => {
     expect(commit(taskWt("wip/t1").wt, {}).exitCode).toBe(0);
-    expect(commit(taskWt("feat/t1").wt, { AGT_ROLE: "main" }).exitCode).toBe(0);
+    expect(commit(taskWt("feat/t1").wt, { ...AGENT, AGT_ROLE: "main" }).exitCode).toBe(0);
     expect(commit(taskWt("other/x").wt, {}).exitCode).toBe(0);
   });
 
   test("legacy thread/* branches: the worker is refused with the old message, the coordinator commits", () => {
     const { wt } = taskWt("thread/x");
-    const r = commit(wt, { AGT_ROLE: "worker", AGT_TASK: "t1" });
+    const r = commit(wt, { ...AGENT, AGT_ROLE: "worker", AGT_TASK: "t1" });
     expect(r.exitCode).not.toBe(0);
     expect(err(r)).toContain("AgentThread: workers do not commit; the coordinator commits.");
-    expect(commit(wt, { AGT_ROLE: "coordinator" }).exitCode).toBe(0);
+    expect(commit(wt, { ...AGENT, AGT_ROLE: "coordinator" }).exitCode).toBe(0);
   });
 
   test("any agent role is refused a push; no role pushes; the project's pre-commit still runs after an allowed commit", () => {
@@ -600,7 +604,7 @@ describe("branch-aware commit guard and no-push hook", () => {
     const push = (env: Record<string, string>) =>
       Bun.spawnSync(["git", "-C", wt, "push", "-q", "origin", "HEAD:refs/heads/wip/t1"], { env: { ...ENV, ...env }, stdout: "pipe", stderr: "pipe" });
     for (const role of ["worker", "coordinator", "main"]) {
-      const r = push({ AGT_ROLE: role });
+      const r = push({ ...AGENT, AGT_ROLE: role });
       expect(r.exitCode).not.toBe(0);
       expect(r.stderr.toString()).toContain(PUSH);
     }
@@ -614,8 +618,133 @@ describe("branch-aware commit guard and no-push hook", () => {
   });
 });
 
+describe("commit-msg guard", () => {
+  const MSG = (what: string) =>
+    `AgentThread: the commit message mentions ${what}; write a plain conventional commit (no AI attribution, ticket ids, .docs paths or banned words).`;
+  function taskWt(branch: string) {
+    const root = tempRepo();
+    const wt = join(root, ".worktrees", "t1", "repo");
+    addWorktree(root, branch, wt);
+    write({ root, worktree: wt, content: SECTION });
+    const d = join(root, ".agentthread", "threads", "th1-some-slug");
+    mkdirSync(join(d, "tickets"), { recursive: true });
+    writeFileSync(join(d, "tickets", "T1.files"), "f.txt\n");
+    writeFileSync(join(d, "stage8"), "done\n");
+    return { root, wt };
+  }
+  const WORKER = (root: string) => ({ ...AGENT, AGT_ROOT: root, AGT_ROLE: "worker", AGT_TASK: "t1", AGT_THREAD: "th1", AGT_TICKET: "T1" });
+  const COORD = (root: string) => ({ ...AGENT, AGT_ROOT: root, AGT_ROLE: "coordinator", AGT_TASK: "t1", AGT_THREAD: "th1" });
+  /** Commits f.txt with `message` given as a file (-F), so comment lines and a scissors section reach the hook as git writes them. */
+  function commitMsg(dir: string, message: string, env: Record<string, string>, extra: string[] = []) {
+    writeFileSync(join(dir, "f.txt"), String(Math.random()));
+    git(dir, "add", "f.txt");
+    const file = join(mkdtempSync(join(tmpdir(), "agt-msg-")), "msg");
+    writeFileSync(file, message);
+    return Bun.spawnSync(["git", "-C", dir, "commit", "-q", ...extra, "-F", file], { env: { ...ENV, ...env }, stdout: "pipe", stderr: "pipe" });
+  }
+  const REFUSED: [string, string][] = [
+    ["feat: add slugify\n\nCo-Authored-By: Someone <noreply@example.com>\n", "AI attribution"],
+    ["feat: add slugify\n\nco-authored-by: someone\n", "AI attribution"],
+    ["feat: add slugify\n\nGenerated with a tool\n", "AI attribution"],
+    ["feat: add slugify\n\nsee .docs/shared/spec.md\n", "a .docs path"],
+    ["feat: add slugify for T12\n", "a ticket id"],
+    ["feat(t3): add slugify\n", "a ticket id"],
+  ];
+
+  test("a worker's message with each refused form is refused with its exact reason; a clean one passes", () => {
+    const { root, wt } = taskWt("wip/t1");
+    for (const [message, what] of REFUSED) {
+      const r = commitMsg(wt, message, WORKER(root));
+      expect(r.exitCode).not.toBe(0);
+      expect(r.stderr.toString()).toContain(MSG(what));
+    }
+    for (const clean of ["feat: add slugify\n", "feat: add T1000x and AT12 parsing\n", "fix: handle docs/ and .doc paths\n"]) {
+      const r = commitMsg(wt, clean, WORKER(root));
+      expect(r.stderr.toString()).toBe("");
+      expect(r.exitCode).toBe(0);
+    }
+  });
+
+  test("a banned word from the config is refused as a whole word, any case; a longer word passes", () => {
+    const { root, wt } = taskWt("wip/t1");
+    const config = { ...DEFAULT_CONFIG, workflow: { ...DEFAULT_CONFIG.workflow, banned_words: ["Zentro", "acme corp"] } };
+    writeAll(root, stateOf(INIT), config, () => undefined);
+    expect(readFileSync(join(root, ".agentthread", "banned-words"), "utf8")).toBe("Zentro\nacme corp\n");
+    for (const [message, word] of [["feat: add Zentro support\n", "Zentro"], ["feat: add zentro\n", "Zentro"], ["fix: (ZENTRO) parse\n", "Zentro"], ["feat: for Acme Corp\n", "acme corp"]] as const) {
+      const r = commitMsg(wt, message, WORKER(root));
+      expect(r.exitCode).not.toBe(0);
+      expect(r.stderr.toString()).toContain(MSG(`the banned word "${word}"`));
+    }
+    for (const message of ["feat: add Zentroy support\n", "feat: add unZentro\n", "feat: acme corporate\n"]) expect(commitMsg(wt, message, WORKER(root)).exitCode).toBe(0);
+    // no banned words: the file goes away and nothing is refused for it
+    writeAll(root, stateOf(INIT), DEFAULT_CONFIG, () => undefined);
+    expect(existsSync(join(root, ".agentthread", "banned-words"))).toBe(false);
+    expect(commitMsg(wt, "feat: add Zentro support\n", WORKER(root)).exitCode).toBe(0);
+  });
+
+  test("comment lines and the scissors section are ignored", () => {
+    const { root, wt } = taskWt("wip/t1");
+    const message = "feat: add slugify\n# Co-Authored-By: x\n# see .docs/a.md T1\n# ------------------------ >8 ------------------------\nGenerated with T9 .docs/x\n";
+    const r = commitMsg(wt, message, WORKER(root), ["--cleanup=scissors"]);
+    expect(r.stderr.toString()).toBe("");
+    expect(r.exitCode).toBe(0);
+  });
+
+  test("the same messages pass for a user, also with the tab's AGT_ROLE=coordinator; so does that user's commit on wip/<task>", () => {
+    const { root, wt } = taskWt("wip/t1");
+    const tabShell = { AGT_ROOT: root, AGT_ROLE: "coordinator", AGT_TASK: "t1", AGT_THREAD: "th1" };
+    for (const env of [{}, tabShell]) {
+      for (const [message] of REFUSED) expect(commitMsg(wt, message, env).exitCode).toBe(0);
+    }
+    // the pre-commit hook: a coordinator agent is refused on wip/<task>, the user in its tab is not
+    expect(commit(wt, COORD(root)).exitCode).not.toBe(0);
+    expect(commit(wt, tabShell).exitCode).toBe(0);
+    expect(commit(wt, { AGT_ROLE: "worker", AGT_TASK: "t2" }).exitCode).toBe(0);
+  });
+
+  test("a coordinator squash with a clean message passes; with attribution it is refused", () => {
+    const { root, wt } = taskWt("feat/t1");
+    expect(commitMsg(wt, "feat: add slugify\n\nOne line of why.\n", COORD(root)).exitCode).toBe(0);
+    const r = commitMsg(wt, "feat: add slugify\n\nCo-Authored-By: x\n", COORD(root));
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr.toString()).toContain(MSG("AI attribution"));
+  });
+
+  test("a legacy thread/* branch keeps the old behavior: no message rules", () => {
+    const { root, wt } = taskWt("thread/x");
+    expect(commitMsg(wt, "feat: T1\n\nCo-Authored-By: x\n", COORD(root)).exitCode).toBe(0);
+  });
+
+  test("an agent's message that cannot be read is refused (fail closed)", () => {
+    const { root, wt } = taskWt("wip/t1");
+    const hook = join(root, ".agentthread", "hooks", "commit-msg");
+    for (const args of [[join(root, "no-such-message")], []]) {
+      const r = Bun.spawnSync([hook, ...args], { cwd: wt, env: { ...ENV, ...WORKER(root) }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+      expect(r.exitCode).not.toBe(0);
+      expect(r.stderr.toString()).toContain("AgentThread: cannot read the commit message; commit refused.");
+    }
+  });
+});
+
 describe("effect runner", () => {
   const LAYOUT = { workspace: "w", mainTab: "t", managerPane: "p0", loggerPane: "p1", herdrBin: "/nonexistent/herdr" };
+
+  test("every agent kind's spawn marks the agent's process: exported in a root pane, in the split env otherwise", async () => {
+    const root = tempRepo();
+    const wt = join(root, ".worktrees", "001-fix-race");
+    addWorktree(root, "thread/001-fix-race", wt);
+    const thread = { id: "001", title: "Fix race", slug: "fix-race", worktree: wt } as Thread;
+    const jobs: SpawnJob[] = [];
+    const run = createEffectRunner({ root, config: NO_SKILL, layout: () => LAYOUT, thread: () => thread, launch: (job) => jobs.push(job), log: () => {} });
+    for (const agent of AGENT_KINDS) {
+      const spawn = { kind: "agent.spawn", session: `s-${agent}`, role: "coordinator", run: { agent }, name: "coord", thread: "001", cwd: wt } as const;
+      expect(await run({ ...spawn, pane: "p2" })).toEqual([]);
+      expect(jobs.at(-1)?.exportEnv).toEqual({ AGT_AGENT_PROCESS: "1" });
+      expect(await run({ ...spawn, role: "worker", ticket: "T1", splitFrom: "p2", direction: "down" })).toEqual([]);
+      expect(jobs.at(-1)?.split?.env.AGT_AGENT_PROCESS).toBe("1");
+      expect(jobs.at(-1)?.exportEnv).toBeUndefined();
+    }
+  });
 
   test("writes AGENTS.md after git.worktree.add and again before every agent.spawn", async () => {
     const root = tempRepo();
@@ -658,7 +787,7 @@ test("a core.hooksPath of ~/x is expanded, so the project's own hook still runs"
   writeFileSync(join(HOME, "x", "pre-commit"), "#!/bin/sh\necho home-hook-ran >&2\nexit 1\n", { mode: 0o755 });
   write({ root, worktree: wt, content: SECTION });
   expect(git(wt, "config", "--worktree", "--get", "agentthread.hooksPath").trim()).toBe(join(HOME, "x"));
-  const r = commit(wt, { AGT_ROLE: "coordinator" });
+  const r = commit(wt, { ...AGENT, AGT_ROLE: "coordinator" });
   expect(r.exitCode).not.toBe(0);
   expect(r.stderr.toString()).toContain("home-hook-ran");
 });

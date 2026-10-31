@@ -5,6 +5,7 @@ import { adapterFor } from "../../src/agents/adapters.ts";
 import { hookSettings } from "../../src/agents/claude.ts";
 import { DEFAULT_CONFIG } from "../../src/config/config.ts";
 import { AGENT_KINDS } from "../../src/domain/types.ts";
+import { tabEnv } from "../../src/orchestration/sessions.ts";
 
 const base = { role: "worker", config: DEFAULT_CONFIG, root: "/r" } as const;
 const nonAuto = { ...DEFAULT_CONFIG, agents: { ...DEFAULT_CONFIG.agents, autonomous: false } };
@@ -198,6 +199,22 @@ test("§13: codex and omp have no per-command allow list; their task-thread args
         const launch = (legacy: boolean) => adapterFor(agent).launch({ ...base, role, config, legacy, ticketDoc: "x.md", run: { agent } }).args;
         expect(launch(false)).toEqual(launch(true));
       }
+    }
+  }
+});
+
+test("every agent kind's launch marks the agent's own process, never its tab env", () => {
+  for (const agent of AGENT_KINDS) {
+    for (const role of ["main", "coordinator", "worker"] as const) {
+      const launched = adapterFor(agent).launch({ ...base, role, run: { agent } });
+      expect(launched.processEnv).toEqual({ AGT_AGENT_PROCESS: "1" });
+      expect(launched.env.AGT_AGENT_PROCESS).toBeUndefined();
+    }
+    const config = { ...DEFAULT_CONFIG, agents: { ...DEFAULT_CONFIG.agents, roles: { ...DEFAULT_CONFIG.agents.roles, coordinator: { agent } } } };
+    for (const t of [{ id: "001" }, { id: "002", dir: "/r/.worktrees/t1", task: "t1" }]) {
+      const env = tabEnv(t, { root: "/r", config });
+      expect(env.AGT_ROLE).toBe("coordinator");
+      expect(env.AGT_AGENT_PROCESS).toBeUndefined();
     }
   }
 });

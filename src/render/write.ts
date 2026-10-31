@@ -26,6 +26,11 @@ export function writeAll(
   const p = paths(root);
   mkdirSync(p.threadsDir, { recursive: true });
   writeAtomic(p.mainThread, renderMain(state, config));
+  // The commit-msg hook refuses an agent's message with one of these, one word per line (no file when there are none).
+  const banned = (config.workflow.banned_words ?? []).map((w) => w.replace(/[\r\n]+/g, " ").trim()).filter((w) => w !== "");
+  const bannedFile = join(root, ".agentthread", "banned-words");
+  if (banned.length) writeAtomic(bannedFile, banned.map((w) => `${w}\n`).join(""));
+  else rmSync(bannedFile, { force: true });
   for (const t of state.threads.values()) {
     const dir = p.threadDir(t);
     mkdirSync(dir, { recursive: true });

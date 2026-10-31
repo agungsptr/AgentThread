@@ -442,7 +442,7 @@ async function start(root: string, env: Env, argv: string[]): Promise<number> {
     const proc = Bun.spawn([bin, ...launched.args, ...adapter.promptArgs(systemPrompt({ root, role: "main", config }))], {
       stdio: ["inherit", "inherit", "inherit"],
       cwd: root,
-      env: { ...env, ...launched.env, ...agentEnv({ root, role: "main", agent: run.agent, session }) },
+      env: { ...env, ...launched.env, ...agentEnv({ root, role: "main", agent: run.agent, session }), ...launched.processEnv },
     });
     code = await proc.exited;
   } catch (e) {

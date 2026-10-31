@@ -149,7 +149,7 @@ test("agt start launches main with adapterFor(roles.main)", () => {
   const run = JSON.parse(readFileSync(log, "utf8").trim()) as { argv: string[]; cwd: string; env: Record<string, string> };
   expect(run.argv).toEqual(["--standalone", "--auto", "--prompt", systemPrompt({ root, role: "main" })]);
   expect(realpathSync(run.cwd)).toBe(realpathSync(root));
-  expect(run.env).toMatchObject({ AGT_ROLE: "main", AGT_AGENT: "opencode" });
+  expect(run.env).toMatchObject({ AGT_ROLE: "main", AGT_AGENT: "opencode", AGT_AGENT_PROCESS: "1" });
   expect(JSON.parse(run.env.OPENCODE_CONFIG_CONTENT!)).toMatchObject({ permission: { "*": "allow" } });
 }, 15_000);
 

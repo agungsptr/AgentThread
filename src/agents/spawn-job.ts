@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
-import { HerdrError, type HerdrBridge } from "../herdr/bridge.ts";
+import { HerdrError, shellQuote, type HerdrBridge } from "../herdr/bridge.ts";
 import { AGT_BIN } from "./claude.ts";
 
 export interface SpawnJob {
@@ -11,6 +11,11 @@ export interface SpawnJob {
   name: string;
   kind: string;
   pane?: string;
+  /**
+   * With `pane`: the agent's own process env, exported in that pane's shell before the agent starts (Herdr starts the
+   * agent from the pane's shell, and that pane's env is the tab's). A split carries it in `split.env` instead.
+   */
+  exportEnv?: Record<string, string>;
   /** `fallbacks` are split from in order when `pane` is gone. */
   split?: { pane: string; fallbacks?: string[]; direction: "right" | "down"; cwd: string; env: Record<string, string> };
   args: string[];
@@ -77,6 +82,9 @@ export async function runSpawnJob(
   let attached: { pane: string; pending?: string };
   try {
     const pane = job.pane ?? (created = splitWithFallbacks(deps.herdr, job.split!));
+    // A leading space keeps the line out of shell history (HISTCONTROL=ignorespace, zsh's HIST_IGNORE_SPACE).
+    const exported = job.pane ? Object.entries(job.exportEnv ?? {}) : [];
+    if (exported.length) deps.herdr.runInPane(pane, ` export ${exported.map(([k, v]) => `${k}=${shellQuote(v)}`).join(" ")}`);
     for (let attempt = 0; ; attempt++) {
       try {
         deps.herdr.agentStart({ name: job.name, kind: job.kind, pane, args: job.args });

@@ -33,12 +33,23 @@ export interface AgentAdapter {
   instructionFiles: string[];
   /** How a first message is passed on the command line (main only). */
   prompt: "positional" | "flag";
-  launch(o: LaunchInput): { args: string[]; env: Record<string, string> };
+  /**
+   * `env` is the adapter's own env (also merged into a thread tab's env); `processEnv` is set on the agent's own process
+   * only (its split pane's env, exported in a root pane's shell, main's spawn env), never in a tab env.
+   */
+  launch(o: LaunchInput): { args: string[]; env: Record<string, string>; processEnv: Record<string, string> };
   promptArgs(text: string): string[];
   capabilities: { hooks: boolean; contextSize: boolean; preCompact: boolean };
 }
 
 const positional = (text: string): string[] => [text];
+
+/**
+ * Marks an agent's own process, so the git hooks apply role rules to agents only: a user's shell split in a thread tab
+ * inherits the tab's AGT_ROLE=coordinator, and the first coordinator runs without AGT_SESSION.
+ */
+export const AGENT_PROCESS_ENV: Readonly<Record<string, string>> = { AGT_AGENT_PROCESS: "1" };
+const processEnv = () => ({ ...AGENT_PROCESS_ENV });
 const NO_HOOKS = { hooks: false, contextSize: false, preCompact: false };
 
 const claudeAdapter: AgentAdapter = {
@@ -59,7 +70,7 @@ const claudeAdapter: AgentAdapter = {
         ];
     if (run.model) args.push("--model", run.model);
     if (run.effort) args.push("--effort", run.effort);
-    return { args, env: {} };
+    return { args, env: {}, processEnv: processEnv() };
   },
   promptArgs: positional,
   capabilities: { hooks: true, contextSize: true, preCompact: true },
@@ -90,7 +101,7 @@ const opencodeAdapter: AgentAdapter = {
       : { "*": "allow", external_directory: "allow", doom_loop: "allow", bash: { "*": "allow", "git push*": "deny" } };
     // --standalone: a TUI attached to OpenCode's shared background service gets that service's config, and our
     // OPENCODE_CONFIG_CONTENT (model, permissions) would be ignored; a private server reads it.
-    return { args: ask ? ["--standalone"] : ["--standalone", "--auto"], env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...model, permission }) } };
+    return { args: ask ? ["--standalone"] : ["--standalone", "--auto"], env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...model, permission }) }, processEnv: processEnv() };
   },
   promptArgs: (text) => ["--prompt", text],
   capabilities: NO_HOOKS,
@@ -133,6 +144,7 @@ const codexAdapter: AgentAdapter = {
         "-c", `projects={${trusted.join(",")}}`,
       ],
       env: {},
+      processEnv: processEnv(),
     };
   },
   promptArgs: positional,
@@ -154,6 +166,7 @@ const ompAdapter: AgentAdapter = {
         ...(config.agents.autonomous ? ["--approval-mode", "yolo"] : []),
       ],
       env: {},
+      processEnv: processEnv(),
     };
   },
   promptArgs: positional,
