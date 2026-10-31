@@ -9,8 +9,12 @@ import { DEFAULT_CONFIG } from "../../src/config/config.ts";
 import { createEffectRunner } from "../../src/daemon/effects.ts";
 import type { SpawnJob } from "../../src/agents/spawn-job.ts";
 import { addWorktree } from "../../src/project/git.ts";
-import type { Thread } from "../../src/state/projection.ts";
-import { isolatedConfigHome, tempRepo } from "../helpers.ts";
+import { applyEvent, type Thread } from "../../src/state/projection.ts";
+import { handle } from "../../src/commands/handler.ts";
+import { CommandSchema } from "../../src/commands/schema.ts";
+import type { StoredEvent } from "../../src/domain/types.ts";
+import { writeAll } from "../../src/render/write.ts";
+import { INIT, isolatedConfigHome, stateOf, taskThreadCreated, tempRepo } from "../helpers.ts";
 
 function git(dir: string, ...args: string[]): string {
   const r = Bun.spawnSync(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" });
@@ -548,6 +552,21 @@ describe("branch-aware commit guard and no-push hook", () => {
       expect(err(r)).toContain("AgentThread: stage 8 (browser check) is not done; record it with agt stage th1 8 done|na first.");
       stage8(root, "done\n");
       expect(commit(wt, CENV(root)).exitCode).toBe(0);
+    });
+
+    test("writeAll's stage8 file opens the hook: refused before the stage is recorded, allowed after", () => {
+      const { root, wt } = taskWt("feat/t1");
+      const state = stateOf(INIT, taskThreadCreated("001", "t1"));
+      const env = { AGT_ROOT: root, AGT_ROLE: "coordinator", AGT_TASK: "t1", AGT_THREAD: "001" };
+      writeAll(root, state, undefined, () => undefined);
+      const r = commit(wt, env);
+      expect(r.exitCode).not.toBe(0);
+      expect(err(r)).toContain("AgentThread: stage 8 (browser check) is not done; record it with agt stage 001 8 done|na first.");
+      const res = handle(state, CommandSchema.parse({ cmd: "stage", thread: "001", stage: 8, state: "done" }), { role: "user" }, { root });
+      if (!res.ok) throw new Error(res.error);
+      for (const body of res.events) applyEvent(state, { ...body, seq: state.lastSeq + 1, ts: "2026-10-09T11:00:00.000Z", actor: { role: "user" } } as StoredEvent);
+      writeAll(root, state, undefined, () => undefined);
+      expect(commit(wt, env).exitCode).toBe(0);
     });
 
     test("main, the user and a legacy coordinator are not gated", () => {

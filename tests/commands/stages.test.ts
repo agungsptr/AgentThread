@@ -94,14 +94,14 @@ describe("agt stage", () => {
 
 describe("the stage8 file", () => {
   const file = (root: string) => join(root, ".agentthread", "threads", "001-thread-001", "stage8");
-  test("exists only while stage 8 is done or na", () => {
+  test("exists only while stage 8 is done, na or skipped", () => {
     const root = mkdtempSync(join(tmpdir(), "agt-s8-"));
     const s = base();
     writeAll(root, s, undefined, () => undefined);
     expect(existsSync(file(root))).toBe(false);
     exec(s, stage(8, "skipped", { reason: "x" }));
     writeAll(root, s, undefined, () => undefined);
-    expect(existsSync(file(root))).toBe(false);
+    expect(readFileSync(file(root), "utf8")).toBe("skipped\n");
     exec(s, stage(8, "done"));
     writeAll(root, s, undefined, () => undefined);
     expect(readFileSync(file(root), "utf8")).toBe("done\n");
