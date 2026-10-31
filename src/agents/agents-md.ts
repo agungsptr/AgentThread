@@ -10,7 +10,7 @@ import { systemPrompt } from "./prompts.ts";
 type ThreadRef = { id: string; title: string; slug: string; worktree: string };
 
 /** The role prompts without their first (identity) line: the role is stated by the bootstrap prompt instead. */
-const rulesOf = (prompt: string) => prompt.split("\n").slice(1);
+export const rulesOf = (prompt: string) => prompt.split("\n").slice(1);
 
 /** The AgentThread section of a worktree's AGENTS.md. One file serves the coordinator and the workers. */
 export function agentsMd(o: { root: string; thread: ThreadRef; config?: Config }): string {

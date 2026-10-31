@@ -12,42 +12,18 @@ import { decodeJob, loggedArgv, reportWithRetry, runSpawnJob, spawnReportRetry }
 import { contextTokensFromTranscript } from "../agents/transcript.ts";
 import { isAlive, request } from "../daemon/client.ts";
 import { startDaemon } from "../daemon/server.ts";
-import { configHash, loadConfig } from "../config/config.ts";
-import { AGENT_KINDS, ROLES, SESSION_SIGNALS, type Actor, type AgentKind, type Layout, type StoredEvent } from "../domain/types.ts";
+import { configHash, DEFAULT_CONFIG, loadConfig } from "../config/config.ts";
+import { AGENT_KINDS, ROLES, SESSION_SIGNALS, type Actor, type SessionRole, type AgentKind, type Layout, type StoredEvent } from "../domain/types.ts";
 import { HerdrCli, shellQuote } from "../herdr/bridge.ts";
 import { initCommand, setupIfNeeded, setupOnTty } from "../project/setup.ts";
 import { paths } from "../project/paths.ts";
 import { findRoot } from "../project/root.ts";
+import { USAGE } from "./usage.ts";
+import { guide } from "../agents/guide.ts";
 
 type Env = Record<string, string | undefined>;
 
-const USAGE = `usage: agt <command>
-
-  init [--name <name>]
-  setup                      choose agent, model and effort per role, and complexity tiers
-  start [--no-manager]       set up the Herdr layout and run the main manager (inside a Herdr pane)
-  daemon start|stop|status
-  config
-  thread new <title...> --type feature|bug|chore [--goal <text>] [--criteria <text>]... [--depends <id>]... [--max-workers <n>]
-             [--tier <name> --reason <why> [--now]]
-  thread choose <id> --tier <name>
-  thread cancel <id>
-  thread status <id> <status> [--reason <text>]
-  ticket add <thread> <title...> --scope <path> [--scope <path>]...
-  ticket claim|reopen <thread>/<ticket>
-  ticket done <thread>/<ticket> --summary <text>
-  ticket block <thread>/<ticket> --reason <text>
-  log <thread> <message...>
-  decide <thread> <message...>
-  note <thread> <message...>
-  progress <thread> <message...>
-  question <thread> <message...>
-  answer <thread> <Q> <text...>
-  handoff <thread> (--file <path> | --stdin)
-  worker spawn <thread> --ticket <T> [--agent claude-code|opencode|codex|omp]
-  tell <thread|main> <message...>
-  event started|active|idle|compacting|ended   (used by Claude Code hooks)
-  logs [-f]`;
+const GUIDE_ROLES = ["main", "coordinator", "worker"] as const;
 
 class UsageError extends Error {}
 
@@ -155,6 +131,18 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
         throw new UsageError(`--agent must be one of ${AGENT_KINDS.join(", ")}`);
       }
       return send(findRoot(cwd, env), env, { cmd: "worker.spawn", thread: positionals[0], ticket: values.ticket, ...(values.agent ? { agent: values.agent } : {}) });
+    }
+    case "guide": {
+      const role = sub ?? (env.AGT_ROLE && (GUIDE_ROLES as readonly string[]).includes(env.AGT_ROLE) ? env.AGT_ROLE : "all");
+      if (!(GUIDE_ROLES as readonly string[]).includes(role) && role !== "all") throw new UsageError(`unknown role '${role}' (main, coordinator, worker or all)`);
+      let root = resolve(cwd);
+      let config = DEFAULT_CONFIG;
+      try {
+        root = findRoot(cwd, env);
+        config = loadConfig(root, env);
+      } catch {}
+      console.log(guide({ role: role as SessionRole | "all", root, config }));
+      return 0;
     }
     case "tell": {
       const [target, ...words] = argv.slice(1);

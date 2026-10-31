@@ -102,3 +102,11 @@ describe("prompts", () => {
     expect(p).not.toContain("If the user named a tier themselves, add --now.");
   });
 });
+
+describe("agt guide line", () => {
+  test("AGENTS.md carries it for coordinator and worker", () => {
+    const md = agentsMd({ root: "/repo", thread: T });
+    expect(md).toContain("- When unsure how to do something with agt, run: agt guide coordinator");
+    expect(md).toContain("- When unsure how to do something with agt, run: agt guide worker");
+  });
+});

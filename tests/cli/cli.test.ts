@@ -98,3 +98,17 @@ test("agt init on a non-TTY prints the setup hint and succeeds", () => {
   expect(r.code).toBe(0);
   expect(r.err).toContain("run agt setup (or edit .agentthread/config.yaml) to choose agents per role; using the configured defaults (claude-code unless set)");
 });
+
+test("agt guide prints the role guide without a daemon", () => {
+  const r = agt(["guide", "worker"]);
+  expect(r.code).toBe(0);
+  expect(r.out).toContain("agt ticket done <thread>/<ticket> --summary <text>");
+  expect(agt(["daemon", "status"]).code).toBe(1);
+  expect(agt(["guide"], { env: { AGT_ROLE: "main" } }).out).toContain("agt thread choose");
+  const all = agt(["guide"]).out;
+  for (const h of ["## Main", "## Coordinator", "## Worker"]) expect(all).toContain(h);
+});
+
+test("agt guide with an unknown role is a usage error", () => {
+  expect(agt(["guide", "nope"]).code).toBe(2);
+});
