@@ -1,4 +1,5 @@
-import { mkdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { agentEnv, claudeConfigDir } from "../agents/claude.ts";
 import { adapterFor } from "../agents/adapters.ts";
@@ -9,7 +10,7 @@ import type { Effect } from "../commands/handler.ts";
 import type { Config } from "../config/config.ts";
 import type { EventBody, Layout } from "../domain/types.ts";
 import { HerdrCli, spawnAsync } from "../herdr/bridge.ts";
-import { addWorktreeAsync } from "../project/git.ts";
+import { addWorktreeAsync, addWorktreeFromAsync } from "../project/git.ts";
 import { paths } from "../project/paths.ts";
 import { threadGitEnv } from "../orchestration/sessions.ts";
 import type { Thread } from "../state/projection.ts";
@@ -83,11 +84,26 @@ export function createEffectRunner(opts: {
 
   return async (effect) => {
     switch (effect.kind) {
-      case "git.worktree.add":
-        // Only from a command (thread.new): it runs before the command's events commit, so a failure fails the command.
-        await addWorktreeAsync(opts.root, effect.branch, effect.path);
-        await writeAgents(effect.thread, effect.path);
-        return [];
+      case "git.worktree.add": {
+        // Only from a command: it runs before the command's events commit, so a failure fails the command.
+        if (!("repo" in effect)) {
+          // The legacy form (an old thread's own worktree of the root repo).
+          await addWorktreeAsync(opts.root, effect.branch, effect.path);
+          await writeAgents(effect.thread, effect.path);
+          return [];
+        }
+        const e = effect;
+        await addRepoWorktree(e, opts.root, opts.config);
+        const t = opts.thread(e.thread);
+        if (t) {
+          try {
+            await writeAgentsFilesAsync({ root: opts.root, repo: e.repoPath, worktree: e.path, content: agentsMd({ root: opts.root, thread: t, config: opts.config }), config: opts.config, log });
+          } catch (err) {
+            log(`writing AGENTS.md for thread ${t.id} in ${e.path} failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        return [{ type: "worktree.added", thread: e.thread, payload: { repo: e.repo, path: e.path, branch: e.branch, source: e.source } }];
+      }
       case "thread.dir.ensure":
         // Only from a command (thread.new): a failure to make the directory fails the command.
         await mkdir(effect.thread.dir, { recursive: true });
@@ -191,6 +207,51 @@ export function createEffectRunner(opts: {
       }
     }
   };
+}
+
+type RepoWorktreeEffect = Extract<Effect, { kind: "git.worktree.add"; repo: string }>;
+
+const SETUP_TIMEOUT_MS = 5 * 60_000;
+const shq = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
+
+/**
+ * Creates a task worktree: the config's worktree_setup command (run with `sh -c` in the root, placeholders filled in
+ * and shell-quoted, then checked), else git worktree add. On any failure it removes what it made (the worktree folder
+ * and a wip/<task> branch that did not exist before) and throws.
+ */
+async function addRepoWorktree(e: RepoWorktreeEffect, root: string, config: Config): Promise<void> {
+  const git = (args: string[], timeoutMs = 30_000) => spawnAsync("git", ["-C", e.repoPath, ...args], process.env, timeoutMs);
+  const branchExists = async () => (await git(["rev-parse", "--verify", "--quiet", `refs/heads/${e.branch}`])).exitCode === 0;
+  const hadBranch = await branchExists();
+  const hadPath = existsSync(e.path);
+  try {
+    const setup = config.workspace.worktree_setup;
+    if (setup === undefined) {
+      await addWorktreeFromAsync(e.repoPath, e.branch, e.path, e.source);
+      return;
+    }
+    const values: Record<string, string> = { root, task: e.branch.replace(/^wip\//, ""), repo: e.repo, src: e.source, path: e.path };
+    const command = setup.replace(/\{(root|task|repo|src|path)\}/g, (_, k: string) => shq(values[k]!));
+    const r = await spawnAsync("sh", ["-c", `cd ${shq(root)} || exit 1\n${command}`], process.env, SETUP_TIMEOUT_MS);
+    if (r.exitCode !== 0 || r.timedOut) {
+      const why = r.timedOut ? "timed out" : `exit ${r.exitCode}${r.stderr.trim() ? `: ${r.stderr.trim()}` : ""}`;
+      throw new Error(`worktree setup for ${e.repo} failed (${why})`);
+    }
+    const head = existsSync(e.path) ? await spawnAsync("git", ["-C", e.path, "rev-parse", "--abbrev-ref", "HEAD"], process.env, 10_000) : undefined;
+    if (!head || head.exitCode !== 0 || head.stdout.trim() !== e.branch) {
+      throw new Error(`worktree setup for ${e.repo} did not produce ${e.path} on ${e.branch}`);
+    }
+  } catch (err) {
+    if (!hadPath && existsSync(e.path)) {
+      const removed = await git(["worktree", "remove", "--force", e.path]);
+      if (removed.exitCode !== 0) {
+        await rm(e.path, { recursive: true, force: true });
+        await git(["worktree", "prune"]);
+      }
+    }
+    if (!hadBranch && (await branchExists())) await git(["branch", "-D", e.branch]);
+    throw err;
+  }
 }
 
 async function runHerdr(effect: HerdrEffect, bridge: EffectBridge, layout: Layout): Promise<EventBody[]> {

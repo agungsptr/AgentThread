@@ -1,15 +1,19 @@
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { DEFAULT_CONFIG, type Config } from "../config/config.ts";
 import { canTransitionThread, canTransitionTicket, scopesOverlap, slugify, validateHandoff } from "../domain/rules.ts";
 import { ROLES, type Actor, type EventBody, type Role, type ThreadStatus, type TicketStatus } from "../domain/types.ts";
 import { roleAgent, type RoleAgent } from "../agents/roles.ts";
 import { agentName, liveSessions, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure as tabEnsureFor, workerLimit } from "../orchestration/sessions.ts";
+import { workspaceReposNoSpawn } from "../project/workspace.ts";
 import { actorSession, isLive, type State, type Thread, type Ticket } from "../state/projection.ts";
 import type { Command, CommandName } from "./schema.ts";
 
 export type Effect =
+  /** Legacy form (old threads only): the thread's own worktree of the root repo. */
   | { kind: "git.worktree.add"; branch: string; path: string; thread: { id: string; title: string; slug: string } }
+  /** A task worktree of one workspace repo, at `<dir>/<repo>` on a new `wip/<task>` from `source`. */
+  | { kind: "git.worktree.add"; thread: string; repo: string; repoPath: string; path: string; branch: string; source: string }
   | { kind: "thread.dir.ensure"; thread: { id: string; title: string; slug: string; task: string; dir: string } }
   | { kind: "herdr.tab.ensure"; thread: string; label: string; cwd: string; env: Record<string, string>; tab?: string }
   | { kind: "herdr.tab.close"; thread: string; tab: string }
@@ -69,6 +73,7 @@ const ALLOWED: Record<CommandName, readonly Role[]> = {
   "layout.register": ["user"],
   "layout.reconcile": ["user"],
   "worker.spawn": ["coordinator"],
+  "worktree.add": ["user", "coordinator"],
   tell: ROLES,
   "session.signal": ROLES,
   "session.attached": ["user"],
@@ -273,6 +278,8 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
       const session = (spawned.events[0] as Extract<EventBody, { type: "session.created" }>).payload.session;
       return { ...spawned, result: { session, queued: false } };
     }
+    case "worktree.add":
+      return addWorktree(t, cmd.repo, cmd.from, ctx);
     case "log":
       return { events: [{ type: "log.appended", thread: t.id, payload: { message: cmd.message } }] };
     case "decide":
@@ -381,6 +388,27 @@ function newThread(state: State, cmd: Extract<Command, { cmd: "thread.new" }>, c
       ...(state.layout && cmd.tier === undefined ? [tabEnsure({ id, slug, dir }, ctx)] : []),
     ],
     result: { thread: id, task, dir, ...(cmd.tier !== undefined ? { tier: cmd.tier, proposed: !cmd.now } : {}) },
+  };
+}
+
+/**
+ * A task worktree for one repo of the workspace: `<dir>/<repo>` on a new `wip/<task>` from `--from`, else the repo's
+ * source_branch. The effect creates it before anything commits and reports `worktree.added`; if it fails, the command
+ * fails and nothing is written.
+ */
+function addWorktree(t: Thread, repo: string, from: string | undefined, ctx: HandlerContext): Decision {
+  if (t.legacy || t.dir === undefined || t.task === undefined) reject(`thread ${t.id} uses the single-repo layout`);
+  const repos = workspaceReposNoSpawn(ctx.root, ctx.config ?? DEFAULT_CONFIG);
+  const entry = Object.hasOwn(repos, repo) ? repos[repo] : undefined;
+  if (!entry) reject(`unknown repo ${repo}; workspace repos: ${Object.keys(repos).join(", ") || "(none)"}`);
+  if (t.worktrees[repo]) reject(`thread ${t.id} already has a worktree for ${repo}`);
+  const source = from ?? entry.source_branch ?? reject(`no source branch for ${repo}; pass --from <branch>`);
+  const path = join(t.dir, repo);
+  const branch = `wip/${t.task}`;
+  return {
+    events: [],
+    effects: [{ kind: "git.worktree.add", thread: t.id, repo, repoPath: resolve(ctx.root, entry.path), path, branch, source }],
+    result: { repo, path, branch, source },
   };
 }
 

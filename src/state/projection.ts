@@ -271,6 +271,10 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       t.rootPane = ev.payload.rootPane;
       note(t, ev, `herdr tab ${ev.payload.tab} opened`);
       break;
+    case "worktree.added":
+      t.worktrees[ev.payload.repo] = { path: ev.payload.path, branch: ev.payload.branch, source: ev.payload.source };
+      note(t, ev, `worktree for ${ev.payload.repo} added at ${ev.payload.path} on ${ev.payload.branch} from ${ev.payload.source}`);
+      break;
     case "thread.tab_closed":
       delete t.tab;
       delete t.rootPane;

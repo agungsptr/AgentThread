@@ -196,22 +196,22 @@ function* excludeInCommon(c: Ctx, wt: string, skill: boolean, root: string): Ste
  * Hides untracked AGENTS.md/CLAUDE.md in thread worktrees only: a per-worktree core.excludesFile, so the main
  * checkout can still add its own. Also removes the lines that earlier versions put in the shared info/exclude.
  */
-function* excludeInWorktree(c: Ctx, root: string, wt: string, skill: boolean, log: (m: string) => void): Steps<boolean> {
+function* excludeInWorktree(c: Ctx, root: string, repo: string, wt: string, skill: boolean, log: (m: string) => void): Steps<boolean> {
   const file = join(root, ".agentthread", "worktree-excludes");
-  const kept = lines((yield* effectiveExcludes(c, root, file))).filter((l) => !EXCLUDE_LINES.includes(l) && l !== SKILL_EXCLUDE);
+  const kept = lines((yield* effectiveExcludes(c, repo, file))).filter((l) => !EXCLUDE_LINES.includes(l) && l !== SKILL_EXCLUDE);
   while (kept.length && kept[kept.length - 1] === "") kept.pop();
   const text = [...kept, ...excludeLines(skill)].join("\n") + "\n";
   mkdirSync(dirname(file), { recursive: true });
   if (!existsSync(file) || readFileSync(file, "utf8") !== text) writeFileSync(file, text);
 
-  const wasEnabled = (yield* git(c, root, ["config", "--get", "extensions.worktreeConfig"])).stdout.trim() === "true";
+  const wasEnabled = (yield* git(c, repo, ["config", "--get", "extensions.worktreeConfig"])).stdout.trim() === "true";
   try {
-    if (!wasEnabled) (yield* mustGit(c, root, ["config", "extensions.worktreeConfig", "true"]));
+    if (!wasEnabled) (yield* mustGit(c, repo, ["config", "extensions.worktreeConfig", "true"]));
     if ((yield* git(c, wt, ["config", "--worktree", "--get", "core.excludesFile"])).stdout.trim() !== file) {
       (yield* mustGit(c, wt, ["config", "--worktree", "core.excludesFile", file]));
     }
   } catch (e) {
-    if (!wasEnabled) (yield* git(c, root, ["config", "--unset", "extensions.worktreeConfig"]));
+    if (!wasEnabled) (yield* git(c, repo, ["config", "--unset", "extensions.worktreeConfig"]));
     log(`per-worktree excludes unavailable, using the shared info/exclude: ${e instanceof Error ? e.message : String(e)}`);
     (yield* excludeInCommon(c, wt, skill, root));
     return false;
@@ -269,11 +269,11 @@ function hookStub(guardDir: string): string {
  * agentthread.hooksPath (the original core.hooksPath as configured, empty when unset), so the shared stubs hold no
  * worktree-specific path. Needs extensions.worktreeConfig (set up by excludeInWorktree); the main checkout is untouched.
  */
-function* guardInWorktree(c: Ctx, root: string, wt: string, log: (m: string) => void): Steps<void> {
+function* guardInWorktree(c: Ctx, root: string, repo: string, wt: string, log: (m: string) => void): Steps<void> {
   const dir = join(root, ".agentthread", "hooks");
   try {
     // --path expands a leading ~/ as git itself does when it runs hooks; the stub reads the value back verbatim.
-    const configured = (yield* git(c, root, ["config", "--path", "--get", "core.hooksPath"]));
+    const configured = (yield* git(c, repo, ["config", "--path", "--get", "core.hooksPath"]));
     const original = configured.ok ? configured.stdout.trim() : "";
     mkdirSync(dir, { recursive: true });
     // One script, every hook name a symlink to it: a freshly written executable costs a one-off scan on some systems.
@@ -311,6 +311,8 @@ function* guardInWorktree(c: Ctx, root: string, wt: string, log: (m: string) => 
  */
 type WriteOptions = {
   root: string;
+  /** The main checkout of the worktree's repository, where repo-wide git config is read and set (default: root). */
+  repo?: string;
   worktree: string;
   content: string;
   /** With agents.skill not false, the generated agt skill is written too. */
@@ -333,8 +335,9 @@ function* writeSteps(o: WriteOptions): Steps<void> {
   const c: Ctx = { env: o.env ?? (process.env as Env) };
   const log = o.log ?? ((m) => console.error(m));
   const skill = o.config.agents.skill !== false;
-  const perWorktree = yield* excludeInWorktree(c, o.root, wt, skill, log);
-  if (perWorktree) yield* guardInWorktree(c, o.root, wt, log);
+  const repo = o.repo ?? o.root;
+  const perWorktree = yield* excludeInWorktree(c, o.root, repo, wt, skill, log);
+  if (perWorktree) yield* guardInWorktree(c, o.root, repo, wt, log);
   else log("worker commit guard unavailable: git without worktree config");
   const project = yield* projectInstructions(c, wt);
   const agents = join(wt, "AGENTS.md");

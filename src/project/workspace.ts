@@ -47,3 +47,20 @@ export function discoverRepos(root: string): Record<string, { path: string }> {
 export function workspaceRepos(root: string, config: Config): Record<string, RepoEntry> {
   return config.workspace.repos ?? discoverRepos(root);
 }
+
+/**
+ * workspaceRepos without a child process, for the daemon (no synchronous git after startup): a folder counts as a
+ * repo when it has a `.git` entry (a directory, or the file of a worktree or submodule).
+ */
+export function workspaceReposNoSpawn(root: string, config: Config): Record<string, RepoEntry> {
+  if (config.workspace.repos) return config.workspace.repos;
+  if (existsSync(join(root, ".git"))) return { [basename(root)]: { path: "." } };
+  const repos: Record<string, RepoEntry> = {};
+  if (!existsSync(root)) return repos;
+  const names = readdirSync(root, { withFileTypes: true })
+    .filter((d) => d.isDirectory() && !d.name.startsWith(".") && existsSync(join(root, d.name, ".git")))
+    .map((d) => d.name)
+    .sort();
+  for (const name of names) repos[name] = { path: name };
+  return repos;
+}

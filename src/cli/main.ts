@@ -134,6 +134,12 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
       }
       return send(findRoot(cwd, env), env, { cmd: "worker.spawn", thread: positionals[0], ticket: values.ticket, ...(values.agent ? { agent: values.agent } : {}) });
     }
+    case "worktree": {
+      if (sub !== "add") throw new UsageError(`unknown worktree subcommand '${sub ?? ""}'`);
+      const { values, positionals } = parse(rest, { from: { type: "string" } });
+      if (!positionals[0] || !positionals[1] || positionals.length > 2) throw new UsageError("worktree add needs <thread> <repo> [--from <branch>]");
+      return send(findRoot(cwd, env), env, { cmd: "worktree.add", thread: positionals[0], repo: positionals[1], ...(values.from ? { from: values.from } : {}) });
+    }
     case "guide": {
       const role = sub ?? (env.AGT_ROLE && (GUIDE_ROLES as readonly string[]).includes(env.AGT_ROLE) ? env.AGT_ROLE : "all");
       if (!(GUIDE_ROLES as readonly string[]).includes(role) && role !== "all") throw new UsageError(`unknown role '${role}' (main, coordinator, worker or all)`);

@@ -41,7 +41,7 @@ export function isLegacyThread(root: string, id: string): boolean {
 /** The USAGE commands each role runs, by their leading words. */
 const COMMANDS: Record<SessionRole, string[]> = {
   main: ["thread new", "thread choose", "thread cancel", "tell"],
-  coordinator: ["thread status", "ticket add", "ticket claim|reopen", "worker spawn", "decide", "note", "progress", "question", "answer", "handoff", "tell"],
+  coordinator: ["thread status", "ticket add", "ticket claim|reopen", "worker spawn", "worktree add", "decide", "note", "progress", "question", "answer", "handoff", "tell"],
   worker: ["ticket claim|reopen", "ticket done", "ticket block", "note", "progress", "question"],
 };
 
