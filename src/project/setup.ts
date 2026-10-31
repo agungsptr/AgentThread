@@ -6,6 +6,7 @@ import { adapterFor, agentBin } from "../agents/adapters.ts";
 import { EFFORTS } from "../agents/roles.ts";
 import { refreshRootSkill } from "../agents/skill.ts";
 import { initProject } from "./init.ts";
+import { discoverRepos, isWorkspaceProject } from "./workspace.ts";
 import { configPaths, deepMerge, durationMs } from "../config/config.ts";
 import { AGENT_KINDS, type AgentKind } from "../domain/types.ts";
 
@@ -105,6 +106,15 @@ export async function runSetup(o: {
     console.error("timeout must look like 10s, 5m or 1h and be at least 1s");
   }
 
+  // A workspace records its repos and each one's default source branch (blank: ask per task).
+  const repos: Record<string, { path: string; source_branch?: string }> = {};
+  if (isWorkspaceProject(o.root)) {
+    for (const [name, r] of Object.entries(discoverRepos(o.root))) {
+      const branch = (await ask(`${name} source branch (blank to ask per task)`)).trim();
+      repos[name] = { path: r.path, ...(branch ? { source_branch: branch } : {}) };
+    }
+  }
+
   const file = configPaths(o.root).project;
   const existing = existsSync(file) ? readFileSync(file, "utf8") : "";
   const doc = parseDocument(existing);
@@ -113,6 +123,7 @@ export async function runSetup(o: {
   doc.setIn(["agents", "roles"], doc.createNode(roles));
   doc.setIn(["agents", "complexity"], doc.createNode({ timeout, tiers }));
   doc.setIn(["agents", "autonomous"], true);
+  if (Object.keys(repos).length) doc.setIn(["workspace", "repos"], doc.createNode(repos));
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, doc.toString());
 }

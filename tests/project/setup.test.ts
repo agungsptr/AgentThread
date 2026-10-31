@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig } from "../../src/config/config.ts";
 import { SETUP_HINT, detectAgents, needsSetup, initCommand, runSetup, setupIfNeeded } from "../../src/project/setup.ts";
-import { isolatedConfigHome, tempRepo } from "../helpers.ts";
+import { isolatedConfigHome, tempRepo, twoRepoFolder } from "../helpers.ts";
 
 const script = (answers: string[]) => {
   const asked: string[] = [];
@@ -211,4 +211,11 @@ test("a comment-only config.yaml keeps its comment after setup", async () => {
   await runSetup({ root, ask, detected: ["claude-code"] });
   expect(readFileSync(cfg(root), "utf8")).toContain("# my notes");
   expect(loadConfig(root, env()).agents.roles.main).toEqual({ agent: "claude-code" });
+});
+
+test("the wizard records a workspace's repos and source branches", async () => {
+  const root = twoRepoFolder();
+  const { ask } = script(["claude-code", "", "", "claude-code", "", "", "claude-code", "", "", "", "", "develop", ""]);
+  await runSetup({ root, ask, detected: ["claude-code"] });
+  expect(loadConfig(root, env()).workspace.repos).toEqual({ a: { path: "a", source_branch: "develop" }, b: { path: "b" } });
 });

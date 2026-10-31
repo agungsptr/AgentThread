@@ -139,3 +139,15 @@ export function fakeHerdrState(seed: Partial<FakeHerdrState> = {}): {
   };
   return { file, read, update };
 }
+
+/** A folder holding two git repos (a, b) and a plain folder. */
+export function twoRepoFolder(): string {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "agt-ws-")));
+  for (const n of ["a", "b"]) {
+    mkdirSync(join(root, n));
+    const r = Bun.spawnSync(["git", "-C", join(root, n), "init", "-q", "-b", "main"]);
+    if (r.exitCode !== 0) throw new Error(r.stderr.toString());
+  }
+  mkdirSync(join(root, "plain"));
+  return root;
+}

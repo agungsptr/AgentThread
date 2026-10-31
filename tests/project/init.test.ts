@@ -7,7 +7,7 @@ import { initProject } from "../../src/project/init.ts";
 import { paths } from "../../src/project/paths.ts";
 import { findRoot } from "../../src/project/root.ts";
 import { EventStore } from "../../src/store/event-store.ts";
-import { tempRepo } from "../helpers.ts";
+import { tempRepo, twoRepoFolder } from "../helpers.ts";
 
 test("init creates the event store, gitignore entries and main thread", () => {
   const root = tempRepo();
@@ -27,9 +27,22 @@ test("init refuses to run twice", () => {
   expect(() => initProject(root)).toThrow("already initialized");
 });
 
-test("init refuses a directory that is not a git repo", () => {
+test("init refuses a folder with no git repositories", () => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "agt-nogit-")));
-  expect(() => initProject(dir)).toThrow("not a git repository");
+  expect(() => initProject(dir)).toThrow(`no git repositories found in ${dir}`);
+});
+
+test("init works in a folder of repos and creates a .docs git repo", () => {
+  const root = twoRepoFolder();
+  initProject(root, "ws");
+  expect(existsSync(paths(root).db)).toBe(true);
+  expect(existsSync(join(root, ".gitignore"))).toBe(false);
+  const docs = join(root, ".docs");
+  expect(Bun.spawnSync(["git", "-C", docs, "rev-parse", "--show-toplevel"]).stdout.toString().trim()).toBe(docs);
+  expect(Bun.spawnSync(["git", "-C", docs, "log", "--format=%s"]).stdout.toString().trim()).not.toBe("");
+  for (const scope of ["shared", "a", "b"]) for (const k of ["issues", "specs", "plans", "adr", "notes", "agents"]) expect(existsSync(join(docs, scope, k, ".gitkeep"))).toBe(true);
+  expect(existsSync(join(docs, "plain"))).toBe(false);
+  expect(existsSync(join(docs, ".docs"))).toBe(false);
 });
 
 test("findRoot walks up from a worktree subdirectory", () => {

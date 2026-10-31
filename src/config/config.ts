@@ -126,6 +126,13 @@ export const ConfigSchema = z
       .object({ reminder_turns: z.number().int().min(1).default(8), reminder_after: duration.default("30m") })
       .strict()
       .default({}),
+    workspace: z
+      .object({
+        repos: z.record(z.string().min(1), z.object({ path: z.string().min(1), source_branch: z.string().trim().min(1).optional() }).strict()).optional(),
+        worktree_setup: z.string().min(1).optional(),
+      })
+      .strict()
+      .default({}),
     herdr: z
       .object({
         main_tab_label: z.string().trim().min(1).default("main"),

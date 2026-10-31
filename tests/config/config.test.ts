@@ -45,6 +45,7 @@ test("defaults match the spec", () => {
       finished_worker_grace: "5m",
     },
     checkpoint: { reminder_turns: 8, reminder_after: "30m" },
+    workspace: {},
     herdr: { main_tab_label: "main", close_tab_on_done: true, close_worker_pane_on_end: true, poll_interval: "2s" },
   });
 });
