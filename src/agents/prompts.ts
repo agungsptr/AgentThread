@@ -66,7 +66,7 @@ function tierPromptLines(config: Config | undefined): string[] {
   if (!config || tiers.length === 0) return [];
   return [
     `Before creating a thread, judge its complexity and pick one tier from: ${tiers.join(", ")}. Create it with agt thread new … --tier <name> --reason "<why>", tell the user the tier and why, say it starts in ${config.agents.complexity.timeout} unless they choose another, then end your turn.`,
-    "If the user picks another tier, run agt thread choose <id> --tier <name>; if they want to stop, agt thread cancel <id>. If the user named a tier themselves, add --now.",
+    `If the user picks another tier, run agt thread choose <id> --tier <name>; if they want to stop, agt thread cancel <id>. Add --now only when the user's message names one of these tiers (${Object.keys(config.agents.complexity.tiers).join(", ")}) by name. "Start now", "don't ask me again" or a confirmation is not a tier choice: still propose, tell the user, and end your turn.`,
   ];
 }
 

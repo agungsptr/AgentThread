@@ -56,7 +56,7 @@ export const TASK =
 export const GOAL = "slugify(s) exists in src/slugify.ts, is exported from src/index.ts, has unit tests in tests/slugify.test.ts, and is listed in README.md";
 
 /** The request to main: the task, with the confirmation given up front so main can create the thread right away. */
-export const ASK_MAIN = `${TASK} You have my confirmation already: draft the title, goal and acceptance criteria and create the thread right away without asking me again.`;
+export const ASK_MAIN = `${TASK} You have my confirmation already: draft the title, goal and acceptance criteria and create the thread without asking me to confirm it.`;
 
 /** Two complexity tiers on the coordinator's agent, so whichever main picks, the row's coordinator is unchanged. */
 export function tiers(agents: RoleAgents, timeout = "5s") {

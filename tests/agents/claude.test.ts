@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { AGT_BIN, agentEnv, allowedTools, hookCommand, hookSettings } from "../../src/agents/claude.ts";
 import { bootstrapPrompt, systemPrompt } from "../../src/agents/prompts.ts";
 import { agentsMd } from "../../src/agents/agents-md.ts";
-import { DEFAULT_CONFIG } from "../../src/config/config.ts";
+import { ConfigSchema, DEFAULT_CONFIG } from "../../src/config/config.ts";
 import { shellQuote } from "../../src/herdr/bridge.ts";
 
 const T = { id: "002", title: "Fix race", slug: "fix-race", worktree: "/repo/.worktrees/002-fix-race" };
@@ -91,5 +91,14 @@ describe("prompts", () => {
     const p = systemPrompt({ root: "/repo", role: "main" });
     for (const s of ["/repo/.agentthread/main.thread.md", "Only after the user confirms", "agt thread new", "agt tell"]) expect(p).toContain(s);
     expect(bootstrapPrompt({ root: "/repo", role: "main" })).toBe("");
+  });
+
+  test("main adds --now only when the user named a tier, with the configured tier names", () => {
+    const config = ConfigSchema.parse({ agents: { complexity: { tiers: { big: { agent: "omp" }, small: { agent: "opencode" } } } } });
+    const p = systemPrompt({ root: "/repo", role: "main", config });
+    expect(p).toContain(
+      "Add --now only when the user's message names one of these tiers (big, small) by name. \"Start now\", \"don't ask me again\" or a confirmation is not a tier choice: still propose, tell the user, and end your turn.",
+    );
+    expect(p).not.toContain("If the user named a tier themselves, add --now.");
   });
 });
