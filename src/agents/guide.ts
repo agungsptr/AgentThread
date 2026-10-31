@@ -23,6 +23,11 @@ const COMMANDS: Record<SessionRole, string[]> = {
   worker: ["ticket claim|reopen", "ticket done", "ticket block", "note", "progress", "question"],
 };
 
+/** Where a role's command line differs from the shared USAGE line, keyed by the prefix in COMMANDS. */
+const COMMAND_OVERRIDES: Partial<Record<SessionRole, Record<string, string>>> = {
+  worker: { "ticket claim|reopen": "ticket claim <thread>/<ticket>" },
+};
+
 const WRONG: Record<SessionRole, string[]> = {
   main: [
     "- A thread waits for the user's tier choice: relay the choice with `agt thread choose`, or stop it with `agt thread cancel`.",
@@ -48,7 +53,9 @@ const TITLES: Record<SessionRole, string> = { main: "Main", coordinator: "Coordi
 
 function roleGuide(role: SessionRole, o: GuideInput, level: "#" | "##"): string {
   const t = o.thread ?? PLACEHOLDER;
-  const rules = rulesOf(systemPrompt({ root: o.root, role, thread: t, ticket: "<T>", config: o.config })).filter((l) => l !== "");
+  const rules = rulesOf(systemPrompt({ root: o.root, role, thread: t, ticket: "<ticket>", config: o.config })).filter(
+    (l) => l !== "" && !l.includes("When unsure how to do something with agt, run: agt guide"),
+  );
   const dir = paths(o.root).threadDir(t);
   const h = level === "#" ? "##" : "###";
   const state =
@@ -65,7 +72,7 @@ function roleGuide(role: SessionRole, o: GuideInput, level: "#" | "##"): string 
     `${h} Commands`,
     "",
     "```",
-    ...COMMANDS[role].flatMap((c) => usageLines(c).map((l, i) => (i === 0 ? `agt ${l}` : `    ${l}`))),
+    ...COMMANDS[role].flatMap((c) => (COMMAND_OVERRIDES[role]?.[c] ? [COMMAND_OVERRIDES[role][c]!] : usageLines(c)).map((l, i) => (i === 0 ? `agt ${l}` : `    ${l}`))),
     "```",
     "",
     `${h} When things go wrong`,

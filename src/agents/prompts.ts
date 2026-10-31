@@ -25,7 +25,7 @@ export function systemPrompt(o: PromptInput): string {
       'To pass a message to a thread\'s coordinator use: agt tell <thread-id> "<message>".',
       "Do not edit project source files yourself; implementation happens in the thread worktrees.",
       "You will receive short notifications (for example a thread ready for review) as prompts; relay them to the user.",
-      "- When unsure how to do something with agt, run: agt guide main",
+      "When unsure how to do something with agt, run: agt guide main",
     ].join("\n");
   }
   const t = o.thread!;
@@ -60,7 +60,7 @@ export function systemPrompt(o: PromptInput): string {
     } When you need a decision you cannot make, run agt question ${t.id} "<question>", end your turn and wait for the answer.`,
     `3. agt ticket done ${t.id}/${o.ticket} --summary "<one line>" is your last action: make no edits after it — or, if you cannot finish, agt ticket block ${t.id}/${o.ticket} --reason "<why>".`,
     "Do not commit; the coordinator commits. Never bypass the commit guard (no git commit --no-verify, no changing core.hooksPath or AGT_ROLE). Do not work on other tickets.",
-    "- When unsure how to do something with agt, run: agt guide worker",
+    "When unsure how to do something with agt, run: agt guide worker",
   ].join("\n");
 }
 

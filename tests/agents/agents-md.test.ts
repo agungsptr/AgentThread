@@ -15,6 +15,7 @@ function git(dir: string, ...args: string[]): string {
   return r.stdout.toString();
 }
 
+const NO_SKILL = { ...DEFAULT_CONFIG, agents: { ...DEFAULT_CONFIG.agents, skill: false } };
 const SECTION = "# AgentThread\n\nsection body\n";
 
 // Never read the developer's global git config or excludes.
@@ -22,7 +23,7 @@ const HOME = isolatedConfigHome();
 const envFor = (home: string) => ({ ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, "xdg"), GIT_CONFIG_GLOBAL: join(home, "gitconfig"), GIT_CONFIG_NOSYSTEM: "1" });
 const ENV = envFor(HOME);
 const write = (o: { root: string; worktree: string; content: string }, env: Record<string, string | undefined> = ENV) =>
-  writeAgentsFiles({ ...o, env });
+  writeAgentsFiles({ ...o, env, config: NO_SKILL });
 
 function repoWith(files: Record<string, string>, links: Record<string, string> = {}): { root: string; wt: string } {
   const root = tempRepo();
@@ -284,7 +285,7 @@ describe("writeAgentsFiles: symlinks, excludes, git operations", () => {
         ? { exitCode: 129, stdout: "", stderr: "error: unknown option `worktree'" }
         : spawnRunner(bin, args, env, t);
     const logs: string[] = [];
-    for (let i = 0; i < 2; i++) writeAgentsFiles({ root, worktree: wt, content: SECTION, env: ENV, runner: failing, log: (m) => logs.push(m) });
+    for (let i = 0; i < 2; i++) writeAgentsFiles({ root, worktree: wt, content: SECTION, env: ENV, config: NO_SKILL, runner: failing, log: (m) => logs.push(m) });
     const info = lines(readFileSync(join(root, ".git", "info", "exclude"), "utf8"));
     expect(info.filter((l) => l === "/AGENTS.md").length).toBe(1);
     expect(info.filter((l) => l === "/CLAUDE.md").length).toBe(1);

@@ -6,7 +6,7 @@ import { paths } from "../project/paths.ts";
 import { AGENT_KINDS } from "../domain/types.ts";
 import { adapterFor } from "./adapters.ts";
 import { systemPrompt } from "./prompts.ts";
-import { SKILL_EXCLUDE, SKILL_REL, writeSkill } from "./skill.ts";
+import { handWrittenSkill, SKILL_EXCLUDE, SKILL_REL, writeSkill } from "./skill.ts";
 
 type ThreadRef = { id: string; title: string; slug: string; worktree: string };
 
@@ -174,11 +174,12 @@ function* commonInfoExclude(c: Ctx, wt: string): Steps<string> {
 }
 
 /** Old git without per-worktree config: the shared info/exclude, which also hides the main checkout's files. */
-function* excludeInCommon(c: Ctx, wt: string, skill: boolean): Steps<void> {
+function* excludeInCommon(c: Ctx, wt: string, skill: boolean, root: string): Steps<void> {
   const info = (yield* commonInfoExclude(c, wt));
   let current = existsSync(info) ? readFileSync(info, "utf8") : "";
   const have = lines(current);
-  for (const line of excludeLines(skill)) {
+  // the shared file covers the root too: no skill line while the root has a skill file of its own
+  for (const line of excludeLines(skill && !handWrittenSkill(root))) {
     if (have.includes(line)) continue;
     current = `${current}${current && !current.endsWith("\n") ? "\n" : ""}${line}\n`;
   }
@@ -207,7 +208,7 @@ function* excludeInWorktree(c: Ctx, root: string, wt: string, skill: boolean, lo
   } catch (e) {
     if (!wasEnabled) (yield* git(c, root, ["config", "--unset", "extensions.worktreeConfig"]));
     log(`per-worktree excludes unavailable, using the shared info/exclude: ${e instanceof Error ? e.message : String(e)}`);
-    (yield* excludeInCommon(c, wt, skill));
+    (yield* excludeInCommon(c, wt, skill, root));
     return false;
   }
 
@@ -307,8 +308,8 @@ type WriteOptions = {
   root: string;
   worktree: string;
   content: string;
-  /** With a config whose agents.skill is not false, the generated agt skill is written too. */
-  config?: Config;
+  /** With agents.skill not false, the generated agt skill is written too. */
+  config: Config;
   env?: Env;
   log?: (message: string) => void;
 };
@@ -326,8 +327,8 @@ function* writeSteps(o: WriteOptions): Steps<void> {
   const wt = o.worktree;
   const c: Ctx = { env: o.env ?? (process.env as Env) };
   const log = o.log ?? ((m) => console.error(m));
-  const skill = !!o.config && o.config.agents.skill !== false;
-  const perWorktree = yield* excludeInWorktree(c, o.root, wt, skill, log);
+  const skill = o.config.agents.skill !== false;
+  const perWorktree = yield* excludeInWorktree(c, o.root, wt, skill && !handWrittenSkill(wt), log);
   if (perWorktree) yield* guardInWorktree(c, o.root, wt, log);
   else log("worker commit guard unavailable: git without worktree config");
   const project = yield* projectInstructions(c, wt);
@@ -345,7 +346,7 @@ function* writeSteps(o: WriteOptions): Steps<void> {
   for (const file of FILES) {
     if ((yield* git(c, wt, ["ls-files", "--error-unmatch", "--", file])).ok) yield* mustGit(c, wt, ["update-index", "--skip-worktree", "--", file]);
   }
-  if (o.config && skill) {
+  if (skill) {
     const tracked = (yield* git(c, wt, ["ls-files", "--error-unmatch", "--", SKILL_REL])).ok;
     writeSkill(wt, { root: o.root, config: o.config, tracked, log });
   }

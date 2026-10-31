@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isolatedConfigHome, tempRepo } from "../helpers.ts";
 
@@ -110,5 +111,24 @@ test("agt guide prints the role guide without a daemon", () => {
 });
 
 test("agt guide with an unknown role is a usage error", () => {
-  expect(agt(["guide", "nope"]).code).toBe(2);
+  const r = agt(["guide", "nope"]);
+  expect(r.code).toBe(2);
+  expect(r.err).toContain("unknown role 'nope'");
+});
+
+test("agt guide worker works outside a project", () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "agt-noproj-")));
+  const r = agt(["guide", "worker"], { cwd: dir, root: false });
+  expect(r.code).toBe(0);
+  expect(r.out).toContain("agt ticket done <thread>/<ticket> --summary <text>");
+  expect(r.err).toBe("");
+});
+
+test("agt guide in a project with a broken config warns and prints the default guide", () => {
+  writeFileSync(join(root, ".agentthread", "config.yaml"), "agents:\n  skill: 5\n");
+  const r = agt(["guide", "worker"]);
+  expect(r.code).toBe(0);
+  expect(r.err).toContain("agt: warning: invalid config");
+  expect(r.err).toContain("; showing the default guide");
+  expect(r.out).toContain("agt ticket done <thread>/<ticket> --summary <text>");
 });

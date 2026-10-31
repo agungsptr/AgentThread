@@ -18,16 +18,22 @@ describe("guide", () => {
     } as const;
     for (const role of ["main", "coordinator", "worker"] as const) {
       const g = guide({ role, ...base });
-      for (const c of want[role]) expect(g).toContain(usage(c));
+      for (const c of want[role]) {
+        // the worker only claims: its guide says so instead of the shared claim|reopen line
+        if (role === "worker" && c === "ticket claim|reopen") expect(g).toContain("agt ticket claim <thread>/<ticket>");
+        else expect(g).toContain(usage(c));
+      }
     }
+    expect(guide({ role: "worker", ...base })).not.toContain("claim|reopen");
     expect(guide({ role: "main", ...base })).toContain("[--tier <name> --reason <why> [--now]]");
   });
 
   test("each role's rules are included, without the identity line", () => {
     for (const role of ["main", "coordinator", "worker"] as const) {
       const g = guide({ role, ...base, thread: T });
-      const rules = rulesOf(systemPrompt({ root: "/repo", role, thread: T, ticket: "<T>", config: DEFAULT_CONFIG })).filter((l) => l);
+      const rules = rulesOf(systemPrompt({ root: "/repo", role, thread: T, ticket: "<ticket>", config: DEFAULT_CONFIG })).filter((l) => l && !l.includes("When unsure how to do something with agt"));
       for (const r of rules) expect(g).toContain(r);
+      expect(g).not.toContain("When unsure how to do something with agt");
       expect(g).not.toContain("You are the coordinator of AgentThread");
     }
     expect(guide({ role: "coordinator", ...base })).toContain("agt thread status <thread> in_progress");
@@ -45,10 +51,17 @@ describe("guide", () => {
     for (const h of ["## Main", "## Coordinator", "## Worker"]) expect(g).toContain(h);
   });
 
-  test("every role prompt ends with the guide line", () => {
+  test("the worker guide uses <ticket>, never <T>", () => {
+    const g = guide({ role: "worker", ...base });
+    expect(g).toContain("agt ticket claim <thread>/<ticket>");
+    expect(g).not.toContain("<T>");
+  });
+
+  test("every role prompt ends with the guide line: a bullet only for the coordinator", () => {
     for (const role of ["main", "coordinator", "worker"] as const) {
       const p = systemPrompt({ root: "/repo", role, thread: T, ticket: "T1", config: DEFAULT_CONFIG });
-      expect(p.split("\n").at(-1)).toBe(`- When unsure how to do something with agt, run: agt guide ${role}`);
+      const bullet = role === "coordinator" ? "- " : "";
+      expect(p.split("\n").at(-1)).toBe(`${bullet}When unsure how to do something with agt, run: agt guide ${role}`);
     }
   });
 });

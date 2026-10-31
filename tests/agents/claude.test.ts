@@ -107,6 +107,7 @@ describe("agt guide line", () => {
   test("AGENTS.md carries it for coordinator and worker", () => {
     const md = agentsMd({ root: "/repo", thread: T });
     expect(md).toContain("- When unsure how to do something with agt, run: agt guide coordinator");
-    expect(md).toContain("- When unsure how to do something with agt, run: agt guide worker");
+    expect(md).toContain("\nWhen unsure how to do something with agt, run: agt guide worker");
+    expect(md).not.toContain("- When unsure how to do something with agt, run: agt guide worker");
   });
 });

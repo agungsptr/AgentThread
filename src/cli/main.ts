@@ -139,10 +139,18 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
       if (!(GUIDE_ROLES as readonly string[]).includes(role) && role !== "all") throw new UsageError(`unknown role '${role}' (main, coordinator, worker or all)`);
       let root = resolve(cwd);
       let config = DEFAULT_CONFIG;
+      let inProject = false;
       try {
         root = findRoot(cwd, env);
-        config = loadConfig(root, env);
+        inProject = true;
       } catch {}
+      if (inProject) {
+        try {
+          config = loadConfig(root, env);
+        } catch (e) {
+          console.error(`agt: warning: ${e instanceof Error ? e.message : String(e)}; showing the default guide`);
+        }
+      }
       console.log(guide({ role: role as SessionRole | "all", root, config }));
       return 0;
     }

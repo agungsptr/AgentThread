@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { DEFAULT_CONFIG, type Config } from "../../src/config/config.ts";
 import { MARKER, refreshRootSkill, skillText, writeSkill } from "../../src/agents/skill.ts";
 import { parse } from "yaml";
+import { type Runner, spawnRunner } from "../../src/herdr/bridge.ts";
 import { writeAgentsFiles, writeAgentsFilesAsync } from "../../src/agents/agents-md.ts";
 import { addWorktree } from "../../src/project/git.ts";
 import { initCommand } from "../../src/project/setup.ts";
@@ -114,14 +115,14 @@ describe("project root", () => {
     expect(text.startsWith(`${FRONTMATTER}\n${MARKER}\n`)).toBe(true);
     expect(text).toContain("## Coordinator");
     expect(git(root, "status", "--porcelain")).not.toContain(".claude");
-    expect(readFileSync(join(root, ".git", "info", "exclude"), "utf8").split("\n")).toContain("/.claude/skills/agt/");
+    expect(readFileSync(join(root, ".git", "info", "exclude"), "utf8").split("\n")).toContain("/.claude/skills/agt/SKILL.md");
   });
 
   test("refresh twice: unchanged, and the exclude line is added once", () => {
     const root = tempRepo();
     refreshRootSkill(root, ENV, () => {});
     refreshRootSkill(root, ENV, () => {});
-    const lines = readFileSync(join(root, ".git", "info", "exclude"), "utf8").split("\n").filter((l) => l === "/.claude/skills/agt/");
+    const lines = readFileSync(join(root, ".git", "info", "exclude"), "utf8").split("\n").filter((l) => l === "/.claude/skills/agt/SKILL.md");
     expect(lines.length).toBe(1);
   });
 
@@ -135,7 +136,7 @@ describe("project root", () => {
     refreshRootSkill(root, ENV, (m) => logs.push(m));
     expect(readFileSync(join(root, REL), "utf8")).toBe("project's own\n");
     expect(logs).toEqual([NOT_GENERATED]);
-    expect(readFileSync(join(root, ".git", "info", "exclude"), "utf8")).not.toContain("/.claude/skills/agt/");
+    expect(readFileSync(join(root, ".git", "info", "exclude"), "utf8")).not.toContain("/.claude/skills/agt/SKILL.md");
   });
 
   test("an untracked hand-written file is left alone, with the log line", () => {
@@ -146,6 +147,38 @@ describe("project root", () => {
     refreshRootSkill(root, ENV, (m) => logs.push(m));
     expect(readFileSync(join(root, REL), "utf8")).toBe("mine\n");
     expect(logs).toEqual([NOT_GENERATED]);
+  });
+
+  test("a project that is a subdirectory of its repo: anchored exclude, clean status, added once", () => {
+    const repo = tempRepo();
+    const root = join(repo, "app");
+    mkdirSync(root, { recursive: true });
+    refreshRootSkill(root, ENV, () => {});
+    refreshRootSkill(root, ENV, () => {});
+    expect(existsSync(join(root, REL))).toBe(true);
+    expect(git(repo, "status", "--porcelain")).toBe("");
+    const lines = readFileSync(join(repo, ".git", "info", "exclude"), "utf8").split("\n").filter((l) => l === "/app/.claude/skills/agt/SKILL.md");
+    expect(lines.length).toBe(1);
+  });
+
+  test("a hand-written skill that replaces a generated one becomes visible again", () => {
+    const root = tempRepo();
+    refreshRootSkill(root, ENV, () => {});
+    expect(git(root, "status", "--porcelain")).toBe("");
+    writeFileSync(join(root, REL), "mine\n");
+    refreshRootSkill(root, ENV, () => {});
+    expect(readFileSync(join(root, REL), "utf8")).toBe("mine\n");
+    expect(git(root, "status", "--porcelain", "-uall")).toContain(REL);
+    expect(readFileSync(join(root, ".git", "info", "exclude"), "utf8")).not.toContain("/.claude/skills/agt/SKILL.md");
+  });
+
+  test("only SKILL.md is excluded: an extra file next to it shows in git status", () => {
+    const root = tempRepo();
+    refreshRootSkill(root, ENV, () => {});
+    writeFileSync(join(root, ".claude/skills/agt/extra.md"), "x\n");
+    const status = git(root, "status", "--porcelain", "-uall");
+    expect(status).toContain(".claude/skills/agt/extra.md");
+    expect(status).not.toContain("SKILL.md");
   });
 
   test("agents.skill false: nothing written", () => {
@@ -196,6 +229,32 @@ describe("worktrees", () => {
     expect(readFileSync(join(wt, REL), "utf8")).toBe("project's own\n");
     expect(logs).toContain(NOT_GENERATED);
     expect(git(wt, "status", "--porcelain")).toBe("");
+  });
+
+  test("an extra file next to SKILL.md in a worktree is not hidden", () => {
+    const root = tempRepo();
+    const wt = worktreeOf(root);
+    write(root, wt, DEFAULT_CONFIG);
+    writeFileSync(join(wt, ".claude/skills/agt/extra.md"), "x\n");
+    const status = git(wt, "status", "--porcelain", "-uall");
+    expect(status).toContain(".claude/skills/agt/extra.md");
+    expect(status).not.toContain("SKILL.md");
+  });
+
+  test("old git fallback: SKILL.md only, and no skill line while the root has a hand-written one", () => {
+    const failing: Runner = (bin, args, env, t) =>
+      args.includes("--worktree") && !args.includes("--get") ? { exitCode: 129, stdout: "", stderr: "unknown option" } : spawnRunner(bin, args, env, t);
+    const common = (root: string) => readFileSync(join(root, ".git", "info", "exclude"), "utf8").split("\n");
+    const a = tempRepo();
+    writeAgentsFiles({ root: a, worktree: worktreeOf(a), content: "# AgentThread\n", env: ENV, config: DEFAULT_CONFIG, runner: failing, log: () => {} });
+    expect(common(a)).toContain("/.claude/skills/agt/SKILL.md");
+    expect(common(a)).not.toContain("/.claude/skills/agt/");
+    const b = tempRepo();
+    mkdirSync(join(b, ".claude/skills/agt"), { recursive: true });
+    writeFileSync(join(b, REL), "mine\n");
+    writeAgentsFiles({ root: b, worktree: worktreeOf(b), content: "# AgentThread\n", env: ENV, config: DEFAULT_CONFIG, runner: failing, log: () => {} });
+    expect(common(b)).not.toContain("/.claude/skills/agt/SKILL.md");
+    expect(git(b, "status", "--porcelain", "-uall")).toContain(REL);
   });
 
   test("agents.skill false: nothing written", () => {
