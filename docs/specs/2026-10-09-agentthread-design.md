@@ -710,3 +710,61 @@ Project-owned skills, such as Zentro's `run-stack` and `run-e2e`, stay the proje
 - How `agt worktree add` reports setup-command failures.
 - How old single-repo threads in existing logs keep replaying. They keep their old worktree path, and only new threads use the workspace layout.
 - The exact wording of the role rules, as long as they carry every rule above.
+
+### 13.9 Decisions after the builder check
+
+**User decisions**
+
+- **Stages are tracked, with two gates.**
+  - The coordinator records each stage with `agt stage <thread> <n> done|skipped|na [--reason "<why>"] [--by user]`.
+  - brief.md and main.thread.md show each thread's current stage.
+  - The daemon refuses two out-of-order actions:
+    - the squash, while stage 8 is neither `done` nor `na`;
+    - a stage-4 e2e run, until the user's yes is recorded with `agt stage <thread> 7 approve --by user`.
+  - Nothing else is refused.
+- **Stages follow config.** A stage whose config commands are missing is marked `na` automatically, with the reason recorded in the spec:
+  - stage 7 has no e2e commands;
+  - stage 8 has no browser URL or stack command;
+  - stage 10's migration SQL has no migration tool configured.
+
+  Every other stage is mandatory. A user may still skip a stage for one task with `skipped --by user`.
+- **Stack lock.**
+  - agt keeps one stack lock per workspace: `agt stack acquire <thread>` and `agt stack release <thread>`.
+  - The coordinator acquires it before a stack restart, e2e or browser check, and releases it afterwards.
+  - Other coordinators wait in a queue that main shows.
+  - A lock whose holder session has ended is released automatically.
+
+**My calls (correctable)**
+
+1. **Worker session lifetime.**
+   - After `ticket done`, the ticket goes to `review`. The worker session stays alive and keeps its slot until the coordinator runs `agt ticket accept <thread>/<T>`, which ends the session (the done notice and teardown move to accept), or `agt ticket return <thread>/<T> "<what>"`, which sends the text to the same session for a new commit.
+   - If that session is gone, a fresh worker is spawned for the returned ticket, with the ticket file and the return note.
+   - The stage-9 docs are their own ticket from stage 3, assigned when stage 8 passes.
+   - The finished-worker grace sweep (Plan 8) then applies only after `accept`.
+2. **Ticket source of truth.**
+   - agt's ticket state holds the machine fields: id `T<n>`, repo, files, status and assignee.
+   - It is registered with `agt ticket add <thread> "<title>" --repo <r> --file <path>... --doc <.docs path>`.
+   - The `.docs` ticket file, named `NN-<slug>.md` with NN equal to n, holds the prose. The coordinator writes it from the template, and the worker appends evidence under `## Comments`.
+   - The pre-commit hook checks staged files against `agt ticket files`.
+   - The new status `review` sits between `in_progress` and `done`.
+3. **Workers write to `.docs`.** A worker may write its own ticket file under `.docs`. That file is the one exception to "nothing outside the worktree", and it is added to the role rules and vendor allow rules. Report words are only text in the summary; agt does not parse them.
+4. **Workflow content.**
+   - It is a snapshot copied into the agt repo (`src/workflow/` with the templates) and versioned with agt. The user edits agt's copy from now on.
+   - The manage-docs content is the generic `multi-repo-doc/templates/manage-docs-SKILL.md`.
+   - A generated skill never overwrites a project skill of the same name that is not generated (Plan 9 rule). In that case the project's own skill wins, and agt logs it.
+   - A CLAUDE.md "Feature workflow config" pointer is left alone.
+5. **Config fields added to §13.5.**
+   - migration tool and its "executed" table;
+   - whether production migrates on start;
+   - the e2e baseline path;
+   - an optional read-only production query command;
+   - browser URLs and a login-note path;
+   - chat language and file language;
+   - e2e commands per stage, at workspace level (`e2e.stage2|stage3|stage4`), as well as per-repo unit and typecheck commands.
+
+   `agt setup` asks for these, and pre-fills from `Makefile` targets and `package.json`/Gradle scripts it finds. It does not import `.docs/shared/notes/feature-workflow.md`; that file stays as it is, but agt no longer reads it.
+6. **Thread done and cleanup.**
+   - A thread goes to `review` after the squash and `release.md`.
+   - The user tells main it is merged (`agt thread status <id> done`).
+   - Cleanup is `agt thread cleanup <id>`, which removes the task worktrees and the `wip/<task>` branches. It runs only on the user's go-ahead, through main.
+   - The stages map onto statuses: 1–9 are `in_progress`, 10 after the squash is `review`, and merged is `done`.
