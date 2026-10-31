@@ -1,0 +1,42 @@
+# Release hardening (Plan 7): rulings and follow-ups
+
+Source: the SDD ledger for docs/superpowers/plans/2026-10-30-release-hardening.md (branch feat/release-hardening, 07ec478..dd88e47).
+
+## Before release
+- **Full release matrix.** The user-scoped run on 2026-10-31 covered the claude-code and omp rows: smoke-layout, happy-claude-code, happy-worker-omp and edge-missing-binary all PASS. Still unrun:
+  - every opencode and codex row;
+  - happy-coord-omp (omp as coordinator);
+  - happy-mixed-main;
+  - the edge rows that use an opencode worker.
+  Before running them, log in to Codex and set `AGT_E2E_MODEL_OPENCODE`.
+- **Lost-spawn worker with a done ticket.** It never sends the coordinator's done notice. Call `doneWorkerEnded` in the worker branch of `session.failed` (reactor).
+- **Closing a tab's last pane.** Check by hand whether real Herdr closes a tab's last pane (`pane close` on a root pane). If Herdr refuses, a root-pane orphan survives a refused attach.
+
+## Rulings
+| T7 self | spends tokens; needs user logins | Ruling below |
+- Ruling: Task 7 runs only after the user confirms logins (Codex, omp) and AGT_E2E_MODEL_OPENCODE, and confirms spending tokens; the controller asks then — why: cost and user-only setup — cost if wrong: a pause at Task 7.
+- Task 1: Ruling: the reactor did not replace failed coordinators (plan was wrong); replacement added only for lost-spawn failures, under the existing 3-in-10m brake — why: other spawn failures (bad auth) must not loop — cost if wrong: a coordinator failing for another reason still needs agt start.
+- Task 2: Ruling (plan-mandated findings): the poller defers active/idle to hooks only per session after that session has produced a hook-sourced active/idle (projection `hooksSeen`, set when actor.session === s.id); otherwise it polls as before — why: spec §11 makes Herdr primary and hooks optional — cost if wrong: a lagging poll before the first hook could still add one turn.
+- Task 2: Ruling: for a hooked session, a polled `working` while s.status === "active" emits `session.active` (no turn, clears blockedNotified) so a second block in the same turn is notified — why: Claude has no hook for resuming after approval — cost if wrong: an extra no-op event per poll while working (dedupe: only when blockedNotified is set).
+- Task 2: Ruling: hooksSeen keys on a non-user actor role on session.active/agent.idle (poll signals are role user), and the re-block clear applies to every active session, hooked or not — why: root-pane hooks carry no session; the re-block gap is not hook-specific — cost if wrong: none found.
+- Task 3: Ruling: the last-resort cap keeps the tail (Git trail + How to continue) and byte-caps only the head, with TRUNC; tier reason and handoff 'Written … by' line capped at 300 bytes — why: How to continue must always survive — cost if wrong: none.
+- Task 4: Ruling: with no agent detected, setupIfNeeded prints the no-agent hint and continues with defaults for init and start (no wizard) — why: the wizard would re-prompt forever — cost if wrong: none.
+- Task 5: Ruling: controller reviewed the 2-line prompt diff directly instead of dispatching a reviewer (lines match the brief verbatim; tests assert both strings in systemPrompt and AGENTS.md) — why: trivial text change — cost if wrong: the final review sees it anyway. Minor (deferred): placement before the ticket line is not asserted.
+- Task 6: Ruling (user decision): no per-row Claude config copy and no credential handling. happy-mixed-main runs in a fixed path (~/.cache/agt-e2e/mixed-main, contents reset each run, path kept) that the user trusts once by opening claude there; the harness never reads Claude config — a trust dialog in a coordinator/worker pane fails the row with the one-time instruction — cost if wrong: one trust entry for that path in the user's Claude config.
+- Task 6: Ruling: the fixed e2e folder is emptied only if it is not a symlink and contains only .git and/or the harness marker .agt-e2e-fixed — why: emptying a mistyped or symlinked path would delete user files — cost if wrong: the user must clean the folder by hand once.
+- Task 6: Ruling: the fixed folder is accepted when the harness marker is present (any contents, since the last run's repo sits beside it) or when it holds only .git (first run) — why: a literal reading would refuse every run after the first — cost if wrong: a user who copies the marker elsewhere could have that folder emptied.
+- Ruling: Task 7 is executed in this scope; the full matrix (opencode/codex rows, edge rows that use an opencode worker) stays a release follow-up — why: user-scoped consent — cost if wrong: the edge scenarios remain unverified against real agents.
+- Ruling: one fix wave per final-fix-brief.md (A–D): failed/abandoned attach stops the agent; spawn_timeout min 60s; lost-spawn worker releases its ticket; brake notices; idempotent attach; reject commands from non-live sessions; done notice deferred to the worker's turn end; worker prompt "last action"; prompt dedupe; one scoped re-run (claude-code, omp) — why: both gaps break autonomous runs — cost if wrong: done notices arrive a few seconds later.
+- Final: parked — B gap 1: a lost-spawn worker with a done ticket never sends the done notice (session.failed worker branch lacks doneWorkerEnded) — Ruling: real, one-line follow-up, surfaced to the user — cost if wrong: coordinator never hears that ticket is done in that rare path.
+- Final: parked — B gap 2: a worker that never idles again after ticket done holds the notice forever (thread stalls) — Ruling: follow-up sweep flush (end worker + send notice after a grace period); also send at once if the worker is already idle at ticket.completed — cost if wrong: a stalled thread on a hung worker.
+- Final: parked — A1 root-pane close: unverified whether real Herdr closes a tab's last pane; a replacement split from a dead root pane has no fallback outside agt start — Ruling: follow-up (manual Herdr check; reactor emits herdr.tab.ensure or tells main to run agt start) — cost if wrong: an orphan root-pane agent or a stuck thread until agt start.
+- Final: parked — main used --now without a named tier in the release run (prompt adherence) — Ruling: follow-up prompt tightening + ASK_MAIN wording — cost if wrong: tier auto-accept skipped when the user only confirmed.
+
+## Deferred
+- Task 1: minor (deferred → final triage, likely fix-before-merge): late session.attached for an already-failed session is dropped → orphan agent pane, and for a worker a duplicate on the same ticket (close the pane on late attach); repeated attach for a live session not idempotent (drop when s.pane === cmd.pane); brake on lost-spawn coordinator replacement is silent to main; brake/replaces path untested; daemon test only covers the sweep branch; rotation tests filter session.failed instead of attaching fixtures; no RED run.
+- Task 2: minor (deferred): RED captured after implementation; reactor tests placed in questions.test.ts; the "ended" worker notice's no-ticket branch is unreachable.
+- Task 3: minor (deferred): hardFit only reachable via its unit test; no-heading branch caps without TRUNC (unreachable); shrink-order test checks title bounds only; tests written after implementation.
+- Controller: Task 4 implementer saw 3 lingering agt __spawn processes after full-suite runs (gone by the time the controller checked); likely Task 1's reportWithRetry keeping __spawn alive ~10s after a test daemon stops — final triage: make test teardown not leave retrying spawn jobs (or shorten retry under tests). Controller did not kill anything (the implementer's pkill had been denied).
+- Task 4: minor (deferred): no CLI-level TTY test for agt start (shares setupIfNeeded); tests depend on console.* capture.
+- Task 6: minor (deferred): a run dying between prepare and marker write leaves the folder refused until cleaned by hand (message could say how); trust dialog during the layout wait does not abort early; rowConfigHome cleanup untested; harness wiring tested via raceScenario/trustGate not runRow.
+- Task 7: minor (deferred → final triage): an omp worker kept working ~16s after `agt ticket done` while the coordinator committed — late writes may land after the commit (product/prompt-level); docs say "15s or more" from one observation; table headers show old versions; pane-wait elapsed time not recorded; happy-claude-code not re-run against the final common.ts.
