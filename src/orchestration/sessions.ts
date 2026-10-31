@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { adapterFor } from "../agents/adapters.ts";
 import { agentEnv, claudeConfigDir } from "../agents/claude.ts";
-import { HANDOFF_REQUEST_PREFIX } from "../agents/prompts.ts";
+import { HANDOFF_REQUEST_PREFIX, returnNotice } from "../agents/prompts.ts";
 import { roleAgent, tierAgent, type RoleAgent } from "../agents/roles.ts";
 import type { Effect } from "../commands/handler.ts";
 import type { Config } from "../config/config.ts";
@@ -49,7 +49,19 @@ export function liveSessions(state: State, thread?: string, role?: SessionRole):
 }
 
 /** Ticket statuses whose files are taken: another ticket of the same repo sharing a file waits until they leave these. */
-const FILE_HOLDING: readonly string[] = ["in_progress"];
+const FILE_HOLDING: readonly string[] = ["in_progress", "review"];
+
+/**
+ * Whether a ticket waits for a worker to be spawned: an open one, or a returned one (in_progress) whose worker is gone.
+ * The fresh worker takes the returned ticket over when it is created.
+ */
+export function awaitsWorker(state: State, t: Thread, ticket: string): boolean {
+  const k = t.tickets.find((x) => x.id === ticket);
+  if (k?.status === "open") return true;
+  if (k?.status !== "in_progress" || k.returnNote === undefined) return false;
+  const w = k.assignee ? state.sessions.get(k.assignee) : undefined;
+  return !w || !isLive(w);
+}
 
 /**
  * The ticket that keeps `ticket` from starting on a task thread: one in the same repo with a file in common that is
@@ -128,13 +140,17 @@ export function workerCwd(t: Thread, ticket: string): string | undefined {
   return repo === undefined ? threadCwd(t) : t.worktrees[repo]?.path;
 }
 
-export function spawnWorker(state: State, t: Thread, ticket: string, ctx: SpawnContext, agent?: AgentKind): { events: EventBody[]; effects: Effect[] } {
+/** `gone`: workers ended in the same reactor pass (state still shows them live); their panes are closing, so never split from them. */
+export function spawnWorker(state: State, t: Thread, ticket: string, ctx: SpawnContext, agent?: AgentKind, gone: ReadonlySet<string> = new Set()): { events: EventBody[]; effects: Effect[] } {
   const session = ctx.newId();
   const name = agentName(ctx.root, "worker", t.id, ticket, session);
   const last = liveSessions(state, t.id, "worker")
-    .filter((s) => s.pane)
+    .filter((s) => s.pane && !gone.has(s.id))
     .at(-1);
   const run: RoleAgent = agent ? { agent } : roleAgent(ctx.config, "worker");
+  // A worker for a returned ticket starts with what the coordinator asked to fix.
+  const k = t.tickets.find((x) => x.id === ticket);
+  const notice = k?.returnNote !== undefined ? returnNotice(t.id, ticket, k.returnNote) : undefined;
   return {
     events: [{ type: "session.created", thread: t.id, payload: { session, role: "worker", ...runFields(run), name, ticket } }],
     effects: [
@@ -149,6 +165,7 @@ export function spawnWorker(state: State, t: Thread, ticket: string, ctx: SpawnC
         cwd: workerCwd(t, ticket) ?? threadCwd(t),
         splitFrom: last?.pane ?? t.rootPane!,
         direction: last ? "down" : "right",
+        ...(notice ? { notice } : {}),
       },
     ],
   };

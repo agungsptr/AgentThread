@@ -14,7 +14,9 @@ export const USAGE = `usage: agt <command>
   ticket add <thread> <title...> --repo <repo> --file <path> [--file <path>]... [--doc <path>]   (a task thread)
   ticket files <thread>/<ticket>   the repo-relative files the ticket may change
   ticket claim|reopen <thread>/<ticket>
-  ticket done <thread>/<ticket> --summary <text>
+  ticket done <thread>/<ticket> --summary <text>   (a task thread: the ticket goes to review)
+  ticket accept <thread>/<ticket>                  the reviewed ticket is done; its worker ends
+  ticket return <thread>/<ticket> <what to fix...>   back to its worker (or a fresh one) with the note
   ticket block <thread>/<ticket> --reason <text>
   log <thread> <message...>
   decide <thread> <message...>

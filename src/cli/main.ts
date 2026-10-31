@@ -286,7 +286,13 @@ async function ticket(sub: string | undefined, args: string[], root: string, env
     }
     case "claim":
     case "reopen":
+    case "accept":
       return send(root, env, { cmd: `ticket.${sub}`, ...parseTicketRef(args[0]) });
+    case "return": {
+      const [ref, ...note] = args;
+      if (!note.join(" ").trim()) throw new UsageError('ticket return needs <thread>/<ticket> "<what to fix>"');
+      return send(root, env, { cmd: "ticket.return", ...parseTicketRef(ref), note: note.join(" ") });
+    }
     case "done": {
       const { values, positionals } = parse(args, { summary: { type: "string" } });
       if (!values.summary) throw new UsageError("ticket done needs <thread>/<ticket> --summary <text>");

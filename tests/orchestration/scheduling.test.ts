@@ -48,7 +48,7 @@ const ticket = (s: State, id: string, repo: string, files: string[]) =>
 const spawn = (s: State, t: string, config = DEFAULT_CONFIG) => exec(s, { cmd: "worker.spawn", thread: "001", ticket: t }, config);
 
 describe("tickets sharing files in one repo", () => {
-  test("the second queues with waitingFor, and starts once the first is done", () => {
+  test("the second queues with waitingFor, and starts once the first is accepted", () => {
     const s = world();
     ticket(s, "T1", "api", ["src/a.ts"]);
     ticket(s, "T2", "api", ["src/a.ts", "src/b.ts"]);
@@ -66,6 +66,9 @@ describe("tickets sharing files in one repo", () => {
     expect(liveTickets(s)).toEqual(["T1"]);
     const done = handle(s, CommandSchema.parse({ cmd: "ticket.done", thread: "001", ticket: "T1", summary: "ok" }), { role: "worker", thread: "001", session: w1.id, ticket: "T1" } as Actor, { root: "/repo", config: DEFAULT_CONFIG, newId });
     settle(s, apply(s, done.ok ? done.events : []));
+    // T1 waits in review and still holds its files; accepting T1 starts T2.
+    expect(liveTickets(s)).toEqual(["T1"]);
+    expect(exec(s, { cmd: "ticket.accept", thread: "001", ticket: "T1" }).ok).toBe(true);
     expect(liveTickets(s)).toEqual(["T1", "T2"]);
     expect(s.threads.get("001")!.workerQueue).toEqual([]);
   });

@@ -35,6 +35,12 @@ test("ticket block without --reason is a usage error", () => {
   expect(r.err).toContain("--reason");
 });
 
+test("ticket return without what to fix is a usage error", () => {
+  const r = agt(["ticket", "return", "001/T1"]);
+  expect(r.code).toBe(2);
+  expect(r.err).toContain("what to fix");
+});
+
 test("daemon lifecycle", () => {
   expect(agt(["daemon", "status"]).code).toBe(1);
   expect(agt(["daemon", "start"])).toMatchObject({ code: 0, out: "daemon started" });
@@ -55,6 +61,10 @@ test("thread, ticket and log commands", () => {
   expect(agt(["ticket", "add", "001", "Lock", "fix", "--repo", repoName(root), "--file", "src/lock.ts"], { env: COORD }).out).toBe('{"ticket":"T1"}');
   expect(agt(["ticket", "claim", "001/T1"], { env: WORKER }).out).toBe("ok");
   expect(agt(["ticket", "done", "001/T1", "--summary", "fixed"], { env: WORKER }).out).toBe("ok");
+  expect(agt(["ticket", "return", "001/T1", "add", "a", "test."], { env: COORD }).out).toBe("ok");
+  expect(agt(["ticket", "done", "001/T1", "--summary", "fixed"], { env: WORKER }).out).toBe("ok");
+  expect(agt(["ticket", "accept", "001/T1"], { env: COORD }).out).toBe("ok");
+  expect(agt(["ticket", "accept", "001/T1"], { env: COORD })).toMatchObject({ code: 1, err: "agt: ticket T1 is done, not in review" });
   expect(agt(["log", "001", "all", "good"], { env: WORKER }).out).toBe("ok");
   const logs = agt(["logs"]).out.split("\n");
   expect(logs.at(-1)).toMatch(/^\d+ \S+ log\.appended 001 worker:w1$/);

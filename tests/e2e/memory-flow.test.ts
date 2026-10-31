@@ -147,16 +147,20 @@ test("memory survives a lost coordinator; worker flow runs without hooks", async
   agt(["ticket", "claim", "001/T1"], wEnv);
   agt(["ticket", "done", "001/T1", "--summary", "retries added"], wEnv);
   await setStatus(w.pane!, "idle");
-  await waitFor(() => readState().calls.some((x) => x.join(" ") === `pane close ${w.pane}`), 10_000);
-  await waitFor(() => fm().sessions.find((x) => x.id === w.id)!.status === "ended", 10_000);
+  await waitFor(() => fm().sessions.find((x) => x.id === w.id)!.status === "idle", 10_000);
 
   await setStatus(c2.pane!, "working");
   await waitFor(() => fm().sessions.find((x) => x.id === c2.id)!.status === "active", 10_000);
   await setStatus(c2.pane!, "idle");
-  await waitFor(() => prompts(c2.pane).includes("Ticket T1 is done: retries added."), 10_000);
+  await waitFor(() => prompts(c2.pane).includes('Ticket T1 is ready for review: retries added. Review its commits, then agt ticket accept 001/T1 or agt ticket return 001/T1 "<what to fix>".'), 10_000);
+  // accepting the reviewed ticket ends its waiting worker
+  agt(["ticket", "accept", "001/T1"], coordEnv);
+  await waitFor(() => readState().calls.some((x) => x.join(" ") === `pane close ${w.pane}`), 10_000);
+  await waitFor(() => fm().sessions.find((x) => x.id === w.id)!.status === "ended", 10_000);
 
   // no hooks ran: every session signal came from the poller (actor "user", no AGT_SESSION), none from `agt event`
   const signals = agt(["logs"]).split("\n").map((l) => l.split(" ")).filter((f) => ["session.started", "session.active", "agent.idle", "session.ended", "agent.blocked"].includes(f[2]!));
   expect(signals.length).toBeGreaterThan(5);
-  expect(signals.filter((f) => f[4] !== "user")).toEqual([]);
+  // (the worker's end is the follow-up of the coordinator's `agt ticket accept`, stored under that command's actor)
+  expect(signals.filter((f) => f[4] !== "user" && !(f[2] === "session.ended" && f[4]!.startsWith("coordinator:")))).toEqual([]);
 }, 60_000);

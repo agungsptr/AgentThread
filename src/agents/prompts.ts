@@ -50,6 +50,9 @@ export function systemPrompt(o: PromptInput): string {
       t.dir === undefined
         ? "- Workers only edit files. You are the only one who commits: when a ticket is done, review the change, then git add and git commit in the worktree."
         : `- Workers commit their tickets on wip/${t.task}. You never edit or commit repo files; at the end you squash: in each repo worktree, git switch -c feat/${t.task} <source>, git merge --squash wip/${t.task}, then one plain commit.`,
+    ...(t.dir === undefined
+      ? []
+      : ["- Review each ticket's commits (git show --stat must list only its files), then agt ticket accept or agt ticket return with what to fix."]),
       `- Do not implement tickets yourself: every change to project files is made by a worker. You may read code and docs, run the tests and the stack, ${t.dir === undefined ? "review and commit" : "review"}.`,
       `- Record important decisions with agt decide ${t.id} "<decision>" and progress with agt progress ${t.id} "<message>".`,
       `- If a ticket is blocked, fix the cause, or reopen it with agt ticket reopen ${t.id}/<T> and start a new worker for it with agt worker spawn ${t.id} --ticket <T>.`,
@@ -69,7 +72,9 @@ export function systemPrompt(o: PromptInput): string {
         ? "Run tests only with commands you are allowed to run without asking for approval; if a command you need requires approval, block the ticket and name the command in the reason."
         : "You may run any command the work needs (tests, the dev stack, installs) inside the worktree."
     } When you need a decision you cannot make, run agt question ${t.id} "<question>", end your turn and wait for the answer.`,
-    `3. agt ticket done ${t.id}/${o.ticket} --summary "<one line>" is your last action: make no edits after it — or, if you cannot finish, agt ticket block ${t.id}/${o.ticket} --reason "<why>".`,
+    t.dir === undefined
+      ? `3. agt ticket done ${t.id}/${o.ticket} --summary "<one line>" is your last action: make no edits after it — or, if you cannot finish, agt ticket block ${t.id}/${o.ticket} --reason "<why>".`
+      : `3. When the ticket is done, run agt ticket done ${t.id}/${o.ticket} --summary "<one line>" and wait: the coordinator reviews your commits and may return the ticket with what to fix. If you cannot finish, run agt ticket block ${t.id}/${o.ticket} --reason "<why>".`,
     `${
       t.dir === undefined
         ? "Do not commit; the coordinator commits."
@@ -111,11 +116,16 @@ export function handoffRequestPrompt(o: { root: string; thread: PromptThread; re
   ].join("\n");
 }
 
-export function bootstrapPrompt(o: PromptInput, kind: "start" | "handoff" = "start"): string {
+/** What a ticket's worker hears when the coordinator returns the ticket (its fresh worker: at the end of its bootstrap). */
+export const returnNotice = (thread: string, ticket: string, note: string) =>
+  `Ticket ${ticket} was returned: ${note} Fix it in a new commit, then run agt ticket done ${thread}/${ticket} --summary "<one line>" again.`;
+
+/** `notice` (a worker's) follows the bootstrap on its own line. */
+export function bootstrapPrompt(o: PromptInput, kind: "start" | "handoff" = "start", notice?: string): string {
   if (o.role === "main") return "";
   const dir = threadDir(o);
   const id = o.thread!.id;
-  if (o.role === "worker") return `You are the worker for ticket ${o.ticket} of thread ${id}. Read ${dir}/brief.md, then follow AGENTS.md.`;
+  if (o.role === "worker") return `You are the worker for ticket ${o.ticket} of thread ${id}. Read ${dir}/brief.md, then follow AGENTS.md.${notice ? `\n${notice}` : ""}`;
   if (kind === "handoff") return `You are the new coordinator of thread ${id}; the previous session ended. Read ${dir}/brief.md, then follow AGENTS.md.`;
   return `You are the coordinator of thread ${id}. Read ${dir}/brief.md, then follow AGENTS.md.`;
 }

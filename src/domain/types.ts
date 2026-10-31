@@ -15,7 +15,8 @@ export type ThreadType = (typeof THREAD_TYPES)[number];
 export const THREAD_STATUSES = ["open", "in_progress", "blocked", "review", "done"] as const;
 export type ThreadStatus = (typeof THREAD_STATUSES)[number];
 
-export type TicketStatus = "open" | "in_progress" | "blocked" | "done";
+/** `review` (task threads): done by its worker, waiting for the coordinator to accept or return it. */
+export type TicketStatus = "open" | "in_progress" | "blocked" | "review" | "done";
 
 export interface Actor {
   role: Role;
@@ -75,6 +76,9 @@ export type EventBody =
   | { type: "ticket.completed"; thread: string; payload: { ticket: string; summary?: string } }
   | { type: "ticket.blocked"; thread: string; payload: { ticket: string; reason: string } }
   | { type: "ticket.reopened"; thread: string; payload: { ticket: string } }
+  | { type: "ticket.reviewed"; thread: string; payload: { ticket: string; summary: string } }
+  | { type: "ticket.accepted"; thread: string; payload: { ticket: string } }
+  | { type: "ticket.returned"; thread: string; payload: { ticket: string; note: string } }
   | { type: "log.appended"; thread: string; payload: { message: string } }
   | { type: "decision.recorded"; thread: string; payload: { message: string } }
   | { type: "note.recorded" | "progress.recorded"; thread: string; payload: { message: string } }

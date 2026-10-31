@@ -1,10 +1,10 @@
-import { handoffRequestPrompt } from "../agents/prompts.ts";
+import { handoffRequestPrompt, returnNotice } from "../agents/prompts.ts";
 import type { Effect } from "../commands/handler.ts";
 import { type Config, durationMs } from "../config/config.ts";
 import type { EventBody, StoredEvent } from "../domain/types.ts";
 import { isLive, type Session, type State, type Thread } from "../state/projection.ts";
 import { generateHandoff } from "./handoff.ts";
-import { conflictingTicket, liveSessions, rotateCoordinator, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure, workerCwd, workerLimit } from "./sessions.ts";
+import { awaitsWorker, conflictingTicket, liveSessions, rotateCoordinator, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure, workerCwd, workerLimit } from "./sessions.ts";
 import { tierRun } from "./tiers.ts";
 
 const CHECKPOINT_NOTICE = (thread: string | undefined) =>
@@ -34,6 +34,8 @@ function workerRef(ticket: string | undefined, lead: string, noun = ""): string 
 }
 
 const doneNotice = (ticket: string, summary: string | undefined) => `Ticket ${ticket} is done${summary ? `: ${summary}` : ""}.`;
+const reviewNotice = (thread: string, ticket: string, summary: string | undefined) =>
+  `Ticket ${ticket} is ready for review: ${summary ?? ""}. Review its commits, then agt ticket accept ${thread}/${ticket} or agt ticket return ${thread}/${ticket} "<what to fix>".`;
 
 export function react(state: State, events: StoredEvent[], ctx: ReactorContext): { events: EventBody[]; effects: Effect[] } {
   const out: EventBody[] = [];
@@ -87,21 +89,37 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
     out.push({ type: "session.ended", thread: s.thread, payload: { session: s.id } } as EventBody);
     return true;
   };
+  /** Tickets released earlier in this call: state still shows them in_progress, and the coordinator decides on them. */
+  const released = new Set<string>();
+  const releaseTicket = (thread: string, ticket: string, reason: string) => {
+    released.add(`${thread}/${ticket}`);
+    out.push({ type: "ticket.released", thread, payload: { ticket, reason } });
+  };
   const fillWorkers = (threadId: string | undefined) => {
     const t = threadId ? state.threads.get(threadId) : undefined;
     if (!t || t.status === "done" || !t.rootPane) return;
-    let free = workerLimit(t, ctx.config) - liveSessions(state, t.id, "worker").length - (spawnedPerThread.get(t.id) ?? 0);
-    for (const ticket of t.workerQueue) {
+    // Workers ended earlier in this call (an accepted ticket's) no longer hold a slot; state does not know yet.
+    let free = workerLimit(t, ctx.config) - liveSessions(state, t.id, "worker").filter((w) => !ended.has(w.id)).length - (spawnedPerThread.get(t.id) ?? 0);
+    // Returned tickets whose worker is gone go first (they were running), then the queue.
+    const returned = t.tickets.filter((k) => k.status === "in_progress" && awaitsWorker(state, t, k.id)).map((k) => k.id);
+    for (const ticket of [...returned, ...t.workerQueue.filter((x) => !returned.includes(x))]) {
       if (free <= 0) break;
-      if (spawnedTickets.has(`${t.id}/${ticket}`)) continue; // already spawned earlier in this call; state isn't updated yet
-      if (t.tickets.find((k) => k.id === ticket)?.status !== "open") continue;
+      if (spawnedTickets.has(`${t.id}/${ticket}`) || released.has(`${t.id}/${ticket}`)) continue; // spawned or released earlier in this call; state isn't updated yet
+      if (!awaitsWorker(state, t, ticket)) continue;
       if (workerCwd(t, ticket) === undefined) continue; // its repo has no worktree (yet)
       if (conflictingTicket(state, t, ticket, new Set([...spawnedTickets].filter((x) => x.startsWith(`${t.id}/`)).map((x) => x.slice(t.id.length + 1))))) continue; // shares a file with a running ticket
       spawnedTickets.add(`${t.id}/${ticket}`);
-      take(spawnWorker(state, t, ticket, ctx, t.workerAgents[ticket]));
+      take(spawnWorker(state, t, ticket, ctx, t.workerAgents[ticket], ended));
       spawnedPerThread.set(t.id, (spawnedPerThread.get(t.id) ?? 0) + 1);
       free--;
     }
+  };
+  /** The coordinator hears a ticket is ready for review at the event the projection picked (Ticket.reviewNoticeSeq). */
+  const reviewReady = (ev: StoredEvent) => {
+    const session = "session" in ev.payload && typeof ev.payload.session === "string" ? state.sessions.get(ev.payload.session) : undefined;
+    const t = state.threads.get(ev.thread ?? session?.thread ?? "");
+    const k = t?.tickets.find((x) => x.reviewNoticeSeq === ev.seq);
+    if (t && k) notify(coordinatorToNotify(t.id), reviewNotice(t.id, k.id, k.summary));
   };
   /** Rotates a coordinator at most once per call; `first` is emitted just before the rotation. Returns whether it rotated. */
   const rotate = (s: Session, reason: string, first?: EventBody): boolean => {
@@ -138,7 +156,8 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
    */
   const doneWorkerEnded = (s: Session, t: Thread) => {
     const k = t.tickets.find((x) => x.id === s.ticket);
-    if (k?.status === "done" && k.assignee === s.id) notify(coordinatorToNotify(t.id), doneNotice(k.id, k.summary));
+    // An accepted ticket's coordinator heard of it at review (reviewReady) and accepted it: nothing more to say.
+    if (k?.status === "done" && k.assignee === s.id && !k.accepted) notify(coordinatorToNotify(t.id), doneNotice(k.id, k.summary));
   };
   /** Ends a worker that finished its ticket (the teardown of the idle that ends it), closing its pane when configured. */
   const endFinishedWorker = (s: Session) => {
@@ -200,6 +219,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
   };
 
   for (const ev of events) {
+    reviewReady(ev);
     switch (ev.type) {
       case "thread.tier_chosen": {
         const t = state.threads.get(ev.thread);
@@ -254,7 +274,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
           doneWorkerEnded(s, t);
           const k = t.tickets.find((x) => x.id === s.ticket);
           const release = k?.status === "in_progress" && k.assignee === s.id;
-          if (release) out.push({ type: "ticket.released", thread: t.id, payload: { ticket: k.id, reason: "worker session lost" } });
+          if (release) releaseTicket(t.id, k.id, "worker session lost");
           const w = cap(workerRef(s.ticket, "worker"));
           notify(coordinatorToNotify(t.id), release ? `${w} was lost; the ticket is open again.` : `${w} was lost.`);
           // The released ticket is not open in `state` yet, so this only spawns other queued tickets; the coordinator decides on the released one.
@@ -281,6 +301,26 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
       case "ticket.reopened":
         fillWorkers(ev.thread);
         break;
+      case "ticket.accepted": {
+        // The worker stayed for the review; accepted, it ends as a finished worker. One still busy ends at its idle (or
+        // the sweep's grace). Its slot and the ticket's files are free for queued tickets.
+        const k = state.threads.get(ev.thread)?.tickets.find((x) => x.id === ev.payload.ticket);
+        const w = k?.assignee ? state.sessions.get(k.assignee) : undefined;
+        if (k?.status === "done" && w && isLive(w) && w.role === "worker" && w.status === "idle") endFinishedWorker(w);
+        fillWorkers(ev.thread);
+        break;
+      }
+      case "ticket.returned": {
+        const t = state.threads.get(ev.thread);
+        const k = t?.tickets.find((x) => x.id === ev.payload.ticket);
+        if (!t || k?.status !== "in_progress") break;
+        const w = k.assignee ? state.sessions.get(k.assignee) : undefined;
+        // Its worker is gone: a fresh one, whose bootstrap carries the note (spawnWorker), takes the ticket over. Without
+        // a free slot it waits like a queued spawn: fillWorkers starts returned tickets awaiting a worker first.
+        if (w && isLive(w)) notify(w, returnNotice(t.id, k.id, ev.payload.note));
+        else fillWorkers(t.id);
+        break;
+      }
       case "ticket.blocked":
         fillWorkers(ev.thread);
         notify(coordinatorToNotify(ev.thread), `Ticket ${ev.payload.ticket} is blocked: ${ev.payload.reason}.`);
@@ -307,8 +347,11 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         if (s?.role === "worker") {
           if (t) doneWorkerEnded(s, t);
           // Its agent may have claimed the ticket before the report was lost (the spawn job stops that agent): free it.
-          const k = lostSpawn && t && t.status !== "done" ? t.tickets.find((x) => x.id === s.ticket) : undefined;
-          if (k?.status === "in_progress" && k.assignee === s.id) out.push({ type: "ticket.released", thread: t!.id, payload: { ticket: k.id, reason: "worker spawn report lost" } });
+          // A fresh worker for a returned ticket holds it from its creation: a failed spawn must not strand it either.
+          const k = t && t.status !== "done" ? t.tickets.find((x) => x.id === s.ticket) : undefined;
+          if (k?.status === "in_progress" && k.assignee === s.id && (lostSpawn || k.returnNote !== undefined)) {
+            releaseTicket(t!.id, k.id, lostSpawn ? "worker spawn report lost" : "worker spawn failed");
+          }
           notify(coordinatorToNotify(s.thread), text ?? `${cap(workerRef(s.ticket, "worker"))} failed: ${ev.payload.reason}.`);
         }
         if (s?.role === "coordinator") {
@@ -378,7 +421,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
           // A worker that exits on its own must not leave its ticket stuck; one ended by teardown has a done or blocked ticket.
           const k = t.tickets.find((x) => x.id === s.ticket);
           if (k?.status === "in_progress" && k.assignee === s.id) {
-            out.push({ type: "ticket.released", thread: t.id, payload: { ticket: k.id, reason: "worker session ended" } });
+            releaseTicket(t.id, k.id, "worker session ended");
             notify(coordinatorToNotify(t.id), `${cap(workerRef(k.id, "worker"))} ended; the ticket is open again.`);
           }
         }

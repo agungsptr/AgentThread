@@ -41,6 +41,8 @@ export const CommandSchema = z.discriminatedUnion("cmd", [
   z.object({ cmd: z.literal("ticket.done"), thread: threadId, ticket: ticketId, summary: text }),
   z.object({ cmd: z.literal("ticket.block"), thread: threadId, ticket: ticketId, reason: text }),
   z.object({ cmd: z.literal("ticket.reopen"), thread: threadId, ticket: ticketId }),
+  z.object({ cmd: z.literal("ticket.accept"), thread: threadId, ticket: ticketId }),
+  z.object({ cmd: z.literal("ticket.return"), thread: threadId, ticket: ticketId, note: text }),
   z.object({ cmd: z.literal("log"), thread: threadId, message: text }),
   z.object({ cmd: z.literal("decide"), thread: threadId, message: text }),
   z.object({ cmd: z.literal("note"), thread: threadId, message: text }),

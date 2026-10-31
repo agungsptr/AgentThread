@@ -37,8 +37,10 @@ const THREAD_TRANSITIONS: Record<ThreadStatus, ThreadStatus[]> = {
 
 const TICKET_TRANSITIONS: Record<TicketStatus, TicketStatus[]> = {
   open: ["in_progress"],
-  in_progress: ["done", "blocked"],
+  // A legacy thread's ticket goes straight to done; a task thread's goes to review, then done (accepted) or back.
+  in_progress: ["done", "blocked", "review"],
   blocked: ["open"],
+  review: ["done", "in_progress"],
   done: [],
 };
 

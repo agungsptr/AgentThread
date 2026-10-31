@@ -47,6 +47,9 @@ test("feature → dependent bugfix → review → done unblocks dependent", () =
   agt(["ticket", "claim", "001/T2"], worker("001", "w2"));
   agt(["ticket", "done", "001/T1", "--summary", "ok"], worker("001", "w1"));
   agt(["ticket", "done", "001/T2", "--summary", "ok"], worker("001", "w2"));
+  expect(read("threads/001-oauth-login/board.md")).toContain(`| T2 | Button | [${repoName(root)}] src/ui/login.tsx | review | w2 |`);
+  agt(["ticket", "accept", "001/T1"], coord("001"));
+  agt(["ticket", "accept", "001/T2"], coord("001"));
   agt(["decide", "001", "use PKCE"], coord("001"));
 
   const handoff = join(root, "h.md");

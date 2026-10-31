@@ -5,7 +5,7 @@ import { DEFAULT_CONFIG, type Config } from "../config/config.ts";
 import { canTransitionThread, canTransitionTicket, scopesOverlap, slugify, validateHandoff } from "../domain/rules.ts";
 import { ROLES, type Actor, type EventBody, type Role, type ThreadStatus, type TicketStatus } from "../domain/types.ts";
 import { roleAgent, type RoleAgent } from "../agents/roles.ts";
-import { agentName, conflictingTicket, liveSessions, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure as tabEnsureFor, workerLimit } from "../orchestration/sessions.ts";
+import { agentName, awaitsWorker, conflictingTicket, liveSessions, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure as tabEnsureFor, workerLimit } from "../orchestration/sessions.ts";
 import { workspaceReposNoSpawn } from "../project/workspace.ts";
 import { actorSession, isLive, type State, type Thread, type Ticket } from "../state/projection.ts";
 import type { Command, CommandName } from "./schema.ts";
@@ -33,6 +33,8 @@ export type Effect =
       splitFallbacks?: string[];
       direction?: "right" | "down";
       bootstrap?: "start" | "handoff";
+      /** Text the bootstrap prompt ends with: a returned ticket's notice for its fresh worker. */
+      notice?: string;
     }
   | { kind: "notice.deliver"; session: string; thread?: string; pane: string; text: string; count: number }
   | { kind: "pane.close"; pane: string }
@@ -65,6 +67,8 @@ const ALLOWED: Record<CommandName, readonly Role[]> = {
   "ticket.done": ["worker"],
   "ticket.block": ["worker"],
   "ticket.reopen": ["coordinator"],
+  "ticket.accept": ["coordinator"],
+  "ticket.return": ["coordinator"],
   log: ROLES,
   decide: ["coordinator"],
   note: ROLES,
@@ -267,6 +271,8 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
     case "ticket.claim": {
       const k = workerTicket(t, cmd.ticket, actor);
       const session = workerSession(actor);
+      // A fresh worker for a returned ticket already holds it (see session.created): its claim changes nothing.
+      if (k.status === "in_progress" && k.assignee === session) return { events: [] };
       transitionTicket(k, "in_progress");
       // On a task thread, file lists are repo-relative: only tickets of the same repo can clash.
       const clash = t.tickets.find((o) => o.id !== k.id && o.status === "in_progress" && o.repo === k.repo && scopesOverlap(o.scope, k.scope));
@@ -275,8 +281,21 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
     }
     case "ticket.done": {
       const k = assignedTicket(t, cmd.ticket, actor);
-      transitionTicket(k, "done");
-      return { events: [{ type: "ticket.completed", thread: t.id, payload: { ticket: k.id, summary: cmd.summary } }] };
+      if (t.legacy) {
+        transitionTicket(k, "done");
+        return { events: [{ type: "ticket.completed", thread: t.id, payload: { ticket: k.id, summary: cmd.summary } }] };
+      }
+      // A task thread's ticket waits for the coordinator's review; its worker stays to fix what comes back.
+      transitionTicket(k, "review");
+      return { events: [{ type: "ticket.reviewed", thread: t.id, payload: { ticket: k.id, summary: cmd.summary } }] };
+    }
+    case "ticket.accept":
+    case "ticket.return": {
+      const k = findTicket(t, cmd.ticket);
+      if (k.status !== "review") reject(`ticket ${k.id} is ${k.status}, not in review`);
+      return cmd.cmd === "ticket.accept"
+        ? { events: [{ type: "ticket.accepted", thread: t.id, payload: { ticket: k.id } }] }
+        : { events: [{ type: "ticket.returned", thread: t.id, payload: { ticket: k.id, note: cmd.note } }] };
     }
     case "ticket.block": {
       const k = assignedTicket(t, cmd.ticket, actor);
@@ -292,7 +311,7 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
       if (t.status === "done") reject(`thread ${t.id} is done`);
       if (!t.rootPane) reject(`thread ${t.id} has no Herdr tab; run \`agt start\``);
       const k = findTicket(t, cmd.ticket);
-      if (k.status !== "open") reject(`ticket ${k.id} is ${k.status}`);
+      if (k.status !== "open" && !awaitsWorker(state, t, k.id)) reject(`ticket ${k.id} is ${k.status}`);
       const workers = liveSessions(state, t.id, "worker");
       if (t.workerQueue.includes(k.id) || workers.some((s) => s.ticket === k.id)) reject(`ticket ${k.id} already has a worker`);
       // Tickets that share a file in one repo run one after the other: fillWorkers starts this one once the other is done, blocked or open again.

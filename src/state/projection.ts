@@ -73,8 +73,14 @@ export interface Ticket {
   assignee?: string;
   /** The summary of `agt ticket done` (set while the ticket is done). */
   summary?: string;
-  /** When the ticket was completed (set while it is done). */
+  /** When the ticket was completed (set while it is done); on a task thread, when it was accepted. */
   completedAt?: string;
+  /** Task threads, while in review: the seq of the event at which the coordinator hears the ticket is ready for review. */
+  reviewNoticeSeq?: number;
+  /** Task threads: the coordinator's note of the latest return, until the ticket is in review again; a fresh worker gets it. */
+  returnNote?: string;
+  /** Task threads: the coordinator accepted it (its done notice was the review notice). */
+  accepted?: boolean;
 }
 
 export interface Entry {
@@ -194,7 +200,7 @@ export function actorSession(state: State, actor: Actor): string | undefined {
  */
 export const COMMAND_OUTPUT_TYPES: ReadonlySet<string> = new Set([
   "thread.status_changed", "ticket.created", "ticket.claimed", "ticket.completed", "ticket.blocked", "ticket.reopened",
-  "log.appended", "decision.recorded", "note.recorded", "progress.recorded", "question.recorded", "question.answered",
+  "ticket.reviewed", "ticket.accepted", "ticket.returned", "log.appended", "decision.recorded", "note.recorded", "progress.recorded", "question.recorded", "question.answered",
   "worker.queued",
 ]);
 
@@ -347,6 +353,35 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       note(t, ev, `${k.id} done${ev.payload.summary ? `: ${ev.payload.summary}` : ""}`);
       break;
     }
+    case "ticket.reviewed": {
+      const k = ticket(ev.payload.ticket);
+      k.status = "review";
+      k.summary = ev.payload.summary;
+      delete k.returnNote;
+      // The coordinator hears it when the worker's turn ends (see reviewNoticeAt), at once when no turn of it can come.
+      const w = k.assignee ? state.sessions.get(k.assignee) : undefined;
+      if (!w || !isLive(w) || (w.status === "idle" && ev.actor.session !== w.id)) k.reviewNoticeSeq = ev.seq;
+      note(t, ev, `${k.id} ready for review: ${ev.payload.summary}`);
+      break;
+    }
+    case "ticket.accepted": {
+      const k = ticket(ev.payload.ticket);
+      k.status = "done";
+      k.accepted = true;
+      k.completedAt = ev.ts;
+      delete k.reviewNoticeSeq;
+      note(t, ev, `${k.id} accepted`);
+      break;
+    }
+    case "ticket.returned": {
+      const k = ticket(ev.payload.ticket);
+      k.status = "in_progress";
+      k.returnNote = ev.payload.note;
+      delete k.summary;
+      delete k.reviewNoticeSeq;
+      note(t, ev, `${k.id} returned: ${ev.payload.note}`);
+      break;
+    }
     case "ticket.blocked": {
       const k = ticket(ev.payload.ticket);
       k.status = "blocked";
@@ -359,6 +394,8 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       delete k.assignee;
       delete k.summary;
       delete k.completedAt;
+      delete k.returnNote;
+      delete k.accepted;
       note(t, ev, `${k.id} reopened`);
       break;
     }
@@ -457,6 +494,16 @@ function threadNote(state: State, ev: StoredEvent, message: string): void {
   if (t) note(t, ev, message);
 }
 
+/**
+ * The first turn end (idle) or end of a worker whose ticket waits in review is when the coordinator hears it is ready:
+ * edits the worker makes after `agt ticket done` within that turn are then in. Records that event's seq once.
+ */
+function reviewNoticeAt(state: State, s: Session, seq: number): void {
+  if (s.role !== "worker" || !s.ticket || !isLive(s)) return;
+  const k = (s.thread ? state.threads.get(s.thread) : undefined)?.tickets.find((x) => x.id === s.ticket);
+  if (k?.status === "review" && k.assignee === s.id && k.reviewNoticeSeq === undefined) k.reviewNoticeSeq = seq;
+}
+
 /** Applies session and notice events; returns false for every other event type. */
 function applySessionEvent(state: State, ev: StoredEvent): boolean {
   switch (ev.type) {
@@ -483,6 +530,10 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
       if (t && p.ticket) {
         t.workerQueue = t.workerQueue.filter((k) => k !== p.ticket);
         delete t.workerAgents[p.ticket];
+        // A fresh worker for a returned ticket whose worker is gone takes the ticket over: it is in_progress already.
+        const k = t.tickets.find((x) => x.id === p.ticket);
+        const prev = k?.assignee ? state.sessions.get(k.assignee) : undefined;
+        if (p.role === "worker" && k?.status === "in_progress" && k.returnNote !== undefined && (!prev || !isLive(prev))) k.assignee = p.session;
       }
       threadNote(state, ev, `${p.role} session ${short(p.session)} created${p.ticket ? ` for ${p.ticket}` : ""}`);
       return true;
@@ -509,6 +560,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
     }
     case "agent.idle": {
       const s = sessionOf(state, ev.seq, ev.payload.session);
+      reviewNoticeAt(state, s, ev.seq);
       if (isLive(s)) {
         delete s.polledStart;
         delete s.blockedNotified;
@@ -565,6 +617,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
     }
     case "session.lost": {
       const s = sessionOf(state, ev.seq, ev.payload.session);
+      reviewNoticeAt(state, s, ev.seq);
       // A coordinator that exited normally is reported lost by `agt start`, so it gets replaced.
       if (isLive(s) || (s.status === "ended" && s.role === "coordinator")) {
         s.status = "lost";
@@ -594,6 +647,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
       return true;
     case "session.ended": {
       const s = sessionOf(state, ev.seq, ev.payload.session);
+      reviewNoticeAt(state, s, ev.seq);
       if (isLive(s)) {
         s.status = "ended";
         threadNote(state, ev, `session ${short(ev.payload.session)} ended`);
@@ -601,6 +655,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
       return true;
     }
     case "session.failed":
+      reviewNoticeAt(state, sessionOf(state, ev.seq, ev.payload.session), ev.seq);
       sessionOf(state, ev.seq, ev.payload.session).status = "failed";
       threadNote(state, ev, `session ${short(ev.payload.session)} failed: ${ev.payload.reason}`);
       return true;

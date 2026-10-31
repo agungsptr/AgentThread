@@ -216,7 +216,7 @@ export function createEffectRunner(opts: {
                 }
               : {}),
             args: launched.args,
-            bootstrap: bootstrapPrompt(prompt, effect.bootstrap ?? "start"),
+            bootstrap: bootstrapPrompt(prompt, effect.bootstrap ?? "start", effect.notice),
           });
           return [];
         } catch (e) {

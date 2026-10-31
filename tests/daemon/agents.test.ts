@@ -63,7 +63,7 @@ test("a new thread gets a coordinator that is started through the spawner child"
   expect(fake.read().calls.some((c) => c[0] === "agent" && c[1] === "prompt" && c[3]!.startsWith("You are the coordinator of thread 001. Read ") && c[3]!.endsWith("/brief.md, then follow AGENTS.md."))).toBe(true);
 });
 
-test("worker capacity: queue, finish, next worker spawns; coordinator gets notified when idle", async () => {
+test("worker capacity: queue, finish, review, accept, next worker spawns; coordinator gets notified when idle", async () => {
   const jobs: SpawnJob[] = [];
   await boot({ launch: (j) => void jobs.push(j) });
   await cmd({ cmd: "thread.new", title: "X", type: "bug", maxWorkers: 1 });
@@ -82,13 +82,18 @@ test("worker capacity: queue, finish, next worker spawns; coordinator gets notif
   await cmd({ cmd: "ticket.claim", thread: "001", ticket: "T1" }, worker);
   await cmd({ cmd: "ticket.done", thread: "001", ticket: "T1", summary: "ok" }, worker);
   await cmd({ cmd: "session.signal", session: w1, signal: "idle" }, worker);
+  // in review, the worker stays and keeps its slot
+  expect(fake.read().calls.some((c) => c.join(" ") === "pane close w1:p7")).toBe(false);
+  expect(await sessionOf("worker", "T2")).toBeUndefined();
+  // accepting T1 ends its worker and starts T2
+  expect(await cmd({ cmd: "ticket.accept", thread: "001", ticket: "T1" }, coord)).toMatchObject({ ok: true });
   expect(fake.read().calls.some((c) => c.join(" ") === "pane close w1:p7")).toBe(true);
   expect(await sessionOf("worker", "T2")).toBeDefined();
   expect(jobs.filter((j) => j.split)).toHaveLength(2);
-  // coordinator idle → one delivery with the queued notice
+  // coordinator idle → one delivery with the queued notices
   await cmd({ cmd: "session.signal", session: c, signal: "idle" });
   expect(fake.read().calls.filter((x) => x[0] === "agent" && x[1] === "prompt" && x[2] === "w1:p1").map((x) => x[3])).toEqual([
-    `Worktree for ${repoName(root)} is ready at ${join(root, ".worktrees", "x", repoName(root))} on wip/x.\nTicket T1 is done: ok.`,
+    `Worktree for ${repoName(root)} is ready at ${join(root, ".worktrees", "x", repoName(root))} on wip/x.\nTicket T1 is ready for review: ok. Review its commits, then agt ticket accept 001/T1 or agt ticket return 001/T1 "<what to fix>".`,
   ]);
   expect((await events()).at(-1)!.type).toBe("notice.delivered");
 });

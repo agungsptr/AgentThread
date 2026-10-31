@@ -73,6 +73,9 @@ test("coordinator spawns, workers queue and rotate, notices reach the idle coord
   agt(["ticket", "claim", "001/T1"], w1Env);
   agt(["ticket", "done", "001/T1", "--summary", "endpoint added"], w1Env);
   hook("idle", w1.id, w1Env);
+  // in review the worker waits; accepting the ticket ends it and frees the slot
+  expect(fm().sessions.find((s) => s.id === w1.id)!.status).toBe("idle");
+  agt(["ticket", "accept", "001/T1"], coordEnv);
 
   expect(fake.read().calls.some((x) => x.join(" ") === `pane close ${w1.pane}`)).toBe(true);
   expect(fm().sessions.find((s) => s.id === w1.id)!.status).toBe("ended");
@@ -80,7 +83,7 @@ test("coordinator spawns, workers queue and rotate, notices reach the idle coord
   expect(w2.pane).not.toBe(w1.pane);
 
   const prompts = fake.read().calls.filter((x) => x[0] === "agent" && x[1] === "prompt" && x[2] === "w1:p2").map((x) => x[3]);
-  expect(prompts).toContain("Ticket T1 is done: endpoint added.");
+  expect(prompts).toContain('Ticket T1 is ready for review: endpoint added. Review its commits, then agt ticket accept 001/T1 or agt ticket return 001/T1 "<what to fix>".');
 });
 
 test("every role starts through its own agent kind", async () => {
