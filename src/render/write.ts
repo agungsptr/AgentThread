@@ -11,12 +11,18 @@ export function writeAll(
   root: string,
   state: State,
   config: Config = DEFAULT_CONFIG,
-  trail?: (t: Thread) => GitTrail | undefined,
+  trail?: (t: Thread, repo?: string) => GitTrail | undefined,
 ): void {
   const trailOf =
     trail ??
-    ((t: Thread) =>
-      t.status === "done" || t.worktree === undefined || t.branch === undefined ? undefined : gitTrail({ root, worktree: t.worktree, branch: t.branch }));
+    ((t: Thread, repo?: string) => {
+      if (t.status === "done") return undefined;
+      if (repo !== undefined) {
+        const w = t.worktrees[repo];
+        return w ? gitTrail({ root, worktree: w.path, branch: w.branch, source: w.source }) : undefined;
+      }
+      return t.worktree === undefined || t.branch === undefined ? undefined : gitTrail({ root, worktree: t.worktree, branch: t.branch });
+    });
   const p = paths(root);
   mkdirSync(p.threadsDir, { recursive: true });
   writeAtomic(p.mainThread, renderMain(state, config));
@@ -25,7 +31,7 @@ export function writeAll(
     mkdirSync(dir, { recursive: true });
     const sessions = [...state.sessions.values()].filter((s) => s.thread === t.id);
     writeAtomic(join(dir, "sub.thread.md"), renderSub(t, sessions, config));
-    writeAtomic(join(dir, "brief.md"), renderBrief({ thread: t, sessions, trail: trailOf(t), config }));
+    writeAtomic(join(dir, "brief.md"), renderBrief({ thread: t, sessions, trail: t.legacy ? trailOf(t) : undefined, trails: t.legacy ? undefined : Object.fromEntries(Object.keys(t.worktrees).map((r) => [r, trailOf(t, r)])), config }));
     writeAtomic(join(dir, "board.md"), renderBoard(t));
     writeAtomic(join(dir, "log.md"), renderLog(t));
   }

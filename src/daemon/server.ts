@@ -57,7 +57,7 @@ export async function startDaemon(
     ensureSocketDir(p.socketDir);
     rmSync(p.socket, { force: true });
     await trails.refresh(state.threads.values());
-    writeAll(root, state, config, trails.get);
+    writeAll(root, state, config, (t, repo) => (repo === undefined ? trails.get(t) : trails.getRepo(t, repo)));
   } catch (e) {
     store.close();
     throw e;
@@ -103,7 +103,7 @@ export async function startDaemon(
   const render = async (): Promise<void> => {
     try {
       await trails.refresh(state.threads.values());
-      writeAll(root, state, config, trails.get);
+      writeAll(root, state, config, (t, repo) => (repo === undefined ? trails.get(t) : trails.getRepo(t, repo)));
     } catch (e) {
       // Events are already committed; failing here would make the client retry and duplicate the command.
       log(`render failed after commit: ${e instanceof Error ? e.message : String(e)}`);

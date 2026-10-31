@@ -75,7 +75,7 @@ export function renderSub(t: Thread, sessions: Session[] = [], config: Config = 
     type: t.type,
     status: t.status,
     depends_on: t.dependsOn,
-    ...(t.legacy ? { branch: t.branch, worktree: t.worktree } : { task: t.task, dir: t.dir }),
+    ...(t.legacy ? { branch: t.branch, worktree: t.worktree } : { task: t.task, dir: t.dir, worktrees: Object.entries(t.worktrees).map(([repo, w]) => ({ repo, ...w })) }),
     tab: t.tab ?? null,
     max_workers: t.maxWorkers ?? null,
     sessions: sessions.map((s) => ({

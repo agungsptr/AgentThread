@@ -6,7 +6,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { capBytes, hardFit, renderBrief } from "../../src/render/brief.ts";
 import { writeAll } from "../../src/render/write.ts";
 import { project } from "../../src/state/projection.ts";
-import { INIT, stateOf, stored, threadCreated } from "../helpers.ts";
+import { INIT, stateOf, stored, taskThreadCreated, threadCreated } from "../helpers.ts";
 
 const full = () =>
   stateOf(
@@ -219,4 +219,45 @@ test("capBytes: surrogate pairs and tiny limits", () => {
   expect(capBytes("abc", 0)).toBe("");
   expect(capBytes("abc", 1)).toBe("");
   expect(capBytes("", 0)).toBe("");
+});
+
+const taskThread = (repos: string[]) =>
+  stateOf(
+    INIT,
+    taskThreadCreated("001", "login", { title: "Login", goal: "g" }),
+    ...repos.map((repo) => ({
+      type: "worktree.added" as const,
+      thread: "001",
+      payload: { repo, path: `/r/.worktrees/login/${repo}`, branch: "wip/login", source: "main" },
+    })),
+  ).threads.get("001")!;
+const tr = (n: number, tag: string) => ({ commits: Array.from({ length: n }, (_, i) => `${tag}${i} commit ${tag}${i}`), diffStat: "", untracked: 0 });
+
+test("a task thread brief lists its worktrees and a git trail per repo", () => {
+  const md = renderBrief({ thread: taskThread(["api", "web"]), trails: { api: tr(1, "aaa"), web: tr(1, "bbb") }, dir: "/d" });
+  expect(md).toContain("## Worktrees\n\n- api: /r/.worktrees/login/api on wip/login (from main)\n- web: /r/.worktrees/login/web on wip/login (from main)");
+  expect(md).toMatch(/## Git trail\n\n### api\n\n- aaa0 commit aaa0\n\n### web\n\n- bbb0 commit bbb0\n\n## How to continue/);
+});
+
+test("a task thread without worktrees says so", () => {
+  const md = renderBrief({ thread: taskThread([]), dir: "/d" });
+  expect(md).toContain("## Worktrees\n\nNo worktrees yet.");
+  expect(md).toContain("## Git trail\n\nNo worktrees yet.\n\n## How to continue");
+});
+
+test("a legacy thread keeps the single trail and no worktrees section", () => {
+  const md = renderBrief({ thread: full().threads.get("001")!, trail: tr(1, "abc"), dir: "/d" });
+  expect(md).not.toContain("## Worktrees");
+  expect(md).not.toContain("### abc");
+  expect(md).toContain("## Git trail\n\n- abc0 commit abc0");
+});
+
+test("two repos of 20 commits stay inside the budget and keep how-to-continue", () => {
+  const t = taskThread(["api", "web"]);
+  t.handoff = { content: "h".repeat(30000), by: "b", ts: "2026-10-09T10:00:00.000Z", generated: false } as any;
+  t.goal = "g".repeat(30000);
+  const long = (tag: string) => ({ commits: Array.from({ length: 20 }, (_, i) => `${tag}${i} ${"c".repeat(400)}`), diffStat: "d".repeat(500), untracked: 2 });
+  const md = renderBrief({ thread: t, trails: { api: long("a"), web: long("w") }, dir: "/d" });
+  expect(Buffer.byteLength(md)).toBeLessThan(BYTES);
+  for (const h of ["## Worktrees", "### api", "### web", "## How to continue"]) expect(md).toContain(h);
 });

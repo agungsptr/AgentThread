@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
 import { initProject } from "../../src/project/init.ts";
@@ -44,7 +44,12 @@ const dropPane = async (pane: string) => fake.update((s) => ({ agentPanes: (s.ag
 beforeAll(() => {
   root = tempRepo();
   initProject(root, "shop");
-  writeFileSync(join(root, ".agentthread", "config.yaml"), "herdr:\n  poll_interval: 100ms\n");
+  // a repo of the workspace, for the task worktree the coordinator adds below
+  mkdirSync(join(root, "api"));
+  for (const a of [["init", "-q", "-b", "main"], ["-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "init"]]) {
+    Bun.spawnSync(["git", "-C", join(root, "api"), ...a]);
+  }
+  writeFileSync(join(root, ".agentthread", "config.yaml"), "herdr:\n  poll_interval: 100ms\nworkspace:\n  repos:\n    api:\n      path: api\n");
   fake = fakeHerdrState({ tabs: ["w1:t0"], panes: ["w1:p0"] });
   xdg = isolatedConfigHome();
 });
@@ -114,6 +119,21 @@ test("memory survives a lost coordinator; worker flow runs without hooks", async
   expect(existsSync(join(wt, "AGENTS.md"))).toBe(true);
   expect(lstatSync(join(wt, "CLAUDE.md")).isSymbolicLink()).toBe(true);
   expect(existsSync(join(wt, ".git"))).toBe(false);
+
+  // the coordinator adds a task worktree, waits (a worker commits on wip/<task>; the guard refuses the coordinator there) for the ready notice, and commits in it: brief.md shows the commit under that repo
+  agt(["worktree", "add", "001", "api", "--from", "main"], coordEnv);
+  const apiWt = join(wt, "api");
+  await waitFor(() => prompts().some((p) => p.includes(`Worktree for api is ready at ${apiWt}`)), 10_000);
+  writeFileSync(join(apiWt, "retry.ts"), "export const retries = 3;\n");
+  for (const a of [["add", "retry.ts"], ["-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-q", "-m", "add retry"]]) {
+    const g = Bun.spawnSync(["git", "-C", apiWt, ...a], { env: { ...process.env, AGT_ROLE: "worker", AGT_THREAD: "001", AGT_TASK: "login" }, stderr: "pipe" });
+    if (g.exitCode !== 0) throw new Error(`git ${a.join(" ")}: ${g.stderr.toString()}`);
+  }
+  // briefs re-render on events and trails are cached for 3s: the next event after the cache expires shows the commit
+  await Bun.sleep(3200);
+  agt(["note", "001", "committed in api"], coordEnv);
+  await waitFor(() => /## Git trail\n\n### api\n\n- \S+ add retry/.test(readFileSync(join(dir, "brief.md"), "utf8")), 15_000);
+  expect(readFileSync(join(dir, "brief.md"), "utf8")).toContain(`- api: ${apiWt} on wip/login (from main)`);
 
   // worker flow, polled status only
   const w = await waitFor(() => worker(), 10_000);

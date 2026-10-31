@@ -89,3 +89,22 @@ test("gitTrailAsync matches gitTrail", async () => {
   expect(await gitTrailAsync({ root, worktree: wt, branch: "thread/006-a" })).toEqual(gitTrail({ root, worktree: wt, branch: "thread/006-a" }));
   expect(await gitTrailAsync({ root, worktree: "/nonexistent/wt", branch: "b" })).toBeUndefined();
 });
+
+test("gitTrail of a task worktree starts at merge-base with its source; trailCache keys per repo", async () => {
+  const root = tempRepo();
+  const src = Bun.spawnSync(["git", "-C", root, "branch", "--show-current"]).stdout.toString().trim();
+  const wt = join(realpathSync(mkdtempSync(join(tmpdir(), "agt-wt-"))), "wt");
+  git(root, "worktree", "add", "-q", "-b", "wip/x", wt);
+  writeFileSync(join(wt, "a.txt"), "a\n");
+  git(wt, "add", "a.txt");
+  git(wt, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "add a");
+  const trail = gitTrail({ root, worktree: wt, branch: "wip/x", source: src })!;
+  expect(trail.commits).toHaveLength(1);
+  const cache = trailCache(root, 3000);
+  const t = { id: "007", status: "open", worktrees: { api: { path: wt, branch: "wip/x", source: src } } };
+  await cache.refresh([t]);
+  expect(cache.getRepo(t, "api")!.commits).toHaveLength(1);
+  expect(cache.get(t)).toBeUndefined();
+  cache.invalidate("007");
+  expect(cache.getRepo(t, "api")).toBeUndefined();
+});

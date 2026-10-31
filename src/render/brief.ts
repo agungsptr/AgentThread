@@ -47,17 +47,17 @@ export function hardFit(md: string): string {
   return `${head}${sep}${tail}`;
 }
 
-export function renderBrief(o: { thread: Thread; sessions?: Session[]; trail?: GitTrail; dir?: string; config?: Config }): string {
+export function renderBrief(o: { thread: Thread; sessions?: Session[]; trail?: GitTrail; trails?: Record<string, GitTrail | undefined>; dir?: string; config?: Config }): string {
   let md = "";
   const tier = tierLines(o.thread, o.sessions ?? [], o.config ?? DEFAULT_CONFIG);
   for (const lim of LEVELS) {
-    md = build(o.thread, o.trail, lim, tier);
+    md = build(o.thread, o.trail, o.trails ?? {}, lim, tier);
     if (Buffer.byteLength(md) < MAX_BYTES) return md;
   }
   return hardFit(md);
 }
 
-function build(t: Thread, trail: GitTrail | undefined, lim: Limits, tier: string[]): string {
+function build(t: Thread, trail: GitTrail | undefined, trails: Record<string, GitTrail | undefined>, lim: Limits, tier: string[]): string {
   const full = LEVELS[0]!;
   let handoff: string[];
   if (!t.handoff) handoff = ["None yet."];
@@ -94,6 +94,21 @@ function build(t: Thread, trail: GitTrail | undefined, lim: Limits, tier: string
   const goal = clampHeadings(t.goal.trim());
   const criteria = t.criteria.slice(0, lim.criteria).map((c) => capBytes(`- [ ] ${oneLine(c)}`, 300));
   const commits = trail?.commits.slice(0, 20) ?? [];
+  const repos = Object.entries(t.worktrees);
+  const worktrees = repos.map(([r, w]) => capBytes(`- ${oneLine(r)}: ${oneLine(w.path)} on ${oneLine(w.branch)} (from ${oneLine(w.source)})`, 300));
+  // Each repo's trail is capped so many repos stay inside the budget.
+  const perRepo = Math.max(1, Math.min(10, Math.floor(24 / Math.max(1, repos.length))));
+  const repoTrails = repos.flatMap(([r]) => {
+    const tr = trails[r];
+    return [
+      `### ${capBytes(oneLine(r), 100)}`,
+      "",
+      ...(!tr ? ["Git trail unavailable."] : tr.commits.length ? tr.commits.slice(0, perRepo).map((c) => capBytes(`- ${oneLine(c)}`, 200)) : ["No commits yet."]),
+      ...(tr?.diffStat ? ["", capBytes(`Uncommitted: ${oneLine(tr.diffStat)}`, 200)] : []),
+      ...(tr && tr.untracked > 0 ? [...(tr.diffStat ? [] : [""]), `Untracked files: ${tr.untracked}`] : []),
+      "",
+    ];
+  });
   const noTrail = !trail && t.status !== "done";
   return [
     `# Brief — thread ${t.id}: ${capBytes(oneLine(t.title), lim.title)}`,
@@ -137,11 +152,12 @@ function build(t: Thread, trail: GitTrail | undefined, lim: Limits, tier: string
     "",
     ...handoff,
     "",
+    ...(t.legacy ? [] : ["## Worktrees", "", ...orNone(worktrees, "No worktrees yet."), ""]),
     "## Git trail",
     "",
-    ...(noTrail ? ["Git trail unavailable."] : commits.length ? commits.map((c) => capBytes(`- ${oneLine(c)}`, 300)) : ["No commits on this thread yet."]),
-    ...(trail?.diffStat ? ["", capBytes(`Uncommitted: ${oneLine(trail.diffStat)}`, 300)] : []),
-    ...(trail && trail.untracked > 0 ? [...(trail.diffStat ? [] : [""]), `Untracked files: ${trail.untracked}`] : []),
+    ...(!t.legacy ? (repos.length ? repoTrails.slice(0, -1) : ["No worktrees yet."]) : noTrail ? ["Git trail unavailable."] : commits.length ? commits.map((c) => capBytes(`- ${oneLine(c)}`, 300)) : ["No commits on this thread yet."]),
+    ...(t.legacy && trail?.diffStat ? ["", capBytes(`Uncommitted: ${oneLine(trail.diffStat)}`, 300)] : []),
+    ...(t.legacy && trail && trail.untracked > 0 ? [...(trail.diffStat ? [] : [""]), `Untracked files: ${trail.untracked}`] : []),
     "",
     "## How to continue",
     "",
