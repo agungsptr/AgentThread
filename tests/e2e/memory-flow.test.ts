@@ -126,8 +126,11 @@ test("memory survives a lost coordinator; worker flow runs without hooks", async
   const apiWt = join(wt, "api");
   await waitFor(() => prompts().some((p) => p.includes(`Worktree for api is ready at ${apiWt}`)), 10_000);
   writeFileSync(join(apiWt, "retry.ts"), "export const retries = 3;\n");
+  // the pre-commit hook admits a worker only the files of its ticket
+  mkdirSync(join(dir, "tickets"), { recursive: true });
+  writeFileSync(join(dir, "tickets", "T1.files"), "retry.ts\n");
   for (const a of [["add", "retry.ts"], ["-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-q", "-m", "add retry"]]) {
-    const g = Bun.spawnSync(["git", "-C", apiWt, ...a], { env: { ...process.env, AGT_ROLE: "worker", AGT_THREAD: "001", AGT_TASK: "login" }, stderr: "pipe" });
+    const g = Bun.spawnSync(["git", "-C", apiWt, ...a], { env: { ...process.env, AGT_ROOT: root, AGT_ROLE: "worker", AGT_THREAD: "001", AGT_TICKET: "T1", AGT_TASK: "login" }, stderr: "pipe" });
     if (g.exitCode !== 0) throw new Error(`git ${a.join(" ")}: ${g.stderr.toString()}`);
   }
   // briefs re-render on events and trails are cached for 3s: the next event after the cache expires shows the commit

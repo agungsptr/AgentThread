@@ -428,15 +428,89 @@ describe("branch-aware commit guard and no-push hook", () => {
     return { root, wt };
   }
   const err = (r: ReturnType<typeof commit>) => r.stderr.toString();
+  const WENV = (root: string) => ({ AGT_ROOT: root, AGT_ROLE: "worker", AGT_TASK: "t1", AGT_THREAD: "th1", AGT_TICKET: "T1" });
+  function ticketList(root: string, ticket: string, files: string[] | null) {
+    const d = join(root, ".agentthread", "threads", "th1-some-slug", "tickets");
+    mkdirSync(d, { recursive: true });
+    if (files) writeFileSync(join(d, `${ticket}.files`), files.map((f) => `${f}\n`).join(""));
+  }
 
   test("a worker commits on wip/<task> and is refused elsewhere", () => {
-    expect(commit(taskWt("wip/t1").wt, { AGT_ROLE: "worker", AGT_TASK: "t1" }).exitCode).toBe(0);
+    const a = taskWt("wip/t1");
+    ticketList(a.root, "T1", ["f.txt"]);
+    expect(commit(a.wt, { ...WENV(a.root), AGT_TASK: "t1" }).exitCode).toBe(0);
     const r = commit(taskWt("feat/t1").wt, { AGT_ROLE: "worker", AGT_TASK: "t1" });
     expect(r.exitCode).not.toBe(0);
     expect(err(r)).toContain(WIP);
     const other = commit(taskWt("wip/t2").wt, { AGT_ROLE: "worker", AGT_TASK: "t1" });
     expect(other.exitCode).not.toBe(0);
     expect(err(other)).toContain(WIP);
+  });
+
+  describe("ticket file list", () => {
+    function stage(wt: string, files: Record<string, string | null>) {
+      for (const [f, c] of Object.entries(files)) {
+        if (c === null) git(wt, "rm", "-q", "--", f);
+        else { mkdirSync(join(wt, f, ".."), { recursive: true }); writeFileSync(join(wt, f), c); git(wt, "add", "--", f); }
+      }
+    }
+    const run = (wt: string, root: string) => Bun.spawnSync(["git", "-C", wt, "commit", "-q", "-m", "x"], { env: { ...ENV, ...WENV(root) }, stdout: "pipe", stderr: "pipe" });
+    const NOT = (l: string) => `AgentThread: these files are not in ticket T1: ${l}.`;
+    function seeded(listed: string[], tracked: string[] = listed) {
+      const { root, wt } = taskWt("wip/t1");
+      stage(wt, Object.fromEntries(tracked.map((f) => [f, "v1"])));
+      Bun.spawnSync(["git", "-C", wt, "-c", "core.hooksPath=/dev/null", "commit", "-q", "--allow-empty", "-m", "seed"], { env: ENV });
+      ticketList(root, "T1", listed);
+      return { root, wt };
+    }
+
+    test("its own two files pass; a third is refused and named", () => {
+      const { root, wt } = seeded(["a.ts", "b.ts"], []);
+      stage(wt, { "a.ts": "1", "b.ts": "2" });
+      expect(run(wt, root).exitCode).toBe(0);
+      stage(wt, { "a.ts": "3", "c.ts": "4", "d.ts": "5" });
+      const r = run(wt, root);
+      expect(r.exitCode).not.toBe(0);
+      expect(err(r)).toContain(NOT("c.ts d.ts"));
+    });
+
+    test("deleting a listed file passes, an unlisted one is refused", () => {
+      const { root, wt } = seeded(["a.ts"], ["a.ts", "z.ts"]);
+      stage(wt, { "a.ts": null });
+      expect(run(wt, root).exitCode).toBe(0);
+      const { root: root2, wt: wt2 } = seeded(["a.ts"], ["a.ts", "z.ts"]);
+      stage(wt2, { "z.ts": null });
+      const r = run(wt2, root2);
+      expect(r.exitCode).not.toBe(0);
+      expect(err(r)).toContain(NOT("z.ts"));
+    });
+
+    test("a rename from a listed path to an unlisted path is refused", () => {
+      const { root, wt } = seeded(["a.ts"]);
+      git(wt, "mv", "a.ts", "n.ts");
+      const r = run(wt, root);
+      expect(r.exitCode).not.toBe(0);
+      expect(err(r)).toContain(NOT("n.ts"));
+    });
+
+    test("a missing list is refused", () => {
+      const { root, wt } = taskWt("wip/t1");
+      ticketList(root, "OTHER", ["f.txt"]);
+      stage(wt, { "f.txt": "x" });
+      const r = run(wt, root);
+      expect(r.exitCode).not.toBe(0);
+      expect(err(r)).toContain("AgentThread: no file list for ticket T1; ask the coordinator.");
+    });
+
+    test("paths with spaces", () => {
+      const { root, wt } = seeded(["my dir/a b.ts"], []);
+      stage(wt, { "my dir/a b.ts": "1" });
+      expect(run(wt, root).exitCode).toBe(0);
+      stage(wt, { "my dir/other file.ts": "1" });
+      const r = run(wt, root);
+      expect(r.exitCode).not.toBe(0);
+      expect(err(r)).toContain(NOT("my dir/other file.ts"));
+    });
   });
 
   test("the coordinator commits on feat/<task> and is refused on wip/<task>", () => {
@@ -474,7 +548,8 @@ describe("branch-aware commit guard and no-push hook", () => {
     }
     expect(push({}).exitCode).toBe(0);
     writeFileSync(join(root, ".git", "hooks", "pre-commit"), "#!/bin/sh\necho project-hook-ran >&2\nexit 1\n", { mode: 0o755 });
-    const c = commit(wt, { AGT_ROLE: "worker", AGT_TASK: "t1" });
+    ticketList(root, "T1", ["f.txt"]);
+    const c = commit(wt, WENV(root));
     expect(c.exitCode).not.toBe(0);
     expect(err(c)).toContain("project-hook-ran");
     rmSync(bare, { recursive: true, force: true });

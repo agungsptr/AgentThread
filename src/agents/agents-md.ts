@@ -255,6 +255,7 @@ function* excludeInWorktree(c: Ctx, root: string, repo: string, repoName: string
 const GUARD_MESSAGE = "AgentThread: workers do not commit; the coordinator commits.";
 const WORKER_BRANCH_MESSAGE = "AgentThread: workers commit only on wip/<task>.";
 const COORDINATOR_BRANCH_MESSAGE = "AgentThread: the coordinator commits only the squash on feat/<task>.";
+const NO_LIST_PREFIX = "AgentThread: no file list for ticket ";
 const PUSH_MESSAGE = "AgentThread: agents never push; the user pushes.";
 const shq = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
 
@@ -274,6 +275,13 @@ function hookStub(guardDir: string): string {
   return [
     "#!/bin/sh",
     'N=${0##*/}',
+    "# Prints $AGT_ROOT/.agentthread/threads/<$AGT_THREAD-slug>/$1 when that file exists, else nothing.",
+    "agt_thread_file() {",
+    '  for T in "${AGT_ROOT:-/nonexistent}"/.agentthread/threads/"${AGT_THREAD:-}"-*/; do',
+    '    [ -f "${T}$1" ] && { printf "%s" "${T}$1"; return 0; }',
+    "  done",
+    "  return 0",
+    "}",
     `if [ "$N" = "pre-push" ] && [ -n "\${AGT_ROLE:-}" ]; then`, `  echo ${shq(PUSH_MESSAGE)} >&2`, "  exit 1", "fi",
     'if [ "$N" = "pre-commit" ]; then',
     "  B=$(git symbolic-ref -q --short HEAD 2>/dev/null)",
@@ -281,7 +289,17 @@ function hookStub(guardDir: string): string {
     "    worker)",
     '      case "$B" in',
     `        thread/*) echo ${shq(GUARD_MESSAGE)} >&2; exit 1 ;;`,
-    `        wip/*) [ -n "\${AGT_TASK:-}" ] && [ "$B" = "wip/$AGT_TASK" ] || { echo ${shq(WORKER_BRANCH_MESSAGE)} >&2; exit 1; } ;;`,
+    `        wip/*) [ -n "\${AGT_TASK:-}" ] && [ "$B" = "wip/$AGT_TASK" ] || { echo ${shq(WORKER_BRANCH_MESSAGE)} >&2; exit 1; }`,
+    '          L=$(agt_thread_file "tickets/${AGT_TICKET:-}.files")',
+    `          [ -n "\${AGT_TICKET:-}" ] && [ -n "$L" ] || { echo "${NO_LIST_PREFIX}\${AGT_TICKET:-}; ask the coordinator." >&2; exit 1; }`,
+    "          BAD=",
+    '          NL=$(printf "\\nx"); NL=${NL%x}',
+    "          OLDIFS=$IFS; IFS=$NL",
+    "          for P in $(git -c core.quotePath=false diff --cached --name-only --no-renames --diff-filter=ACDMRT); do",
+    '            grep -Fxq -- "$P" "$L" || BAD="${BAD:+$BAD }$P"',
+    "          done",
+    "          IFS=$OLDIFS",
+    `          [ -z "$BAD" ] || { echo "AgentThread: these files are not in ticket $AGT_TICKET: $BAD." >&2; exit 1; } ;;`,
     `        *) echo ${shq(WORKER_BRANCH_MESSAGE)} >&2; exit 1 ;;`,
     "      esac ;;",
     "    coordinator)",
