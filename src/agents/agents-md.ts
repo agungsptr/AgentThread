@@ -328,7 +328,7 @@ function* writeSteps(o: WriteOptions): Steps<void> {
   const c: Ctx = { env: o.env ?? (process.env as Env) };
   const log = o.log ?? ((m) => console.error(m));
   const skill = o.config.agents.skill !== false;
-  const perWorktree = yield* excludeInWorktree(c, o.root, wt, skill && !handWrittenSkill(wt), log);
+  const perWorktree = yield* excludeInWorktree(c, o.root, wt, skill, log);
   if (perWorktree) yield* guardInWorktree(c, o.root, wt, log);
   else log("worker commit guard unavailable: git without worktree config");
   const project = yield* projectInstructions(c, wt);
