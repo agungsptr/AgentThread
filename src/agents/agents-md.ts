@@ -6,7 +6,7 @@ import { paths } from "../project/paths.ts";
 import { AGENT_KINDS } from "../domain/types.ts";
 import { adapterFor } from "./adapters.ts";
 import { systemPrompt, type PromptThread } from "./prompts.ts";
-import { handWrittenSkill, SKILL_EXCLUDE, SKILL_REL, writeSkill } from "./skill.ts";
+import { generatedExcludes, SKILL_EXCLUDES, SKILL_ROOTS, skillExclude, writeSkills } from "./skill.ts";
 
 type ThreadRef = PromptThread;
 
@@ -97,8 +97,8 @@ async function driveAsync<T>(steps: Steps<T>, runner: AsyncRunner, env: Env): Pr
 const LINKS = [...new Set(["CLAUDE.md", ...AGENT_KINDS.flatMap((k) => adapterFor(k).instructionFiles)])];
 const FILES = ["AGENTS.md", ...LINKS];
 const EXCLUDE_LINES = FILES.map((f) => `/${f}`);
-/** The lines the worktree excludes carry: the instruction files, and the generated skill when it is on. */
-const excludeLines = (skill: boolean) => (skill ? [...EXCLUDE_LINES, SKILL_EXCLUDE] : EXCLUDE_LINES);
+/** The lines the worktree excludes carry: the instruction files, and the generated skills when they are on. */
+const excludeLines = (skill: boolean) => (skill ? [...EXCLUDE_LINES, ...SKILL_EXCLUDES] : EXCLUDE_LINES);
 const lines = (text: string) => text.split("\n").map((l) => l.replace(/\r$/, ""));
 
 const isInside = (wt: string, p: string) => {
@@ -183,8 +183,8 @@ function* excludeInCommon(c: Ctx, wt: string, skill: boolean, root: string): Ste
   const info = (yield* commonInfoExclude(c, wt));
   let current = existsSync(info) ? readFileSync(info, "utf8") : "";
   const have = lines(current);
-  // the shared file covers the root too: no skill line while the root has a skill file of its own
-  for (const line of excludeLines(skill && !handWrittenSkill(root))) {
+  // the shared file covers the root too: no line for a skill the root has its own copy of
+  for (const line of [...EXCLUDE_LINES, ...(skill ? generatedExcludes(root).map((rel) => skillExclude("", rel)) : [])]) {
     if (have.includes(line)) continue;
     current = `${current}${current && !current.endsWith("\n") ? "\n" : ""}${line}\n`;
   }
@@ -225,7 +225,7 @@ function* excludeInWorktree(c: Ctx, root: string, repo: string, repoName: string
   const shared = join(root, ".agentthread", "worktree-excludes");
   const file = join(shared, repoName);
   yield* migrateSharedExcludes(c, repo, shared, file);
-  const kept = lines((yield* effectiveExcludes(c, repo, [file, shared]))).filter((l) => !EXCLUDE_LINES.includes(l) && l !== SKILL_EXCLUDE);
+  const kept = lines((yield* effectiveExcludes(c, repo, [file, shared]))).filter((l) => !EXCLUDE_LINES.includes(l) && !SKILL_EXCLUDES.includes(l));
   while (kept.length && kept[kept.length - 1] === "") kept.pop();
   const text = [...kept, ...excludeLines(skill)].join("\n") + "\n";
   mkdirSync(dirname(file), { recursive: true });
@@ -386,7 +386,7 @@ type WriteOptions = {
   repoName?: string;
   worktree: string;
   content: string;
-  /** With agents.skill not false, the generated agt skill is written too. */
+  /** With agents.skill not false, the generated skills are written too. */
   config: Config;
   env?: Env;
   log?: (message: string) => void;
@@ -426,8 +426,9 @@ function* writeSteps(o: WriteOptions): Steps<void> {
     if ((yield* git(c, wt, ["ls-files", "--error-unmatch", "--", file])).ok) yield* mustGit(c, wt, ["update-index", "--skip-worktree", "--", file]);
   }
   if (skill) {
-    const tracked = (yield* git(c, wt, ["ls-files", "--error-unmatch", "--", SKILL_REL])).ok;
-    writeSkill(wt, { root: o.root, config: o.config, tracked, log });
+    const listed = yield* git(c, wt, ["ls-files", "--", ...SKILL_ROOTS]);
+    const tracked = new Set(listed.ok ? lines(listed.stdout).filter(Boolean) : []);
+    writeSkills(wt, { root: o.root, config: o.config, tracked, log });
   }
 }
 
@@ -449,5 +450,5 @@ export function writeThreadDirFiles(o: { root: string; dir: string; content: str
     removeIfPresent(join(o.dir, link));
     symlinkSync("AGENTS.md", join(o.dir, link));
   }
-  if (o.config.agents.skill !== false) writeSkill(o.dir, { root: o.root, config: o.config, tracked: false, log });
+  writeSkills(o.dir, { root: o.root, config: o.config, tracked: new Set(), log });
 }
