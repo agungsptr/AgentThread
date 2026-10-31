@@ -304,6 +304,51 @@ describe("ticket return", () => {
     expect(ticketOf(s, "T1").assignee).toBe(fresh.id);
   });
 
+  for (const how of ["lost", "ended"] as const) {
+    test(`fresh workers that keep exiting (${how}): two respawns, then the ticket is released to the coordinator`, () => {
+      const s = world();
+      const w = toReview(s);
+      signal(s, w.id, "agent.idle");
+      exec(s, { cmd: "ticket.return", thread: "001", ticket: "T1", note: "add the missing test." });
+      const exit = (id: string) =>
+        settle(s, apply(s, [how === "lost" ? { type: "session.lost", thread: "001", payload: { session: id, reason: "gone" } } : { type: "session.ended", thread: "001", payload: { session: id } }]));
+      const spawns = () => effects.filter((e) => e.kind === "agent.spawn").length;
+      effects = [];
+      exit(w.id);
+      const fresh1 = workerOf(s, "T1");
+      expect(fresh1.id).not.toBe(w.id);
+      exit(fresh1.id);
+      const fresh2 = workerOf(s, "T1");
+      expect(fresh2.id).not.toBe(fresh1.id);
+      expect(spawns()).toBe(2);
+      const before = coordNotices(s).length;
+      exit(fresh2.id);
+      expect(spawns()).toBe(2);
+      expect(ticketOf(s, "T1").status).toBe("open");
+      expect(ticketOf(s, "T1").assignee).toBeUndefined();
+      const lead = how === "lost" ? "Worker for T1 was lost" : "Worker for T1 ended";
+      expect(coordNotices(s).slice(before)).toEqual([`${lead}; the returned ticket's workers keep exiting, so the ticket is open again.`]);
+    });
+  }
+
+  test("the fresh-worker count starts over at the next return", () => {
+    const s = world();
+    const w = toReview(s);
+    signal(s, w.id, "agent.idle");
+    exec(s, { cmd: "ticket.return", thread: "001", ticket: "T1", note: "add the missing test." });
+    signal(s, w.id, "session.ended");
+    const fresh1 = workerOf(s, "T1");
+    signal(s, fresh1.id, "session.ended");
+    const fresh2 = workerOf(s, "T1");
+    // fresh2 finishes; the ticket goes back to review and is returned again: the count starts over
+    apply(s, [{ type: "session.attached", thread: "001", payload: { session: fresh2.id, pane: "w1:p9" } }]);
+    expect(exec(s, { cmd: "ticket.done", thread: "001", ticket: "T1", summary: "added a" }, asWorker(fresh2)).ok).toBe(true);
+    exec(s, { cmd: "ticket.return", thread: "001", ticket: "T1", note: "add the missing test." });
+    signal(s, fresh2.id, "session.ended");
+    expect(ticketOf(s, "T1").status).toBe("in_progress");
+    expect(workerOf(s, "T1").id).not.toBe(fresh2.id);
+  });
+
   test("a fresh worker whose spawn fails leaves the ticket open, not stranded in in_progress", () => {
     const s = world();
     const w = toReview(s);

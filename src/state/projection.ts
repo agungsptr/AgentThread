@@ -81,6 +81,8 @@ export interface Ticket {
   returnNote?: string;
   /** Task threads: the coordinator accepted it (its done notice was the review notice). */
   accepted?: boolean;
+  /** Task threads: fresh workers created for the ticket since its latest return (see session.created); bounds respawns. */
+  freshWorkers?: number;
 }
 
 export interface Entry {
@@ -245,9 +247,17 @@ export function applyEvent(state: State, ev: StoredEvent): void {
     const { thread } = ev.payload;
     const purpose = "purpose" in ev.payload ? ev.payload.purpose : undefined;
     const { stack } = state;
+    const entry = { thread, ...(purpose ? { purpose } : {}) };
+    const at = stack.queue.findIndex((q) => q.thread === thread);
+    // A queued thread queued again (a new purpose) keeps its place.
+    if (ev.type === "stack.queued" && at >= 0) {
+      stack.queue[at] = entry;
+      return;
+    }
     stack.queue = stack.queue.filter((q) => q.thread !== thread);
-    if (ev.type === "stack.acquired") stack.holder = { thread, ...(purpose ? { purpose } : {}), since: ev.ts };
-    else if (ev.type === "stack.queued") stack.queue.push({ thread, ...(purpose ? { purpose } : {}) });
+    // The holder acquiring again (a new purpose) has held the lock since it first got it.
+    if (ev.type === "stack.acquired") stack.holder = { ...entry, since: stack.holder?.thread === thread ? stack.holder.since : ev.ts };
+    else if (ev.type === "stack.queued") stack.queue.push(entry);
     else if (stack.holder?.thread === thread) delete stack.holder;
     return;
   }
@@ -377,6 +387,7 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       k.status = "review";
       k.summary = ev.payload.summary;
       delete k.returnNote;
+      delete k.freshWorkers;
       // The coordinator hears it when the worker's turn ends (see reviewNoticeAt); at once when the worker is gone or
       // already recorded idle (a polled worker whose idle came first: no further idle may come).
       const w = k.assignee ? state.sessions.get(k.assignee) : undefined;
@@ -397,6 +408,7 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       const k = ticket(ev.payload.ticket);
       k.status = "in_progress";
       k.returnNote = ev.payload.note;
+      delete k.freshWorkers;
       delete k.summary;
       delete k.reviewNoticeSeq;
       note(t, ev, `${k.id} returned: ${ev.payload.note}`);
@@ -415,6 +427,7 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       delete k.summary;
       delete k.completedAt;
       delete k.returnNote;
+      delete k.freshWorkers;
       delete k.accepted;
       note(t, ev, `${k.id} reopened`);
       break;
@@ -423,6 +436,7 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       const k = ticket(ev.payload.ticket);
       k.status = "open";
       delete k.assignee;
+      delete k.freshWorkers;
       note(t, ev, `${k.id} released: ${ev.payload.reason}`);
       break;
     }
@@ -574,7 +588,10 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
         // A fresh worker for a returned ticket whose worker is gone takes the ticket over: it is in_progress already.
         const k = t.tickets.find((x) => x.id === p.ticket);
         const prev = k?.assignee ? state.sessions.get(k.assignee) : undefined;
-        if (p.role === "worker" && k?.status === "in_progress" && k.returnNote !== undefined && (!prev || !isLive(prev))) k.assignee = p.session;
+        if (p.role === "worker" && k?.status === "in_progress" && k.returnNote !== undefined && (!prev || !isLive(prev))) {
+          k.assignee = p.session;
+          k.freshWorkers = (k.freshWorkers ?? 0) + 1;
+        }
       }
       threadNote(state, ev, `${p.role} session ${short(p.session)} created${p.ticket ? ` for ${p.ticket}` : ""}`);
       return true;

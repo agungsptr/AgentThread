@@ -4,7 +4,7 @@ import { handle, type HandleResult } from "../../src/commands/handler.ts";
 import { CommandSchema } from "../../src/commands/schema.ts";
 import type { Actor, EventBody, StoredEvent } from "../../src/domain/types.ts";
 import { react } from "../../src/orchestration/reactor.ts";
-import { applyEvent, type State } from "../../src/state/projection.ts";
+import { applyEvent, isLive, type State } from "../../src/state/projection.ts";
 import { INIT, USER, stateOf, taskThreadCreated } from "../helpers.ts";
 
 const COORD: Actor = { role: "coordinator", thread: "001", session: "c" };
@@ -33,7 +33,7 @@ function settle(state: State, evs: StoredEvent[], config = DEFAULT_CONFIG) {
   }
 }
 const spawnedFor = (r: HandleResult) => (r.ok ? r.effects.filter((e) => e.kind === "agent.spawn").length : -1);
-const liveTickets = (s: State) => [...s.sessions.values()].filter((x) => x.role === "worker" && x.status !== "ended").map((x) => x.ticket).sort();
+const liveTickets = (s: State) => [...s.sessions.values()].filter((x) => x.role === "worker" && isLive(x)).map((x) => x.ticket).sort();
 
 function world(maxWorkers = 5): State {
   ids = 0;
@@ -124,5 +124,48 @@ describe("tickets sharing files in one repo", () => {
     const w1 = [...s.sessions.values()].find((x) => x.ticket === "T1")!;
     settle(s, apply(s, [{ type: "session.ended", thread: "001", payload: { session: w1.id } }]));
     expect(liveTickets(s)).toEqual(["T2"]);
+  });
+  test("a queued ticket starts once the ticket it waits for is released (its worker lost)", () => {
+    const s = world();
+    ticket(s, "T1", "api", ["src/a.ts"]);
+    ticket(s, "T2", "api", ["src/a.ts"]);
+    spawn(s, "T1");
+    const w1 = [...s.sessions.values()].find((x) => x.ticket === "T1")!;
+    const claim = handle(s, CommandSchema.parse({ cmd: "ticket.claim", thread: "001", ticket: "T1" }), { role: "worker", thread: "001", session: w1.id, ticket: "T1" } as Actor, { root: "/repo", config: DEFAULT_CONFIG, newId });
+    apply(s, claim.ok ? claim.events : []);
+    expect(spawn(s, "T2").ok).toBe(true);
+    expect(s.threads.get("001")!.workerQueue).toEqual(["T2"]);
+    settle(s, apply(s, [{ type: "session.lost", thread: "001", payload: { session: w1.id, reason: "gone" } }]));
+    expect(s.threads.get("001")!.tickets.find((k) => k.id === "T1")!.status).toBe("open");
+    expect(liveTickets(s)).toEqual(["T2"]);
+    expect(s.threads.get("001")!.workerQueue).toEqual([]);
+  });
+
+  test("with free slots, queued tickets that clash with each other start one at a time in one pass", () => {
+    const s = world(3);
+    ticket(s, "T1", "api", ["src/a.ts"]);
+    ticket(s, "T2", "api", ["src/a.ts", "src/b.ts"]);
+    ticket(s, "T3", "api", ["src/b.ts"]);
+    ticket(s, "T4", "api", ["src/c.ts"]);
+    spawn(s, "T1");
+    spawn(s, "T2"); // waits for T1
+    spawn(s, "T4");
+    // T3 shares nothing with a running ticket: it would start, so queue it by hand behind T2
+    apply(s, [{ type: "worker.queued", thread: "001", payload: { ticket: "T3" } }]);
+    expect(s.threads.get("001")!.workerQueue).toEqual(["T2", "T3"]);
+    const w1 = [...s.sessions.values()].find((x) => x.ticket === "T1")!;
+    // T1's worker ends before claiming: its slot frees, T2 starts, and T3 (which clashes with T2) keeps waiting
+    settle(s, apply(s, [{ type: "session.ended", thread: "001", payload: { session: w1.id } }]));
+    expect(liveTickets(s)).toEqual(["T2", "T4"]);
+    expect(s.threads.get("001")!.workerQueue).toEqual(["T3"]);
+  });
+
+  test("a ticket whose repo has no worktree is rejected at once, even when it would queue", () => {
+    const s = world(1);
+    ticket(s, "T1", "api", ["src/a.ts"]);
+    ticket(s, "T3", "web", ["src/x.ts"]);
+    spawn(s, "T1");
+    // T3: max_workers would queue it; it is told about the missing worktree instead
+    expect(spawn(s, "T3")).toMatchObject({ ok: false, error: "ticket T3 needs a worktree for web; create it with agt worktree add 001 web" });
   });
 });

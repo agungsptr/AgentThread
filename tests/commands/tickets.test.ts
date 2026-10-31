@@ -38,6 +38,15 @@ describe("ticket.add on a task thread", () => {
     expect(errorOf(run(taskBase(), add({ files: ["src/ok.ts", p] })))).toBe(`file paths are relative to the repo: ${p}`);
   });
 
+  test.each(["src/", "src/lib/", "src/lib//"])("rejects the directory %p", (p) => {
+    expect(errorOf(run(taskBase(), add({ files: ["src/ok.ts", p] })))).toBe(`--file takes a file, not a directory: ${p}`);
+  });
+
+  // git quotes such paths in its output, so the commit hook could never match them
+  test.each(['src/a"b.ts', "src\\a.ts", "src/a\tb.ts", "src/a\nb.ts"])("rejects the path %p with a character git quotes", (p) => {
+    expect(errorOf(run(taskBase(), add({ files: ["src/ok.ts", p] })))).toBe(`file paths may not contain a quote, backslash, tab or newline: ${p}`);
+  });
+
   test("normalises ./a//b.ts and accepts a repo with no worktree yet", () => {
     const s = taskBase();
     expect(errorOf(exec(s, add({ files: ["./src//a.ts"] })))).toBe("accepted");
@@ -62,6 +71,34 @@ describe("ticket.claim on a task thread", () => {
     expect(errorOf(exec(s, { cmd: "ticket.claim", thread: "001", ticket: "T1" }, w("T1")))).toBe("accepted");
     expect(errorOf(exec(s, { cmd: "ticket.claim", thread: "001", ticket: "T2" }, w("T2")))).toBe("accepted");
     expect(errorOf(run(s, { cmd: "ticket.claim", thread: "001", ticket: "T3" }, w("T3")))).toBe("scope of T3 overlaps in-progress ticket T1");
+  });
+});
+
+describe("ticket.claim from a status other than open", () => {
+  const w = (t: string): Actor => ({ role: "worker", thread: "001", session: `w${t}`, ticket: t });
+  test("a worker cannot pull its ticket back out of review", () => {
+    const s = taskBase();
+    exec(s, add({ files: ["src/a.ts"] }));
+    exec(s, { cmd: "ticket.claim", thread: "001", ticket: "T1" }, w("T1"));
+    expect(errorOf(exec(s, { cmd: "ticket.done", thread: "001", ticket: "T1", summary: "ok" }, w("T1")))).toBe("accepted");
+    expect(errorOf(run(s, { cmd: "ticket.claim", thread: "001", ticket: "T1" }, w("T1")))).toBe("ticket T1 cannot go review → in_progress");
+    expect(s.threads.get("001")!.tickets[0]!.status).toBe("review");
+  });
+
+  test("the assignee's claim of its in_progress ticket is still a no-op", () => {
+    const s = taskBase();
+    exec(s, add({ files: ["src/a.ts"] }));
+    exec(s, { cmd: "ticket.claim", thread: "001", ticket: "T1" }, w("T1"));
+    expect(run(s, { cmd: "ticket.claim", thread: "001", ticket: "T1" }, w("T1"))).toMatchObject({ ok: true, events: [] });
+  });
+
+  test("a ticket in review still holds its files against a claim", () => {
+    const s = taskBase();
+    exec(s, add({ title: "A", files: ["src/a.ts"] }));
+    exec(s, add({ title: "B", files: ["src/a.ts"] }));
+    exec(s, { cmd: "ticket.claim", thread: "001", ticket: "T1" }, w("T1"));
+    exec(s, { cmd: "ticket.done", thread: "001", ticket: "T1", summary: "ok" }, w("T1"));
+    expect(errorOf(run(s, { cmd: "ticket.claim", thread: "001", ticket: "T2" }, w("T2")))).toBe("scope of T2 overlaps ticket T1 in review");
   });
 });
 

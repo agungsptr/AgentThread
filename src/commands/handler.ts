@@ -5,7 +5,7 @@ import { DEFAULT_CONFIG, type Config } from "../config/config.ts";
 import { canTransitionThread, canTransitionTicket, scopesOverlap, slugify, validateHandoff } from "../domain/rules.ts";
 import { ROLES, type Actor, type EventBody, type Role, type ThreadStatus, type TicketStatus } from "../domain/types.ts";
 import { roleAgent, type RoleAgent } from "../agents/roles.ts";
-import { agentName, awaitsWorker, conflictingTicket, liveSessions, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure as tabEnsureFor, workerLimit } from "../orchestration/sessions.ts";
+import { agentName, awaitsWorker, conflictingTicket, FILE_HOLDING, liveSessions, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure as tabEnsureFor, workerLimit } from "../orchestration/sessions.ts";
 import { workspaceReposNoSpawn } from "../project/workspace.ts";
 import { actorSession, isLive, type State, type Thread, type Ticket } from "../state/projection.ts";
 import type { Command, CommandName } from "./schema.ts";
@@ -109,12 +109,18 @@ function reject(message: string): never {
 
 const noWorktree = (t: Thread, k: Ticket) => `ticket ${k.id} needs a worktree for ${k.repo}; create it with agt worktree add ${t.id} ${k.repo}`;
 
-/** A ticket file path as the repo-relative, normalised form: no leading /, no .. segment, no empty or . segment. */
+/**
+ * A ticket file path as the repo-relative, normalised form: no leading /, no .. segment, no empty or . segment. A file,
+ * not a directory (no trailing /), and none of the characters git quotes in its output (the commit hook could never
+ * match such a path).
+ */
 function repoRelative(p: string): string {
   const parts = p.split("/");
-  if (!p.trim() || p.startsWith("/") || p.includes("\\") || p.includes("\0") || parts.includes("..")) reject(`file paths are relative to the repo: ${p}`);
+  if (!p.trim() || p.startsWith("/") || p.includes("\0") || parts.includes("..")) reject(`file paths are relative to the repo: ${p}`);
+  if (/["\\\t\n]/.test(p)) reject(`file paths may not contain a quote, backslash, tab or newline: ${p}`);
   const norm = parts.filter((s) => s !== "" && s !== ".").join("/");
   if (!norm) reject(`file paths are relative to the repo: ${p}`);
+  if (p.endsWith("/")) reject(`--file takes a file, not a directory: ${p}`);
   return norm;
 }
 
@@ -286,13 +292,15 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
     }
     case "stack.acquire": {
       const { holder, queue } = state.stack;
-      if (holder?.thread === t.id) return { events: [], result: { acquired: true } };
-      // The queue keeps a waiting thread's place.
-      const waiting = queue.findIndex((q) => q.thread === t.id);
-      if (waiting >= 0) return { events: [], result: { acquired: false, position: waiting + 1 } };
-      // Task threads only: stages do not exist on a legacy thread, which cannot be approved.
+      // Task threads only: stages do not exist on a legacy thread, which cannot be approved. Checked first, so neither
+      // the holder nor a queued thread gets the e2e4 purpose without the approval.
       if (cmd.for === "e2e4" && !t.legacy && !t.stage7Approved) reject(`stage 4 e2e needs the user's approval: agt stage ${t.id} 7 approve --by user`);
       const payload = { thread: t.id, ...(cmd.for ? { purpose: cmd.for } : {}) };
+      // The holder keeps the lock; a new purpose is recorded (status and main.thread.md show it).
+      if (holder?.thread === t.id) return { events: holder.purpose === cmd.for ? [] : [{ type: "stack.acquired", thread: t.id, payload }], result: { acquired: true } };
+      // The queue keeps a waiting thread's place; a new purpose is recorded in that place.
+      const waiting = queue.findIndex((q) => q.thread === t.id);
+      if (waiting >= 0) return { events: queue[waiting]!.purpose === cmd.for ? [] : [{ type: "stack.queued", thread: t.id, payload }], result: { acquired: false, position: waiting + 1 } };
       if (!holder) return { events: [{ type: "stack.acquired", thread: t.id, payload }], result: { acquired: true } };
       return { events: [{ type: "stack.queued", thread: t.id, payload }], result: { acquired: false, position: queue.length + 1 } };
     }
@@ -307,10 +315,12 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
       const session = workerSession(actor);
       // A fresh worker for a returned ticket already holds it (see session.created): its claim changes nothing.
       if (k.status === "in_progress" && k.assignee === session) return { events: [] };
-      transitionTicket(k, "in_progress");
-      // On a task thread, file lists are repo-relative: only tickets of the same repo can clash.
-      const clash = t.tickets.find((o) => o.id !== k.id && o.status === "in_progress" && o.repo === k.repo && scopesOverlap(o.scope, k.scope));
-      if (clash) reject(`scope of ${k.id} overlaps in-progress ticket ${clash.id}`);
+      // Only an open ticket is claimed: a worker must not pull its ticket back out of review.
+      if (k.status !== "open") reject(`ticket ${k.id} cannot go ${k.status} → in_progress`);
+      // On a task thread, file lists are repo-relative: only tickets of the same repo can clash. A ticket in review
+      // still holds its files, as in scheduling.
+      const clash = t.tickets.find((o) => o.id !== k.id && FILE_HOLDING.includes(o.status) && o.repo === k.repo && scopesOverlap(o.scope, k.scope));
+      if (clash) reject(clash.status === "review" ? `scope of ${k.id} overlaps ticket ${clash.id} in review` : `scope of ${k.id} overlaps in-progress ticket ${clash.id}`);
       return { events: [{ type: "ticket.claimed", thread: t.id, payload: { ticket: k.id, assignee: session } }] };
     }
     case "ticket.done": {
@@ -348,6 +358,8 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
       if (k.status !== "open" && !awaitsWorker(state, t, k.id)) reject(`ticket ${k.id} is ${k.status}`);
       const workers = liveSessions(state, t.id, "worker");
       if (t.workerQueue.includes(k.id) || workers.some((s) => s.ticket === k.id)) reject(`ticket ${k.id} already has a worker`);
+      // A missing worktree is told at once, never left to wait in the queue.
+      if (k.repo !== undefined && !t.worktrees[k.repo]) reject(noWorktree(t, k));
       // Tickets that share a file in one repo run one after the other: fillWorkers starts this one once the other is done, blocked or open again.
       const waitingFor = conflictingTicket(state, t, k.id);
       if (waitingFor) {
@@ -356,7 +368,6 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
       if (workers.length >= workerLimit(t, ctx.config ?? DEFAULT_CONFIG)) {
         return { events: [{ type: "worker.queued", thread: t.id, payload: { ticket: k.id, ...(cmd.agent ? { agent: cmd.agent } : {}) } }], result: { queued: true } };
       }
-      if (k.repo !== undefined && !t.worktrees[k.repo]) reject(noWorktree(t, k));
       const spawned = spawnWorker(state, t, k.id, spawnContext(ctx), cmd.agent);
       const session = (spawned.events[0] as Extract<EventBody, { type: "session.created" }>).payload.session;
       return { ...spawned, result: { session, queued: false } };

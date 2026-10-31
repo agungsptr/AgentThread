@@ -35,6 +35,11 @@ function workerRef(ticket: string | undefined, lead: string, noun = ""): string 
 
 /** The coordinator's notice when a returned ticket's worker is gone while fixing it. */
 const FRESH = "a fresh worker takes over the returned ticket.";
+/** Fresh workers a returned ticket gets (since its latest return) before one more exit releases it to the coordinator. */
+const MAX_FRESH_WORKERS = 2;
+const KEEPS_EXITING = "returned ticket's workers keep exiting";
+/** The coordinator's notice when a returned ticket is released because its fresh workers keep exiting. */
+const EXITING = "the returned ticket's workers keep exiting, so the ticket is open again.";
 const doneNotice = (ticket: string, summary: string | undefined) => `Ticket ${ticket} is done${summary ? `: ${summary}` : ""}.`;
 const reviewNotice = (thread: string, ticket: string, summary: string | undefined) =>
   `Ticket ${ticket} is ready for review: ${summary ?? ""}. Review its commits, then agt ticket accept ${thread}/${ticket} or agt ticket return ${thread}/${ticket} "<what to fix>".`;
@@ -277,11 +282,13 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
           doneWorkerEnded(s, t);
           const k = t.tickets.find((x) => x.id === s.ticket);
           const held = k?.status === "in_progress" && k.assignee === s.id;
-          // A returned ticket always reaches a worker: fillWorkers gives it a fresh one (with the note), not the coordinator.
+          // A returned ticket reaches a worker: fillWorkers gives it a fresh one (with the note), not the coordinator,
+          // unless its fresh workers keep exiting.
           const returned = held && k.returnNote !== undefined;
-          if (held && !returned) releaseTicket(t.id, k.id, "worker session lost");
+          const exiting = returned && (k.freshWorkers ?? 0) >= MAX_FRESH_WORKERS;
+          if (held && (!returned || exiting)) releaseTicket(t.id, k.id, exiting ? KEEPS_EXITING : "worker session lost");
           const w = cap(workerRef(s.ticket, "worker"));
-          notify(coordinatorToNotify(t.id), returned ? `${w} was lost; ${FRESH}` : held ? `${w} was lost; the ticket is open again.` : `${w} was lost.`);
+          notify(coordinatorToNotify(t.id), exiting ? `${w} was lost; ${EXITING}` : returned ? `${w} was lost; ${FRESH}` : held ? `${w} was lost; the ticket is open again.` : `${w} was lost.`);
           // A released ticket is not open in `state` yet, so this only spawns other queued tickets (and returned ones); the coordinator decides on the released one.
           fillWorkers(t.id);
         }
@@ -314,6 +321,9 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         break;
       }
       case "ticket.reopened":
+      case "ticket.released":
+        // A released ticket no longer holds its files: a queued ticket that shared them can start. The released ticket
+        // itself is not queued, so it waits for the coordinator.
         fillWorkers(ev.thread);
         break;
       case "ticket.accepted": {
@@ -436,8 +446,12 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
           if (s.status === "ended") doneWorkerEnded(s, t);
           // A worker that exits on its own must not leave its ticket stuck; one ended by teardown has a done or blocked ticket.
           const k = t.tickets.find((x) => x.id === s.ticket);
-          if (k?.status === "in_progress" && k.assignee === s.id && k.returnNote !== undefined) {
-            // A returned ticket always reaches a worker: the fillWorkers below gives it a fresh one, with the note.
+          if (k?.status === "in_progress" && k.assignee === s.id && k.returnNote !== undefined && (k.freshWorkers ?? 0) >= MAX_FRESH_WORKERS) {
+            // Its fresh workers keep exiting (bad auth, a crash): respawning would loop, so the coordinator decides.
+            releaseTicket(t.id, k.id, KEEPS_EXITING);
+            notify(coordinatorToNotify(t.id), `${cap(workerRef(k.id, "worker"))} ended; ${EXITING}`);
+          } else if (k?.status === "in_progress" && k.assignee === s.id && k.returnNote !== undefined) {
+            // A returned ticket reaches a worker: the fillWorkers below gives it a fresh one, with the note.
             notify(coordinatorToNotify(t.id), `${cap(workerRef(k.id, "worker"))} ended; ${FRESH}`);
           } else if (k?.status === "in_progress" && k.assignee === s.id) {
             releaseTicket(t.id, k.id, "worker session ended");

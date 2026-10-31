@@ -91,6 +91,69 @@ describe("agt stack", () => {
     expect(s.stack.holder).toMatchObject({ thread: "001", purpose: "e2e4" });
   });
 
+  test("e2e4 is checked before the holder's no-op and the queued thread's kept position", () => {
+    const s = base();
+    const NEEDS = (t: string) => `stage 4 e2e needs the user's approval: agt stage ${t} 7 approve --by user`;
+    exec(s, acquire("001"), coord("001"));
+    exec(s, acquire("002"), coord("002"));
+    expect(errorOf(run(s, acquire("001", { for: "e2e4" }), coord("001")))).toBe(NEEDS("001"));
+    expect(errorOf(run(s, acquire("002", { for: "e2e4" }), coord("002")))).toBe(NEEDS("002"));
+    expect(s.stack.holder).toMatchObject({ thread: "001" });
+    expect(s.stack.holder!.purpose).toBeUndefined();
+    expect(s.stack.queue).toEqual([{ thread: "002" }]);
+  });
+
+  test("the holder re-acquiring with a new purpose records it; the same purpose stays a no-op", () => {
+    const s = base();
+    exec(s, acquire("001"), coord("001"));
+    const since = s.stack.holder!.since;
+    exec(s, { cmd: "stage", thread: "001", stage: 7, state: "approve", by: "user" }, USER);
+    const r = exec(s, acquire("001", { for: "e2e4" }), coord("001"));
+    expect(r).toMatchObject({ ok: true, events: [{ type: "stack.acquired", thread: "001", payload: { thread: "001", purpose: "e2e4" } }], result: { acquired: true } });
+    expect(s.stack.holder).toEqual({ thread: "001", purpose: "e2e4", since });
+    expect(renderMain(s)).toContain("e2e4");
+    expect(run(s, acquire("001", { for: "e2e4" }), coord("001"))).toMatchObject({ ok: true, events: [], result: { acquired: true } });
+  });
+
+  test("a queued thread re-acquiring with a new purpose keeps its position with the new purpose", () => {
+    const s = base();
+    exec(s, acquire("001"), coord("001"));
+    exec(s, acquire("002"), coord("002"));
+    exec(s, acquire("003"), coord("003"));
+    exec(s, { cmd: "stage", thread: "002", stage: 7, state: "approve", by: "user" }, USER);
+    const r = exec(s, acquire("002", { for: "e2e4" }), coord("002"));
+    expect(r).toMatchObject({ ok: true, events: [{ type: "stack.queued", thread: "002", payload: { thread: "002", purpose: "e2e4" } }], result: { acquired: false, position: 1 } });
+    expect(s.stack.queue).toEqual([{ thread: "002", purpose: "e2e4" }, { thread: "003" }]);
+    expect(run(s, acquire("002", { for: "e2e4" }), coord("002"))).toMatchObject({ ok: true, events: [], result: { acquired: false, position: 1 } });
+    // handed on, it holds the lock for that purpose
+    exec(s, release("001"), coord("001"));
+    expect(s.stack.holder).toMatchObject({ thread: "002", purpose: "e2e4" });
+  });
+
+  test("replaying the stored events from scratch gives the live lock state", () => {
+    const s = base();
+    const log: StoredEvent[] = [];
+    const record = (evs: StoredEvent[]) => (log.push(...evs), evs);
+    const go = (cmd: unknown, actor: Actor) => {
+      const r = run(s, cmd, actor);
+      if (!r.ok) return;
+      let evs = record(apply(s, ...r.events));
+      for (let i = 0; i < 5 && evs.length; i++) evs = record(apply(s, ...react(s, evs, ctx).events));
+    };
+    s.threads.get("002")!.stage7Approved = true;
+    go(acquire("001"), coord("001"));
+    go(acquire("002"), coord("002"));
+    go(acquire("003"), coord("003"));
+    go(acquire("002", { for: "e2e4" }), coord("002"));
+    go(release("001"), coord("001"));
+    go(release("003"), coord("003"));
+    go(acquire("001"), coord("001"));
+    const fresh = base();
+    for (const ev of log) applyEvent(fresh, ev);
+    expect(fresh.stack).toEqual(s.stack);
+    expect(s.stack).toMatchObject({ holder: { thread: "002", purpose: "e2e4" }, queue: [{ thread: "001" }] });
+  });
+
   test("workers may not acquire or release; the user may; status is open to every role", () => {
     const s = base();
     expect(errorOf(run(s, acquire("001"), WK))).toBe("role worker may not run stack.acquire");
@@ -135,11 +198,9 @@ describe("agt stack", () => {
     apply(s, { type: "session.lost", thread: "001", payload: { session: CA, reason: "gone" } });
     const r = sweep(s, "2026-10-11T10:00:01.000Z", ctx);
     expect(r.events.filter((e) => e.type.startsWith("stack."))).toEqual([{ type: "stack.released", thread: "001", payload: { thread: "001", reason: "holder thread has no live coordinator" } }]);
-    let evs = apply(s, ...r.events);
-    evs = apply(s, ...react(s, evs, ctx).events);
+    apply(s, ...react(s, apply(s, ...r.events), ctx).events);
     expect(s.stack.holder).toMatchObject({ thread: "002" });
     expect(notices(s, CB)).toEqual(["The stack lock is yours for thread 002."]);
-    void evs;
   });
 
   test("a done holder is released by the sweep", () => {
@@ -160,11 +221,9 @@ describe("agt stack", () => {
       { type: "stack.released", thread: "001", payload: { thread: "001", reason: "holder thread has no live coordinator" } },
       { type: "stack.released", thread: "002", payload: { thread: "002", reason: "left the queue" } },
     ]);
-    let evs = apply(s, ...r.events);
-    evs = apply(s, ...react(s, evs, ctx).events);
+    apply(s, ...react(s, apply(s, ...r.events), ctx).events);
     expect(s.stack.holder).toMatchObject({ thread: "003" });
     expect(notices(s, CC)).toEqual(["The stack lock is yours for thread 003."]);
-    void evs;
   });
 
   test("main.thread.md shows the holder and the queue", () => {

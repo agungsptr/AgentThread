@@ -49,7 +49,7 @@ export function liveSessions(state: State, thread?: string, role?: SessionRole):
 }
 
 /** Ticket statuses whose files are taken: another ticket of the same repo sharing a file waits until they leave these. */
-const FILE_HOLDING: readonly string[] = ["in_progress", "review"];
+export const FILE_HOLDING: readonly string[] = ["in_progress", "review"];
 
 /**
  * Whether a ticket waits for a worker to be spawned: an open one, or a returned one (in_progress) whose worker is gone.
@@ -131,16 +131,17 @@ export function spawnCoordinator(
   };
 }
 
-/**
- * A worker runs in its ticket's repo worktree on a task thread, in the thread's worktree on a legacy one.
- * `agent` (agt worker spawn --agent) replaces the worker role with that adapter's defaults: no model or effort is carried across vendors. */
 /** Where a ticket's worker runs: the ticket's repo worktree on a task thread, else the thread directory. Undefined when that worktree is missing. */
 export function workerCwd(t: Thread, ticket: string): string | undefined {
   const repo = t.tickets.find((k) => k.id === ticket)?.repo;
   return repo === undefined ? threadCwd(t) : t.worktrees[repo]?.path;
 }
 
-/** `gone`: workers ended in the same reactor pass (state still shows them live); their panes are closing, so never split from them. */
+/**
+ * A worker runs in its ticket's repo worktree on a task thread, in the thread's worktree on a legacy one.
+ * `agent` (agt worker spawn --agent) replaces the worker role with that adapter's defaults: no model or effort is carried across vendors.
+ * `gone`: workers ended in the same reactor pass (state still shows them live); their panes are closing, so never split from them.
+ */
 export function spawnWorker(state: State, t: Thread, ticket: string, ctx: SpawnContext, agent?: AgentKind, gone: ReadonlySet<string> = new Set()): { events: EventBody[]; effects: Effect[] } {
   const session = ctx.newId();
   const name = agentName(ctx.root, "worker", t.id, ticket, session);
