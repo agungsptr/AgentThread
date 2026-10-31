@@ -112,6 +112,12 @@ describe("task-thread worker rules (§13)", () => {
   });
 });
 
+test("a task coordinator's only repo commit is the squash", () => {
+  const p = coordinator(DEFAULT_CONFIG);
+  expect(p).toContain("- Workers commit their tickets on wip/kyc-reject. You never edit repo files; your only repo commit is the squash on feat/kyc-reject: in each repo worktree,");
+  expect(p).not.toContain("You never edit or commit repo files");
+});
+
 describe("legacy threads keep every old prompt byte for byte", () => {
   const want = JSON.parse(readFileSync(join(import.meta.dir, "__legacy__", "prompts.json"), "utf8")) as Record<string, string>;
   test("coordinator, worker, AGENTS.md, bootstrap and guide, whatever the workflow config", () => {

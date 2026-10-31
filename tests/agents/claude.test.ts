@@ -56,10 +56,12 @@ describe("claude adapter", () => {
     expect(tools).toContain("Edit(//ws/.docs/shared/issues/kyc/02-api.md)");
     expect(tools).toContain("Write(//ws/.docs/shared/issues/kyc/02-api.md)");
     expect(tools.filter((t) => t.startsWith("Edit(") || t.startsWith("Write("))).toHaveLength(2);
+    expect(tools).toContain("Read(//ws/.docs/shared/issues/kyc/02-api.md)");
     expect(tools.join(",")).not.toContain(".docs/**");
     expect(tools.some((t) => t.includes("git switch") || t.includes("merge --squash") || t.includes("git -C"))).toBe(false);
     const none = allowedTools("worker", DEFAULT_CONFIG, "/ws", { legacy: false });
     expect(none.some((t) => t.startsWith("Edit(") || t.startsWith("Write("))).toBe(false);
+    expect(none.filter((t) => t.startsWith("Read("))).toEqual(["Read(//ws/.agentthread/**)"]);
     // a legacy worker never gets one, even when handed a doc
     expect(allowedTools("worker", DEFAULT_CONFIG, "/ws", { legacy: true, doc: "x.md" })).toEqual(allowedTools("worker", DEFAULT_CONFIG, "/ws", { legacy: true }));
   });
@@ -68,10 +70,15 @@ describe("claude adapter", () => {
     const tools = allowedTools("coordinator", DEFAULT_CONFIG, "/ws", { legacy: false });
     expect(tools).toEqual([
       "Bash(agt *)", "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)", "Bash(git add *)", "Bash(git commit *)",
-      "Edit(//ws/.docs/**)", "Write(//ws/.docs/**)", "Bash(git -C /ws/.docs *)", "Bash(git switch *)", "Bash(git merge --squash *)",
+      "Read(//ws/.docs/**)", "Edit(//ws/.docs/**)", "Write(//ws/.docs/**)",
+      "Bash(git -C /ws/.docs add *)", "Bash(git -C /ws/.docs commit *)", "Bash(git -C /ws/.docs status*)", "Bash(git -C /ws/.docs diff*)", "Bash(git -C /ws/.docs log*)",
+      "Bash(git switch *)", "Bash(git merge --squash *)",
       "Read(//ws/.agentthread/**)",
     ]);
     expect(tools.join(",")).not.toContain("push");
+    // no catch-all git rule in .docs: push, a second -C or -c config would otherwise be auto-approved
+    expect(tools).not.toContain("Bash(git -C /ws/.docs *)");
+    expect(tools.filter((t) => t.startsWith("Bash(git -C")).every((t) => /^Bash\(git -C \/ws\/\.docs (add \*|commit \*|status\*|diff\*|log\*)\)$/.test(t))).toBe(true);
     // legacy coordinators keep the old rules
     expect(allowedTools("coordinator", DEFAULT_CONFIG, "/ws", { legacy: true })).toEqual([
       "Bash(agt *)", "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)", "Bash(git add *)", "Bash(git commit *)", "Read(//ws/.agentthread/**)",
@@ -96,7 +103,7 @@ describe("prompts", () => {
     expect(legacy).toContain("then git add and git commit in the worktree.");
     const t = { id: "002", title: "Fix race", slug: "fix-race", dir: "/repo/.worktrees/fix-race", task: "fix-race" };
     const p = systemPrompt({ root: "/repo", role: "coordinator", thread: t });
-    expect(p).toContain("- Workers commit their tickets on wip/fix-race. You never edit or commit repo files; at the end you squash: in each repo worktree, git switch -c feat/fix-race <source>, git merge --squash wip/fix-race, then one plain commit.");
+    expect(p).toContain("- Workers commit their tickets on wip/fix-race. You never edit repo files; your only repo commit is the squash on feat/fix-race: in each repo worktree, git switch -c feat/fix-race <source>, git merge --squash wip/fix-race, then one plain commit.");
     expect(p).not.toContain("git add and git commit");
   });
 

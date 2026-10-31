@@ -47,9 +47,14 @@ export function allowedTools(role: SessionRole, config: Config, root?: string, o
     !task || !root
       ? []
       : role === "coordinator"
-        ? [`Edit(/${root}/.docs/**)`, `Write(/${root}/.docs/**)`, `Bash(git -C ${join(root, ".docs")} *)`, "Bash(git switch *)", "Bash(git merge --squash *)"]
+        ? [
+            `Read(/${root}/.docs/**)`, `Edit(/${root}/.docs/**)`, `Write(/${root}/.docs/**)`,
+            // Only these subcommands: a catch-all `git -C .docs *` would also approve push, a second -C or -c config.
+            ...["add *", "commit *", "status*", "diff*", "log*"].map((c) => `Bash(git -C ${join(root, ".docs")} ${c})`),
+            "Bash(git switch *)", "Bash(git merge --squash *)",
+          ]
         : role === "worker" && o.doc !== undefined
-          ? [`Edit(/${ticketDocPath(root, o.doc)})`, `Write(/${ticketDocPath(root, o.doc)})`]
+          ? [`Read(/${ticketDocPath(root, o.doc)})`, `Edit(/${ticketDocPath(root, o.doc)})`, `Write(/${ticketDocPath(root, o.doc)})`]
           : [];
   const stateFiles = root && role !== "main" ? [`Read(/${root}/.agentthread/**)`] : [];
   return [...base, ...workflow, ...stateFiles, ...config.agents.claude.extra_allowed_tools];

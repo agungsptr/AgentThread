@@ -740,5 +740,6 @@ describe("thread directory", () => {
     expect(await runAsk({ ...split, session: "s-3", role: "worker", ticket: "T1", splitFrom: "p2", direction: "down" })).toEqual([]);
     const tools = asked[0]!.args[asked[0]!.args.indexOf("--allowed-tools") + 1]!.split(",");
     expect(tools.filter((x) => x.startsWith("Edit(") || x.startsWith("Write("))).toEqual([`Edit(/${doc})`, `Write(/${doc})`]);
+    expect(tools).toContain(`Read(/${doc})`);
   });
 });

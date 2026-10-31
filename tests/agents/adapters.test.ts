@@ -168,6 +168,7 @@ test("§13: claude passes the worker's ticket doc into its allow rules (task thr
   const tools = args[args.indexOf("--allowed-tools") + 1]!.split(",");
   expect(tools).toContain("Edit(//r/.docs/a/02.md)");
   expect(tools).toContain("Write(//r/.docs/a/02.md)");
+  expect(tools).toContain("Read(//r/.docs/a/02.md)");
   expect(JSON.parse(args[args.indexOf("--settings") + 1]!).permissions).toEqual({ deny: ["Bash(git push:*)"] });
 });
 

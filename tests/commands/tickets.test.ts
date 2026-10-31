@@ -21,8 +21,16 @@ const add = (extra: Record<string, unknown> = {}) => ({ cmd: "ticket.add", threa
 describe("ticket.add on a task thread", () => {
   test("records repo, files and doc; scope is the files", () => {
     const s = taskBase();
-    expect(errorOf(exec(s, add({ doc: "docs/lock.md" })))).toBe("accepted");
-    expect(s.threads.get("001")!.tickets[0]).toMatchObject({ id: "T1", repo: "api", files: ["src/a.ts", "src/b.ts"], doc: "docs/lock.md", scope: ["src/a.ts", "src/b.ts"] });
+    expect(errorOf(exec(s, add({ doc: ".docs/shared/issues/kyc/01-api.md" })))).toBe("accepted");
+    expect(s.threads.get("001")!.tickets[0]).toMatchObject({ id: "T1", repo: "api", files: ["src/a.ts", "src/b.ts"], doc: ".docs/shared/issues/kyc/01-api.md", scope: ["src/a.ts", "src/b.ts"] });
+  });
+
+  // The doc becomes the worker's only write rule outside its worktree: one plain file under .docs/, never a glob.
+  test.each([
+    "/ws/.docs/a.md", ".docs/../x.md", ".docs/a/../../x.md", "..", ".docs\\a.md", ".docs/*.md", ".docs/a?.md", ".docs/[a].md", ".docs/a].md",
+    "docs/lock.md", ".docs", ".docs/", "./.docs/a.md", ".docs//a.md", ".docs/./a.md", ".docs/a/",
+  ])("rejects the doc %p", (p) => {
+    expect(errorOf(run(taskBase(), add({ doc: p })))).toBe(`--doc must be a path under .docs/: ${p}`);
   });
 
   test("needs a repo and at least one file", () => {

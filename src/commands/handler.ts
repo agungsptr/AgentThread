@@ -125,6 +125,16 @@ function repoRelative(p: string): string {
 }
 
 /**
+ * A ticket doc: a normalised workspace-root-relative file under .docs/ (no leading /, no empty, . or .. segment, no
+ * trailing /), with no backslash or glob character. It becomes the worker's only write rule outside its worktree.
+ */
+function checkTicketDoc(p: string): string {
+  const parts = p.split("/");
+  const ok = parts[0] === ".docs" && parts.length > 1 && parts.every((s) => s !== "" && s !== "." && s !== "..") && !/[\\*?[\]\0]/.test(p);
+  return ok ? p : reject(`--doc must be a path under .docs/: ${p}`);
+}
+
+/**
  * The actor a command's decided events are stored with. A lifecycle signal keeps its actor: it names its session or
  * pane, and it does not show that the agent ran an agt command. Any other command is marked `via: "command"` (only
  * such events count as authored), and a coordinator or worker actor without a session (the root-pane coordinator has
@@ -273,6 +283,7 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
       if (!cmd.repo || !cmd.files?.length) reject("a task thread's ticket needs --repo <repo> and at least one --file <path>");
       if (!Object.hasOwn(workspaceReposNoSpawn(ctx.root, ctx.config ?? DEFAULT_CONFIG), cmd.repo)) reject(`unknown repo ${cmd.repo}`);
       const files = [...new Set(cmd.files.map(repoRelative))];
+      if (cmd.doc !== undefined) checkTicketDoc(cmd.doc);
       return {
         events: [{ type: "ticket.created", thread: t.id, payload: { ticket, title: cmd.title, scope: files, repo: cmd.repo, files, ...(cmd.doc ? { doc: cmd.doc } : {}) } }],
         result: { ticket },

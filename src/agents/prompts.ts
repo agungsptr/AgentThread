@@ -89,7 +89,7 @@ export function systemPrompt(o: PromptInput): string {
       `- Spawn a worker for every ticket that is ready, all at once, with agt worker spawn ${t.id} --ticket <T>; the daemon queues any beyond max-workers.`,
       t.dir === undefined
         ? "- Workers only edit files. You are the only one who commits: when a ticket is done, review the change, then git add and git commit in the worktree."
-        : `- Workers commit their tickets on wip/${t.task}. You never edit or commit repo files; at the end you squash: in each repo worktree, git switch -c feat/${t.task} <source>, git merge --squash wip/${t.task}, then one plain commit.`,
+        : `- Workers commit their tickets on wip/${t.task}. You never edit repo files; your only repo commit is the squash on feat/${t.task}: in each repo worktree, git switch -c feat/${t.task} <source>, git merge --squash wip/${t.task}, then one plain commit.`,
     ...(t.dir === undefined
       ? []
       : ["- Review each ticket's commits (git show --stat must list only its files), then agt ticket accept or agt ticket return with what to fix."]),
