@@ -34,16 +34,16 @@ describe("agt stage", () => {
   });
 
   test("records the event with stage, state, by and reason", () => {
-    const r = run(base(), stage(2, "skipped", { reason: "tiny fix" }));
-    expect(r.ok && r.events).toEqual([{ type: "stage.recorded", thread: "001", payload: { stage: 2, state: "skipped", by: "coordinator", reason: "tiny fix" } }]);
+    const r = run(base(), stage(2, "skipped", { reason: "tiny fix", by: "user" }), USER);
+    expect(r.ok && r.events).toEqual([{ type: "stage.recorded", thread: "001", payload: { stage: 2, state: "skipped", by: "user", reason: "tiny fix" } }]);
   });
 
   test("na and skipped with a reason count as passed; without one they are rejected", () => {
     const s = base();
     expect(errorOf(run(s, stage(1, "na")))).toBe("stage 1 na needs --reason <why>");
-    expect(errorOf(run(s, stage(1, "skipped")))).toBe("stage 1 skipped needs --reason <why>");
+    expect(errorOf(run(s, stage(1, "skipped", { by: "user" }), USER))).toBe("stage 1 skipped needs --reason <why>");
     exec(s, stage(1, "na", { reason: "no discussion needed" }));
-    exec(s, stage(2, "skipped", { reason: "small" }));
+    exec(s, stage(2, "skipped", { reason: "small", by: "user" }), USER);
     expect(renderBrief({ thread: thread(s), sessions: [] })).toContain("Stage: 3 tickets");
   });
 
@@ -62,6 +62,10 @@ describe("agt stage", () => {
     expect(errorOf(exec(s, stage(7, "approve", { by: "user" }), USER))).toBe("accepted");
     expect(thread(s).stage7Approved).toBe(true);
     expect(thread(s).stages[7]).toBeUndefined();
+  });
+
+  test("a coordinator cannot skip a stage without --by user", () => {
+    expect(errorOf(run(base(), stage(3, "skipped", { reason: "meh" })))).toBe("only the user skips a stage; record it with --by user");
   });
 
   test("--by user is allowed with skipped only (besides approve)", () => {
@@ -99,7 +103,7 @@ describe("the stage8 file", () => {
     const s = base();
     writeAll(root, s, undefined, () => undefined);
     expect(existsSync(file(root))).toBe(false);
-    exec(s, stage(8, "skipped", { reason: "x" }));
+    exec(s, stage(8, "skipped", { reason: "x", by: "user" }), USER);
     writeAll(root, s, undefined, () => undefined);
     expect(readFileSync(file(root), "utf8")).toBe("skipped\n");
     exec(s, stage(8, "done"));

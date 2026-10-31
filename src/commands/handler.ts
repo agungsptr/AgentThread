@@ -273,6 +273,7 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
         if (cmd.stage !== 7) reject("only stage 7 (e2e) is approved");
         if (cmd.by !== "user") reject("approving stage 7 needs --by user");
       } else if (cmd.by === "user" && cmd.state !== "skipped") reject("--by user is only for approve and skipped");
+      else if (cmd.state === "skipped" && cmd.by !== "user") reject("only the user skips a stage; record it with --by user");
       if ((cmd.state === "skipped" || cmd.state === "na") && !cmd.reason) reject(`stage ${cmd.stage} ${cmd.state} needs --reason <why>`);
       return {
         events: [{ type: "stage.recorded", thread: t.id, payload: { stage: cmd.stage, state: cmd.state, by: cmd.by ?? "coordinator", ...(cmd.reason ? { reason: cmd.reason } : {}) } }],
