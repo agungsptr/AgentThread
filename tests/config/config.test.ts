@@ -46,6 +46,7 @@ test("defaults match the spec", () => {
     },
     checkpoint: { reminder_turns: 8, reminder_after: "30m" },
     workspace: {},
+    workflow: { chat_language: "English", file_language: "English", report_words: { done: "done", blocked: "blocked" } },
     herdr: { main_tab_label: "main", close_tab_on_done: true, close_worker_pane_on_end: true, poll_interval: "2s" },
   });
 });
@@ -204,4 +205,43 @@ test("an opencode role or tier with an effort but no model is rejected", () => {
   expect(() => loadConfig(tierRoot.root, tierRoot.env)).toThrow("agents.complexity.tiers.big.effort: opencode effort needs a model");
   const ok = setup({ project: "agents:\n  roles:\n    worker: { agent: opencode, model: p/m, effort: high }\n" });
   expect(loadConfig(ok.root, ok.env).agents.roles.worker).toEqual({ agent: "opencode", model: "p/m", effort: "high" });
+});
+
+const FULL_WORKFLOW = {
+  workspace: {
+    repos: {
+      api: { path: "api", source_branch: "dev", prod_branch: "main", staging_branch: "staging", pr_order: 1, unit: "bun test", typecheck: "bun run typecheck" },
+    },
+  },
+  workflow: {
+    chat_language: "Indonesian",
+    file_language: "English",
+    stack: { restart: "make restart TASK={task}", status: "make status" },
+    e2e: { stage2: "make e2e2", stage3: "make e2e3", stage4: "make e2e4", baseline: "docs/baseline.md" },
+    migration: { tool: "goose", table: "goose_db_version", prod_migrates_on_start: true },
+    prod_read: "psql -c",
+    browser: { urls: ["http://localhost:3000"], login_note: "docs/login.md" },
+    banned_words: ["foo"],
+    never_commit: [".env"],
+    read_first: ["README.md"],
+    report_words: { done: "selesai", blocked: "terhenti" },
+  },
+};
+
+test("the full workflow config parses", () => {
+  expect(ConfigSchema.parse(FULL_WORKFLOW).workflow.e2e?.stage3).toBe("make e2e3");
+});
+
+test("an unknown key under workflow, a repo or a nested block is rejected", () => {
+  expect(ConfigSchema.safeParse({ workflow: { nope: 1 } }).success).toBe(false);
+  expect(ConfigSchema.safeParse({ workflow: { stack: { nope: 1 } } }).success).toBe(false);
+  expect(ConfigSchema.safeParse({ workspace: { repos: { a: { path: "a", nope: 1 } } } }).success).toBe(false);
+});
+
+test("workflow defaults", () => {
+  const w = DEFAULT_CONFIG.workflow;
+  expect(w.chat_language).toBe("English");
+  expect(w.file_language).toBe("English");
+  expect(w.report_words).toEqual({ done: "done", blocked: "blocked" });
+  expect(w.stack).toBeUndefined();
 });

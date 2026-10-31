@@ -128,12 +128,64 @@ export const ConfigSchema = z
       .default({}),
     workspace: z
       .object({
-        repos: z.record(z.string().min(1), z.object({ path: z.string().min(1), source_branch: z.string().trim().min(1).optional() }).strict()).optional(),
+        repos: z
+          .record(
+            z.string().min(1),
+            z
+              .object({
+                path: z.string().min(1),
+                source_branch: z.string().trim().min(1).optional(),
+                prod_branch: z.string().trim().min(1).optional(),
+                staging_branch: z.string().trim().min(1).optional(),
+                pr_order: z.number().int().optional(),
+                /** Run in the repo worktree. */
+                unit: z.string().min(1).optional(),
+                typecheck: z.string().min(1).optional(),
+              })
+              .strict(),
+          )
+          .optional(),
         /**
          * Run by `agt worktree add` instead of git worktree add. The placeholders {root} {task} {repo} {src} {path} are
          * filled in already shell-quoted, so they must be used unquoted.
          */
         worktree_setup: z.string().min(1).optional(),
+      })
+      .strict()
+      .default({}),
+    /** Project facts for the feature workflow; rendered into the generated skill by `projectConfigSection`. */
+    workflow: z
+      .object({
+        chat_language: z.string().trim().min(1).default("English"),
+        file_language: z.string().trim().min(1).default("English"),
+        /** `restart` may use the `{task}` placeholder. */
+        stack: z.object({ restart: z.string().min(1).optional(), status: z.string().min(1).optional() }).strict().optional(),
+        e2e: z
+          .object({
+            stage2: z.string().min(1).optional(),
+            stage3: z.string().min(1).optional(),
+            stage4: z.string().min(1).optional(),
+            baseline: z.string().min(1).optional(),
+          })
+          .strict()
+          .optional(),
+        migration: z
+          .object({
+            tool: z.string().min(1).optional(),
+            table: z.string().min(1).optional(),
+            prod_migrates_on_start: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+        prod_read: z.string().min(1).optional(),
+        browser: z.object({ urls: z.array(z.string().min(1)).optional(), login_note: z.string().min(1).optional() }).strict().optional(),
+        banned_words: z.array(z.string().min(1)).optional(),
+        never_commit: z.array(z.string().min(1)).optional(),
+        read_first: z.array(z.string().min(1)).optional(),
+        report_words: z
+          .object({ done: z.string().trim().min(1).default("done"), blocked: z.string().trim().min(1).default("blocked") })
+          .strict()
+          .default({}),
       })
       .strict()
       .default({}),
