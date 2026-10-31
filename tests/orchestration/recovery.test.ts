@@ -386,3 +386,95 @@ test("a coordinator replacement can split from a live worker pane when the root 
   const r2 = react(s2, apply(s2, { type: "session.ended", thread: "001", payload: { session: C } }), ctx());
   expect(r2.effects.find((e) => e.kind === "agent.spawn")).not.toHaveProperty("splitFallbacks");
 });
+
+const TAB_RECREATED = "Thread 001 lost its tab pane; reopening its tab with a fresh coordinator.";
+/** withMain(base()) whose coordinator C exited and was replaced by R (a split from the root pane, not attached yet). */
+const replaced = () => {
+  const s = withMain(base());
+  const r = react(s, apply(s, { type: "session.ended", thread: "001", payload: { session: C } }), ctx());
+  apply(s, ...r.events);
+  const created = r.events.find((e) => e.type === "session.created")!;
+  return { s, R: created.type === "session.created" ? created.payload.session : "" };
+};
+
+test("a coordinator replacement whose root pane is gone closes the old tab, opens a fresh one and tells main", () => {
+  for (const reason of ["pane_not_found", "herdr pane split: pane w1:p2 not found", "herdr agent start: agent target pane w1:p2 not found"]) {
+    const { s, R } = replaced();
+    const r = react(s, apply(s, { type: "session.failed", thread: "001", payload: { session: R, reason } }), ctx());
+    expect(r.events).toEqual([{ type: "notice.queued", payload: { session: M, text: TAB_RECREATED } }]);
+    expect(r.effects).toEqual([
+      { kind: "herdr.tab.close", thread: "001", tab: "w1:t2" },
+      expect.objectContaining({ kind: "herdr.tab.ensure", thread: "001", cwd: "/repo/.worktrees/001-thread-001" }),
+    ]);
+    expect(r.effects[1]).not.toHaveProperty("tab");
+    // the effects' events: the old tab closes, the fresh one opens, and tab_opened spawns exactly one coordinator in it
+    apply(s, ...r.events);
+    const opened = react(
+      s,
+      apply(s, { type: "thread.tab_closed", thread: "001", payload: { tab: "w1:t2" } }, { type: "thread.tab_opened", thread: "001", payload: { tab: "w1:t5", rootPane: "w1:p5" } }),
+      ctx(),
+    );
+    const spawned = opened.events.filter((e) => e.type === "session.created");
+    expect(spawned).toEqual([expect.objectContaining({ payload: expect.objectContaining({ role: "coordinator" }) })]);
+    expect(opened.effects).toEqual([expect.objectContaining({ kind: "agent.spawn", role: "coordinator", pane: "w1:p5" })]);
+    apply(s, ...opened.events);
+    expect([...s.sessions.values()].filter((x) => x.role === "coordinator" && ["starting", "active", "idle"].includes(x.status))).toHaveLength(1);
+  }
+});
+
+test("a root-pane failure without a tab id only opens a fresh tab", () => {
+  const { s, R } = replaced();
+  delete s.threads.get("001")!.tab;
+  const r = react(s, apply(s, { type: "session.failed", thread: "001", payload: { session: R, reason: "pane_not_found" } }), ctx());
+  expect(r.effects).toEqual([expect.objectContaining({ kind: "herdr.tab.ensure", thread: "001" })]);
+  expect(r.events).toEqual([{ type: "notice.queued", payload: { session: M, text: TAB_RECREATED } }]);
+});
+
+test("a root-pane failure at the brake reopens nothing and main gets the brake notice", () => {
+  const at = (s: State, ts: string, ...bodies: EventBody[]): StoredEvent[] =>
+    bodies.map((b) => {
+      const ev = { ...b, seq: s.lastSeq + 1, ts, actor: USER } as StoredEvent;
+      applyEvent(s, ev);
+      return ev;
+    });
+  const s = withMain(base());
+  const ids = ["11111111-aaaa-4aaa-8aaa-000000000001", "11111111-aaaa-4aaa-8aaa-000000000002", "11111111-aaaa-4aaa-8aaa-000000000003"];
+  let prev = C;
+  ids.forEach((id, i) => {
+    at(
+      s,
+      `2026-10-11T10:0${i}:00.000Z`,
+      { type: "session.ended", thread: "001", payload: { session: prev } },
+      { type: "session.created", thread: "001", payload: { session: id, role: "coordinator", agent: "claude-code", name: `r${i}`, replaces: prev } },
+    );
+    prev = id;
+  });
+  const r = react(s, at(s, "2026-10-11T10:05:00.000Z", { type: "session.failed", thread: "001", payload: { session: ids[2]!, reason: "herdr pane split: pane w1:p2 not found" } }), ctx());
+  expect(r.effects).toEqual([]);
+  expect(r.events).toEqual([
+    { type: "notice.queued", payload: { session: M, text: "Coordinator for thread 001 failed: herdr pane split: pane w1:p2 not found." } },
+    { type: "notice.queued", payload: { session: M, text: "Coordinator for thread 001 could not be replaced (too many recent replacements); run agt start after fixing the cause." } },
+  ]);
+});
+
+test("a coordinator failure for any other reason, or with a live coordinator, or of a done thread, keeps today's behaviour", () => {
+  const { s, R } = replaced();
+  const other = react(s, apply(s, { type: "session.failed", thread: "001", payload: { session: R, reason: "herdr agent start: timed out after 10000ms" } }), ctx());
+  expect(other.effects).toEqual([]);
+  expect(other.events).toEqual([{ type: "notice.queued", payload: { session: M, text: "Coordinator for thread 001 failed: herdr agent start: timed out after 10000ms." } }]);
+  // another coordinator is live
+  const live = replaced();
+  apply(live.s, { type: "session.created", thread: "001", payload: { session: "22222222-2222-4222-8222-222222222222", role: "coordinator", agent: "claude-code", name: "x" } });
+  const withLive = react(live.s, apply(live.s, { type: "session.failed", thread: "001", payload: { session: live.R, reason: "pane_not_found" } }), ctx());
+  expect(withLive.effects).toEqual([]);
+  expect(withLive.events).toEqual([{ type: "notice.queued", payload: { session: M, text: "Coordinator for thread 001 failed: pane_not_found." } }]);
+  // a coordinator that is not a replacement (such as the one a fresh tab spawns): no second tab, so no reopen loop
+  const fresh = withMain(base());
+  const first = react(fresh, apply(fresh, { type: "session.failed", thread: "001", payload: { session: C, reason: "pane_not_found" } }), ctx());
+  expect(first.effects).toEqual([]);
+  expect(first.events).toEqual([{ type: "notice.queued", payload: { session: M, text: "Coordinator for thread 001 failed: pane_not_found." } }]);
+  // a done thread
+  const done = replaced();
+  done.s.threads.get("001")!.status = "done";
+  expect(react(done.s, apply(done.s, { type: "session.failed", thread: "001", payload: { session: done.R, reason: "pane_not_found" } }), ctx()).effects).toEqual([]);
+});

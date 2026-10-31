@@ -278,6 +278,8 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
       case "session.failed": {
         const s = state.sessions.get(ev.payload.session);
         const lostSpawn = /^spawn report lost after (.+)$/.exec(ev.payload.reason);
+        // Herdr's missing-pane errors: the code itself, or the bridge's "herdr <cmd>: [agent target ]pane <id> not found".
+        const paneGone = /pane_not_found|pane .* not found/i.test(ev.payload.reason);
         const text = lostSpawn && s ? `Session ${s.id} (${s.role}) never reported back from its spawn; marked failed after ${lostSpawn[1]}.` : undefined;
         const t = s?.thread ? state.threads.get(s.thread) : undefined;
         if (s?.role === "worker") {
@@ -301,6 +303,22 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
               notify(main, `${text!} A replacement is starting.`);
             } else {
               notify(main, text!);
+            }
+          } else if (paneGone && s.replaces && t && t.status !== "done" && !coordinatorOf(t.id)) {
+            // A replacement's split found no pane to split from (the root pane went with the old coordinator, and no
+            // fallback was live): the tab is beyond repair, so a fresh tab replaces it, and its tab_opened spawns the
+            // coordinator. Only a replacement does this: the fresh coordinator it spawns has no `replaces`, so a tab
+            // that keeps failing is reopened at most once per replacement, and the brake still counts replacements.
+            if (recentReplacements(t.id, ev.ts) >= MAX_AUTO_REPLACEMENTS) {
+              notify(main, `Coordinator for thread ${t.id} failed: ${ev.payload.reason}.`);
+              if (!braked.has(t.id)) {
+                braked.add(t.id);
+                notify(main, `Coordinator for thread ${t.id} could not be replaced (too many recent replacements); run agt start after fixing the cause.`);
+              }
+            } else {
+              if (t.tab) effects.push({ kind: "herdr.tab.close", thread: t.id, tab: t.tab });
+              effects.push(tabEnsure({ ...t, tab: undefined }, ctx));
+              notify(main, `Thread ${t.id} lost its tab pane; reopening its tab with a fresh coordinator.`);
             }
           } else {
             notify(main, text ?? `Coordinator for thread ${s.thread} failed: ${ev.payload.reason}.`);

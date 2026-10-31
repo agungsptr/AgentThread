@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os";
 import type { EventOf } from "../harness.ts";
 import type { Scenario } from "./common.ts";
 
@@ -32,6 +33,22 @@ export function smokeScenarios(): Scenario[] {
           again = await h.herdr.read(h.mainPane, 40);
         }
         h.check("a second agt start reuses the layout", /layout already set up/.test(again) && /subthread tabs reconciled \(0 open threads\)/.test(again));
+        // A coordinator whose tab lost its root pane gets a fresh tab, and the old one is closed by tab id. Record what
+        // Herdr does when a tab's only pane is closed: whether the pane and the tab both go.
+        const made = await h.herdr.ok(["tab", "create", "--workspace", layout.workspace, "--cwd", tmpdir(), "--label", "last-pane", "--no-focus"]);
+        const lastTab: string = made.tab.tab_id;
+        const lastPane: string = made.root_pane.pane_id;
+        const closed = await h.herdr.run(["pane", "close", lastPane]);
+        let paneGone = false;
+        let tabGone = false;
+        for (let i = 0; i < 10 && !(paneGone && tabGone); i++) {
+          await Bun.sleep(300);
+          paneGone = !(await h.herdr.panes()).includes(lastPane);
+          tabGone = (await h.herdr.run(["tab", "get", lastTab])).exitCode !== 0;
+        }
+        const refused = closed.exitCode !== 0 ? `herdr refused pane close: ${closed.error ? `${closed.error.code}: ${closed.error.message}` : closed.stderr.trim()}; ` : "";
+        h.check("herdr closes a tab's last pane", closed.exitCode === 0 && paneGone && tabGone, `${refused}pane ${lastPane} ${paneGone ? "gone" : "still there"}, tab ${lastTab} ${tabGone ? "gone" : "still there"}`);
+        if (!tabGone) await h.herdr.run(["tab", "close", lastTab]);
       },
     },
   ];
