@@ -134,6 +134,79 @@ describe("the setup command's process group", () => {
   });
 });
 
+describe("I2 and the cheap fixes", () => {
+  test("a path already registered on wip/<task> is adopted: no setup run, AGENTS.md and the guard written", async () => {
+    const s = setup(withSetup("touch {root}/ran; exit 1"));
+    expect(git(s.api, "worktree", "add", "-q", "-b", "wip/kyc-1", s.path, "main").ok).toBe(true);
+    expect(await s.run(s.effect)).toEqual({ cmd: "worktree.report", thread: "001", repo: "api", ok: true });
+    expect(existsSync(join(s.root, "ran"))).toBe(false);
+    expect(existsSync(join(s.path, "AGENTS.md"))).toBe(true);
+    expect(git(s.path, "config", "--worktree", "--get", "core.hooksPath").out).toBe(join(s.root, ".agentthread", "hooks"));
+    expect(git(s.path, "rev-parse", "--abbrev-ref", "HEAD").out).toBe("wip/kyc-1");
+  });
+
+  test("a registered path on another branch is not adopted", async () => {
+    const s = setup(ConfigSchema.parse({}));
+    expect(git(s.api, "worktree", "add", "-q", "-b", "other", s.path, "main").ok).toBe(true);
+    expect((await s.run(s.effect)).ok).toBe(false);
+    expect(git(s.path, "rev-parse", "--abbrev-ref", "HEAD").out).toBe("other");
+  });
+
+  test("verification needs a registered worktree: a separate repo at the path on wip/<task> fails and is removed", async () => {
+    const s = setup(withSetup("git init -q -b wip/{task} {path} && git -C {path} -c user.name=T -c user.email=t@example.com commit -q --allow-empty -m x"));
+    expect((await s.run(s.effect)).error).toContain(`worktree setup for api did not produce ${s.path} on wip/kyc-1`);
+    s.nothingLeft();
+  });
+
+  test("a setup that exits 0 but fails verification has its group killed", async () => {
+    const s = setup(withSetup("(sleep 1; touch {root}/marker) & exit 0"));
+    expect((await s.run(s.effect)).error).toContain("did not produce");
+    await Bun.sleep(1500);
+    expect(existsSync(join(s.root, "marker"))).toBe(false);
+  });
+
+  test("stop() kills a running setup group and waits for the job; later jobs do not run their setup", async () => {
+    const s = setup(withSetup("(sleep 1; touch {root}/marker) & sleep 5"));
+    const reports: Report[] = [];
+    const runner = createEffectRunner({ root: s.root, config: withSetup("(sleep 1; touch {root}/marker) & sleep 5"), layout: () => undefined, thread: () => undefined, log: () => {}, report: (r) => void reports.push(r) });
+    expect(await runner(s.effect)).toEqual([]);
+    await Bun.sleep(300);
+    const t0 = Date.now();
+    await runner.stop();
+    expect(Date.now() - t0).toBeLessThan(5500);
+    await Bun.sleep(1500);
+    expect(existsSync(join(s.root, "marker"))).toBe(false);
+    s.nothingLeft();
+  });
+
+  test("setup runs are serialized per workspace, even for different repos", async () => {
+    const s = setup(ConfigSchema.parse({}));
+    repo(join(s.root, "web"));
+    const cmd = "echo start {repo} >> {root}/order.log; sleep 0.4; echo end {repo} >> {root}/order.log; git -C {root}/{repo} worktree add -q -b wip/{task} {path} {src}";
+    const reports: Report[] = [];
+    const runner = createEffectRunner({ root: s.root, config: withSetup(cmd), layout: () => undefined, thread: () => undefined, log: () => {}, report: (r) => void reports.push(r) });
+    await runner(s.effect);
+    await runner({ ...s.effect, repo: "web", repoPath: join(s.root, "web"), path: join(s.root, ".worktrees", "kyc-1", "web") });
+    for (let i = 0; i < 100 && reports.length < 2; i++) await Bun.sleep(50);
+    expect(reports.map((r) => r.ok)).toEqual([true, true]);
+    // never interleaved (either may go first: each job asks git a few things before it queues its setup)
+    const lines = readFileSync(join(s.root, "order.log"), "utf8").trim().split("\n");
+    expect([["start api", "end api", "start web", "end web"], ["start web", "end web", "start api", "end api"]]).toContainEqual(lines);
+  });
+
+  test("jobs for the same repo run one after another", async () => {
+    const s = setup(ConfigSchema.parse({}));
+    const reports: Report[] = [];
+    const runner = createEffectRunner({ root: s.root, config: ConfigSchema.parse({}), layout: () => undefined, thread: () => undefined, log: () => {}, report: (r) => void reports.push(r) });
+    // the same request twice at once: the second sees the first's finished worktree and adopts it
+    await runner(s.effect);
+    await runner(s.effect);
+    for (let i = 0; i < 100 && reports.length < 2; i++) await Bun.sleep(50);
+    expect(reports.map((r) => r.ok)).toEqual([true, true]);
+    expect(git(s.path, "rev-parse", "--abbrev-ref", "HEAD").out).toBe("wip/kyc-1");
+  });
+});
+
 describe("addWorktreeFromAsync", () => {
   test("fetches a remote branch that is not present locally", async () => {
     const base = realpathSync(mkdtempSync(join(tmpdir(), "agt-remote-")));

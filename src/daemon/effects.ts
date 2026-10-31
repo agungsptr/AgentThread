@@ -56,7 +56,7 @@ export function createEffectRunner(opts: {
   report?: (command: Extract<Command, { cmd: "worktree.report" }>) => void;
   /** The worktree_setup command's time limit (default 5 minutes). */
   setupTimeoutMs?: number;
-}): (effect: Effect) => Promise<EventBody[]> {
+}): EffectRunner {
   const log = opts.log ?? ((m: string) => console.error(m));
   const launch = opts.launch ?? ((job: SpawnJob) => launchSpawnJob(job, { logFile: paths(opts.root).daemonLog }));
   const bridgeFor =
@@ -91,7 +91,29 @@ export function createEffectRunner(opts: {
     }
   };
 
-  return async (effect) => {
+  // Background worktree jobs: one at a time per repo (keyed by its path), and setup commands one at a time in the
+  // workspace. stop() kills the setup groups still running and waits (bounded) for the jobs to clean up.
+  const jobs = new Set<Promise<void>>();
+  const repoChains = new Map<string, Promise<void>>();
+  const bg: Background = { groups: new Set(), setupChain: Promise.resolve(), stopped: false };
+  const inRepoChain = (key: string, fn: () => Promise<void>): Promise<void> => {
+    const next = (repoChains.get(key) ?? Promise.resolve()).then(fn);
+    const tail = next.catch(() => {});
+    repoChains.set(key, tail);
+    void tail.then(() => {
+      if (repoChains.get(key) === tail) repoChains.delete(key);
+    });
+    return next;
+  };
+  const stop = async (): Promise<void> => {
+    bg.stopped = true;
+    for (const pid of bg.groups) killGroup(pid);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([Promise.allSettled([...jobs]), new Promise<void>((r) => (timer = setTimeout(r, STOP_WAIT_MS)))]);
+    clearTimeout(timer);
+  };
+
+  const run = async (effect: Effect): Promise<EventBody[]> => {
     switch (effect.kind) {
       case "git.worktree.add": {
         // Only from a command: it runs before the command's events commit, so a failure fails the command.
@@ -104,10 +126,10 @@ export function createEffectRunner(opts: {
         // A task worktree can take minutes (a setup command): it is made in the background, never holding the
         // command queue, and its outcome re-enters the queue as a worktree.report command.
         const e = effect;
-        void (async () => {
+        const job = inRepoChain(e.repoPath, async () => {
           let error: string | undefined;
           try {
-            await addRepoWorktree(e, opts.root, opts.config, opts.setupTimeoutMs ?? SETUP_TIMEOUT_MS);
+            await addRepoWorktree(e, opts.root, opts.config, opts.setupTimeoutMs ?? SETUP_TIMEOUT_MS, bg);
             const t = opts.thread(e.thread);
             if (t) {
               try {
@@ -125,7 +147,9 @@ export function createEffectRunner(opts: {
           } catch (err) {
             log(`reporting the worktree for ${e.repo} of thread ${e.thread} failed: ${err instanceof Error ? err.message : String(err)}`);
           }
-        })();
+        });
+        jobs.add(job);
+        void job.finally(() => jobs.delete(job));
         return [];
       }
       case "thread.dir.ensure":
@@ -234,11 +258,29 @@ export function createEffectRunner(opts: {
       }
     }
   };
+  return Object.assign(run, { stop });
 }
+
+/** Runs an effect; stop() ends the background worktree jobs (the daemon calls it when it stops). */
+export type EffectRunner = ((effect: Effect) => Promise<EventBody[]>) & { stop(): Promise<void> };
 
 type RepoWorktreeEffect = Extract<Effect, { kind: "git.worktree.add"; repo: string }>;
 
+/** The background jobs' shared state: running setup process groups, the workspace's setup queue, and the stop flag. */
+interface Background {
+  groups: Set<number>;
+  setupChain: Promise<unknown>;
+  stopped: boolean;
+}
+
 const SETUP_TIMEOUT_MS = 5 * 60_000;
+const STOP_WAIT_MS = 5_000;
+
+const killGroup = (pid: number) => {
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {}
+};
 const shq = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
 
 /**
@@ -246,7 +288,11 @@ const shq = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
  * whatever it left running when it fails: nothing it started may act after the caller cleans up. Resolves once the
  * group's main process has exited.
  */
-export function runShellGroup(script: string, timeoutMs: number): Promise<{ exitCode: number; stderr: string; timedOut: boolean }> {
+export function runShellGroup(
+  script: string,
+  timeoutMs: number,
+  groups?: Set<number>,
+): Promise<{ exitCode: number; stderr: string; timedOut: boolean; pid?: number }> {
   return new Promise((done) => {
     let child: ReturnType<typeof spawn>;
     try {
@@ -255,28 +301,33 @@ export function runShellGroup(script: string, timeoutMs: number): Promise<{ exit
       done({ exitCode: 127, stderr: e instanceof Error ? e.message : String(e), timedOut: false });
       return;
     }
+    // While its main process runs, the group is listed in `groups`, so a stopping daemon can kill it.
+    const pid = child.pid;
+    if (pid) groups?.add(pid);
     let stderr = "";
     child.stderr?.on("data", (b: Buffer) => {
       if (stderr.length < 16_384) stderr += b.toString();
     });
     child.stdout?.on("data", () => {});
-    const killGroup = () => {
-      try {
-        if (child.pid) process.kill(-child.pid, "SIGKILL");
-      } catch {}
+    const kill = () => {
+      if (pid) killGroup(pid);
     };
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      killGroup();
+      kill();
     }, timeoutMs);
+    let finished = false;
     const finish = (exitCode: number) => {
+      if (finished) return;
+      finished = true;
       clearTimeout(timer);
-      if (timedOut || exitCode !== 0) killGroup();
+      if (pid) groups?.delete(pid);
+      if (timedOut || exitCode !== 0) kill();
       // A grandchild may hold the pipes open: stop reading instead of waiting for them to close.
       child.stdout?.destroy();
       child.stderr?.destroy();
-      done({ exitCode, stderr, timedOut });
+      done({ exitCode, stderr, timedOut, ...(pid ? { pid } : {}) });
     };
     child.once("error", () => finish(127));
     child.once("exit", (code, signal) => finish(code ?? (signal ? 128 + 9 : 1)));
@@ -299,8 +350,14 @@ function canonical(p: string): string {
  * run made (a worktree registered at the path during the run, else a folder that was not there, and a wip/<task>
  * branch that did not exist before) and throws.
  */
-async function addRepoWorktree(e: RepoWorktreeEffect, root: string, config: Config, setupTimeoutMs: number): Promise<void> {
+async function addRepoWorktree(e: RepoWorktreeEffect, root: string, config: Config, setupTimeoutMs: number, bg: Background): Promise<void> {
   const git = (args: string[], timeoutMs = 30_000) => spawnAsync("git", ["-C", e.repoPath, ...args], process.env, timeoutMs);
+  // The branch checked out at the path itself: git may not search above it (the thread directory, or the root).
+  const onBranch = async () => {
+    if (!existsSync(e.path)) return false;
+    const head = await spawnAsync("git", ["-C", e.path, "rev-parse", "--abbrev-ref", "HEAD"], { ...process.env, GIT_CEILING_DIRECTORIES: dirname(e.path) }, 10_000);
+    return head.exitCode === 0 && !head.timedOut && head.stdout.trim() === e.branch;
+  };
   const branchExists = async () => (await git(["rev-parse", "--verify", "--quiet", `refs/heads/${e.branch}`])).exitCode === 0;
   const registered = async () => {
     const r = await git(["worktree", "list", "--porcelain"]);
@@ -309,8 +366,11 @@ async function addRepoWorktree(e: RepoWorktreeEffect, root: string, config: Conf
   };
   const hadBranch = await branchExists();
   const wasRegistered = await registered();
+  // A worktree a previous job finished but never reported (the daemon stopped first) is adopted as it is.
+  if (wasRegistered && (await onBranch())) return;
   const hadPath = existsSync(e.path);
   try {
+    if (bg.stopped) throw new Error("the daemon is stopping");
     const setup = config.workspace.worktree_setup;
     if (setup === undefined) {
       await addWorktreeFromAsync(e.repoPath, e.branch, e.path, e.source);
@@ -318,13 +378,18 @@ async function addRepoWorktree(e: RepoWorktreeEffect, root: string, config: Conf
     }
     const values: Record<string, string> = { root, task: e.branch.replace(/^wip\//, ""), repo: e.repo, src: e.source, path: e.path };
     const command = setup.replace(/\{(root|task|repo|src|path)\}/g, (_, k: string) => shq(values[k]!));
-    const r = await runShellGroup(`cd ${shq(root)} || exit 1\n${command}`, setupTimeoutMs);
+    // One setup at a time in the workspace: setups often share caches, ports or a package store.
+    const ran = bg.setupChain.then(() => (bg.stopped ? undefined : runShellGroup(`cd ${shq(root)} || exit 1\n${command}`, setupTimeoutMs, bg.groups)));
+    bg.setupChain = ran.catch(() => {});
+    const r = await ran;
+    if (!r) throw new Error("the daemon is stopping");
     if (r.exitCode !== 0 || r.timedOut) {
-      const why = r.timedOut ? `timed out after ${Math.round(setupTimeoutMs / 1000)}s` : `exit ${r.exitCode}${r.stderr.trim() ? `: ${r.stderr.trim()}` : ""}`;
+      const why = bg.stopped ? "the daemon stopped" : r.timedOut ? `timed out after ${Math.round(setupTimeoutMs / 1000)}s` : `exit ${r.exitCode}${r.stderr.trim() ? `: ${r.stderr.trim()}` : ""}`;
       throw new Error(`worktree setup for ${e.repo} failed (${why})`);
     }
-    const head = existsSync(e.path) ? await spawnAsync("git", ["-C", e.path, "rev-parse", "--abbrev-ref", "HEAD"], process.env, 10_000) : undefined;
-    if (!head || head.exitCode !== 0 || head.stdout.trim() !== e.branch) {
+    if (!(await registered()) || !(await onBranch())) {
+      // Whatever the setup left running must not act after the cleanup below.
+      if (r.pid) killGroup(r.pid);
       throw new Error(`worktree setup for ${e.repo} did not produce ${e.path} on ${e.branch}`);
     }
   } catch (err) {

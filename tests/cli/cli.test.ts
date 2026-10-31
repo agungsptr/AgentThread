@@ -148,3 +148,15 @@ test("agt guide in a project with a broken config warns and prints the default g
   expect(r.err).toContain("; showing the default guide");
   expect(r.out).toContain("agt ticket done <thread>/<ticket> --summary <text>");
 });
+
+test("agt worktree add: a coordinator is told it gets a notice; a user is pointed at agt logs or the brief", () => {
+  agt(["daemon", "start"]);
+  expect(agt(["thread", "new", "One", "--type", "bug", "--task", "one"]).code).toBe(0);
+  expect(agt(["thread", "new", "Two", "--type", "bug", "--task", "two"]).code).toBe(0);
+  const name = root.split("/").at(-1)!;
+  expect(agt(["worktree", "add", "001", name, "--from", "HEAD"])).toMatchObject({ code: 0, out: `requested worktree for ${name}; check agt logs or the thread brief` });
+  expect(agt(["worktree", "add", "002", name, "--from", "HEAD"], { env: { ...COORD, AGT_THREAD: "002" } })).toMatchObject({
+    code: 0,
+    out: `requested worktree for ${name}; you will get a notice when it is ready`,
+  });
+});

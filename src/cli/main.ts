@@ -141,7 +141,12 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
       const command = { cmd: "worktree.add", thread: positionals[0], repo: positionals[1], ...(values.from ? { from: values.from } : {}) };
       const res = await request(paths(findRoot(cwd, env)).socket, { op: "command", command, actor: actorFromEnv(env) });
       if (!res.ok) throw new Error(res.error);
-      console.log(`requested worktree for ${positionals[1]}; you will get a notice when it is ready.`);
+      // Only a live coordinator gets the ready or failed notice; anyone else looks it up.
+      console.log(
+        env.AGT_ROLE === "coordinator"
+          ? `requested worktree for ${positionals[1]}; you will get a notice when it is ready`
+          : `requested worktree for ${positionals[1]}; check agt logs or the thread brief`,
+      );
       return 0;
     }
     case "guide": {

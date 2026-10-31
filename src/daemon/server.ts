@@ -251,6 +251,8 @@ export async function startDaemon(
     clearInterval(pollTimer);
     stopping ??= (async () => {
       await chain;
+      // No background worktree job may act after the daemon: their setup groups are killed, their cleanup awaited.
+      await runEffect.stop();
       listener.stop(true);
       store.close();
       rmSync(p.socket, { force: true });
@@ -268,8 +270,8 @@ export async function startDaemon(
  */
 function failStaleWorktreeRequests(store: EventStore, state: ReturnType<typeof project>, root: string, config: Config): void {
   for (const t of state.threads.values()) {
-    for (const [repo, req] of Object.entries(t.worktreeRequests)) {
-      const reason = `the daemon restarted before the worktree was ready; check ${req.path} and the branch ${req.branch}, then request it again`;
+    for (const repo of Object.keys(t.worktreeRequests)) {
+      const reason = "the daemon restarted while the worktree was being created; request it again (agt adopts it if it was finished)";
       const decision = handle(state, { cmd: "worktree.report", thread: t.id, repo, ok: false, error: reason }, { role: "user" }, { root, config, newId: randomUUID });
       if (!decision.ok || !decision.events.length) continue;
       for (const ev of store.append(decision.events, decision.actor ?? { role: "user" })) applyEvent(state, ev);

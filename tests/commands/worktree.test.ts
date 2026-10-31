@@ -121,6 +121,11 @@ describe("worktree.add in the handler", () => {
     expect(errorOf(run(base(), { cmd: "worktree.add", thread: "001", repo: "nope", from: "main" }))).toBe("unknown repo nope; workspace repos: api, web");
   });
 
+  test("rejects a done thread", () => {
+    const s = stateOf(INIT, taskThreadCreated("001", "kyc-1", { status: "done" }));
+    expect(errorOf(run(s, { cmd: "worktree.add", thread: "001", repo: "api", from: "main" }))).toBe("thread 001 is done");
+  });
+
   test("rejects a legacy thread", () => {
     expect(errorOf(run(base(), { cmd: "worktree.add", thread: "002", repo: "api", from: "main" }))).toBe("thread 002 uses the single-repo layout");
   });
@@ -250,11 +255,68 @@ describe("agt worktree add through the daemon", () => {
     store.close();
     const { cmd, events } = await start(root);
     const failed = (await events()).filter((e) => e.type === "worktree.failed");
-    expect(failed.map((e) => e.payload)).toEqual([{ repo: "api", reason: expect.stringContaining("the daemon restarted before the worktree was ready") }]);
+    expect(failed.map((e) => e.payload)).toEqual([{ repo: "api", reason: "the daemon restarted while the worktree was being created; request it again (agt adopts it if it was finished)" }]);
     expect(project(await events()).threads.get("001")!.worktreeRequests).toEqual({});
     expect(await cmd({ cmd: "worktree.add", thread: "001", repo: "api", from: "main" }, COORD)).toMatchObject({ ok: true });
     for (let i = 0; i < 200 && !(await events()).some((e) => e.type === "worktree.added"); i++) await Bun.sleep(50);
     expect(project(await events()).threads.get("001")!.worktrees.api?.path).toBe(path);
+  });
+});
+
+describe("I2: a finished but unreported worktree, and stopping the daemon", () => {
+  let daemon: Daemon | undefined;
+  const savedXdg = process.env.XDG_CONFIG_HOME;
+  beforeAll(() => {
+    process.env.XDG_CONFIG_HOME = isolatedConfigHome();
+  });
+  afterAll(() => {
+    if (savedXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = savedXdg;
+  });
+  afterEach(async () => {
+    await daemon?.stop();
+    daemon = undefined;
+  });
+  const events = async (root: string) => {
+    const r = await request(paths(root).socket, { op: "events.since", seq: 0 });
+    return r.ok ? (r.result as StoredEvent[]) : [];
+  };
+
+  test("re-requesting after a finished but unreported job adopts the worktree: AGENTS.md and the guard are rewritten", async () => {
+    // a setup that would fail if it ran: adoption must skip it
+    const root = workspace(["workspace:", "  worktree_setup: exit 1", ""].join("\n"));
+    const dir = join(root, ".worktrees", "kyc-1");
+    const path = join(dir, "api");
+    const store = new EventStore(paths(root).db);
+    store.append([taskThreadCreated("001", "kyc-1", { dir })], USER);
+    store.append([{ type: "worktree.requested", thread: "001", payload: { repo: "api", path, branch: "wip/kyc-1", source: "main" } }], { ...COORD, via: "command" });
+    store.close();
+    // the previous daemon's job finished the worktree but never reported it
+    mkdirSync(dir, { recursive: true });
+    expect(sh(join(root, "api"), "worktree", "add", "-q", "-b", "wip/kyc-1", path, "main").ok).toBe(true);
+    daemon = await startDaemon(root, { log: () => {} });
+    expect((await events(root)).filter((e) => e.type === "worktree.failed").length).toBe(1);
+    const r = await request(paths(root).socket, { op: "command", command: { cmd: "worktree.add", thread: "001", repo: "api", from: "main" }, actor: COORD });
+    expect(r).toMatchObject({ ok: true });
+    for (let i = 0; i < 200 && !(await events(root)).some((e) => e.type === "worktree.added" || e.type === "worktree.failed" && (e.payload as { reason: string }).reason !== "the daemon restarted while the worktree was being created; request it again (agt adopts it if it was finished)"); i++) await Bun.sleep(50);
+    expect((await events(root)).filter((e) => e.type === "worktree.added").map((e) => e.payload)).toEqual([{ repo: "api", path, branch: "wip/kyc-1", source: "main" }]);
+    expect(sh(path, "rev-parse", "--abbrev-ref", "HEAD").out).toBe("wip/kyc-1");
+    expect(existsSync(join(path, "AGENTS.md"))).toBe(true);
+    expect(sh(path, "config", "--worktree", "--get", "core.hooksPath").out).toBe(join(root, ".agentthread", "hooks"));
+  });
+
+  test("stop() kills a running setup group: nothing it started acts afterwards", async () => {
+    const root = workspace(["workspace:", "  worktree_setup: (sleep 1; touch {root}/marker) & sleep 5", ""].join("\n"));
+    daemon = await startDaemon(root, { log: () => {} });
+    expect(await request(paths(root).socket, { op: "command", command: { cmd: "thread.new", title: "KYC", type: "feature", task: "kyc-1" }, actor: USER })).toMatchObject({ ok: true });
+    expect(await request(paths(root).socket, { op: "command", command: { cmd: "worktree.add", thread: "001", repo: "api", from: "main" }, actor: COORD })).toMatchObject({ ok: true });
+    await Bun.sleep(300);
+    const t0 = Date.now();
+    await daemon.stop();
+    daemon = undefined;
+    expect(Date.now() - t0).toBeLessThan(5500);
+    await Bun.sleep(1500);
+    expect(existsSync(join(root, "marker"))).toBe(false);
   });
 });
 

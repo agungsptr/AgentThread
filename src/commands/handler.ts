@@ -405,6 +405,7 @@ function newThread(state: State, cmd: Extract<Command, { cmd: "thread.new" }>, c
  */
 function addWorktree(t: Thread, repo: string, from: string | undefined, ctx: HandlerContext): Decision {
   if (t.legacy || t.dir === undefined || t.task === undefined) reject(`thread ${t.id} uses the single-repo layout`);
+  if (t.status === "done") reject(`thread ${t.id} is done`);
   const repos = workspaceReposNoSpawn(ctx.root, ctx.config ?? DEFAULT_CONFIG);
   const entry = Object.hasOwn(repos, repo) ? repos[repo] : undefined;
   if (!entry) reject(`unknown repo ${repo}; workspace repos: ${Object.keys(repos).join(", ") || "(none)"}`);
