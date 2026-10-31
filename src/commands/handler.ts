@@ -6,6 +6,7 @@ import { canTransitionThread, canTransitionTicket, scopesOverlap, slugify, valid
 import { ROLES, type Actor, type EventBody, type Role, type ThreadStatus, type TicketStatus } from "../domain/types.ts";
 import { roleAgent, type RoleAgent } from "../agents/roles.ts";
 import { agentName, awaitsWorker, conflictingTicket, FILE_HOLDING, liveSessions, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure as tabEnsureFor, workerLimit } from "../orchestration/sessions.ts";
+import { stageNa } from "../workflow/project-config.ts";
 import { workspaceReposNoSpawn } from "../project/workspace.ts";
 import { actorSession, isLive, type State, type Thread, type Ticket } from "../state/projection.ts";
 import type { Command, CommandName } from "./schema.ts";
@@ -61,6 +62,7 @@ const ALLOWED: Record<CommandName, readonly Role[]> = {
   "thread.status": ["user", "main", "coordinator"],
   "thread.choose": ["user", "main"],
   "thread.cancel": ["user", "main"],
+  "thread.waiting": ["coordinator"],
   "ticket.add": ["coordinator"],
   "ticket.files": ROLES,
   "ticket.claim": ["worker"],
@@ -269,6 +271,10 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
       checkTier(cmd.tier, ctx);
       return { events: [{ type: "thread.tier_chosen", thread: t.id, payload: { tier: cmd.tier, auto: false } }] };
     }
+    case "thread.waiting":
+      if (t.legacy) reject("waiting applies to task threads");
+      if (t.status === "done") reject(`thread ${t.id} is done`);
+      return { events: [{ type: "thread.waiting", thread: t.id, payload: { what: cmd.what } }] };
     case "thread.cancel":
       if (!t.tierProposal) reject(`thread ${t.id} is not waiting for a tier`);
       // The usual path to done (dependents unblock), though an open or blocked thread cannot otherwise go straight to done.
@@ -297,9 +303,10 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
       } else if (cmd.by === "user" && cmd.state !== "skipped") reject("--by user is only for approve and skipped");
       else if (cmd.state === "skipped" && cmd.by !== "user") reject("only the user skips a stage; record it with --by user");
       if ((cmd.state === "skipped" || cmd.state === "na") && !cmd.reason) reject(`stage ${cmd.stage} ${cmd.state} needs --reason <why>`);
-      return {
-        events: [{ type: "stage.recorded", thread: t.id, payload: { stage: cmd.stage, state: cmd.state, by: cmd.by ?? "coordinator", ...(cmd.reason ? { reason: cmd.reason } : {}) } }],
-      };
+      const recorded: EventBody = { type: "stage.recorded", thread: t.id, payload: { stage: cmd.stage, state: cmd.state, by: cmd.by ?? "coordinator", ...(cmd.reason ? { reason: cmd.reason } : {}) } };
+      // The last stage done is the thread ready for review (the squash is done), through the usual transition.
+      const toReview = cmd.stage === 10 && cmd.state === "done" && t.status === "in_progress" ? threadStatus(state, t, "review", "stage 10 done", ctx).events : [];
+      return { events: [recorded, ...toReview] };
     }
     case "stack.acquire": {
       const { holder, queue } = state.stack;
@@ -490,6 +497,8 @@ function newThread(state: State, cmd: Extract<Command, { cmd: "thread.new" }>, c
           status,
         },
       },
+      // The stages the config rules out are na from the start (stage.recorded needs the thread, so after thread.created).
+      ...stageNa(ctx.config ?? DEFAULT_CONFIG).map(({ stage, reason }): EventBody => ({ type: "stage.recorded", thread: id, payload: { stage, state: "na", by: "agt", reason } })),
       ...tierEvents(state, id, cmd),
     ],
     effects: [

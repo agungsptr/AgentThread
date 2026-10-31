@@ -66,7 +66,7 @@ const types = (evs: EventBody[]) => evs.map((e) => e.type);
 test("thread.new without a tier is unchanged: no proposal, a tab straight away", () => {
   const s = base();
   const { r, effects } = run(s, NEW);
-  expect(r.ok && types(r.events)).toEqual(["thread.created"]);
+  expect(r.ok && types(r.events)).toEqual(["thread.created", "stage.recorded", "stage.recorded"]);
   expect(effects).toEqual(["thread.dir.ensure", "herdr.tab.ensure"]);
   expect(s.threads.get("001")!.tierProposal).toBeUndefined();
 });
@@ -76,6 +76,8 @@ test("thread.new with a tier proposes it: thread directory yes, tab no; the time
   const { r, effects } = run(s, { ...NEW, tier: "big", reason: "touches auth" });
   expect(r.ok && r.events.map((e) => [e.type, e.payload])).toEqual([
     ["thread.created", expect.anything()],
+    ["stage.recorded", expect.anything()],
+    ["stage.recorded", expect.anything()],
     ["thread.tier_proposed", { tier: "big", reason: "touches auth" }],
     ["thread.tier_timer", { state: "running" }],
   ]);
@@ -86,7 +88,7 @@ test("thread.new with a tier proposes it: thread directory yes, tab no; the time
 test("while main is active the proposal starts paused", () => {
   const s = base("active");
   const { r } = run(s, { ...NEW, tier: "big", reason: "x" });
-  expect(r.ok && types(r.events)).toEqual(["thread.created", "thread.tier_proposed"]);
+  expect(r.ok && types(r.events)).toEqual(["thread.created", "stage.recorded", "stage.recorded", "thread.tier_proposed"]);
   expect(s.threads.get("001")!.tierProposal!.runningSince).toBeUndefined();
 });
 
@@ -143,7 +145,7 @@ test("only the user (the daemon) may auto-choose", () => {
 test("--now skips the wait", () => {
   const s = base();
   const { r, effects } = run(s, { ...NEW, tier: "big", reason: "user asked", now: true });
-  expect(r.ok && types(r.events)).toEqual(["thread.created", "thread.tier_proposed", "thread.tier_chosen"]);
+  expect(r.ok && types(r.events)).toEqual(["thread.created", "stage.recorded", "stage.recorded", "thread.tier_proposed", "thread.tier_chosen"]);
   expect(effects).toEqual(["thread.dir.ensure", "herdr.tab.ensure"]);
   const t = s.threads.get("001")!;
   expect(t.tier).toBe("big");
@@ -179,7 +181,7 @@ test("a proposal runs and comes due with no main session at all", () => {
   n = 0;
   const s = stateOf(INIT);
   const { r } = run(s, { ...NEW, tier: "big", reason: "x" }, USER);
-  expect(r.ok && types(r.events)).toEqual(["thread.created", "thread.tier_proposed", "thread.tier_timer"]);
+  expect(r.ok && types(r.events)).toEqual(["thread.created", "stage.recorded", "stage.recorded", "thread.tier_proposed", "thread.tier_timer"]);
   expect(dueProposals(s, Date.parse("2026-10-24T10:00:10.000Z"), 10_000)).toEqual(["001"]);
 });
 

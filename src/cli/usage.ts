@@ -10,6 +10,7 @@ export const USAGE = `usage: agt <command>
   thread choose <id> --tier <name>
   thread cancel <id>
   thread status <id> <status> [--reason <text>]
+  thread waiting <id> "<what>"   say the coordinator waits for the user; main is told, and it ends when the user answers
   ticket add <thread> <title...> --scope <path> [--scope <path>]...            (a legacy thread)
   ticket add <thread> <title...> --repo <repo> --file <path> [--file <path>]... [--doc <path>]   (a task thread; --file takes files, not directories)
   ticket files <thread>/<ticket>   the repo-relative files the ticket may change

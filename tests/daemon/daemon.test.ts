@@ -113,7 +113,7 @@ test("a failing effect rejects the command and writes no event", async () => {
   }
   expect(r.ok).toBe(false);
   const events = await request(sock(), { op: "events.since", seq: 0 });
-  expect(events.ok && (events.result as StoredEvent[]).map((e) => e.type)).toEqual(["project.initialized", "thread.created"]);
+  expect(events.ok && (events.result as StoredEvent[]).map((e) => e.type)).toEqual(["project.initialized", "thread.created", "stage.recorded", "stage.recorded"]);
 });
 
 test("a second daemon on the same project is refused even without its socket", async () => {

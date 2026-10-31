@@ -45,12 +45,9 @@ const COMMANDS: Record<SessionRole, string[]> = {
   worker: ["ticket claim|reopen", "ticket done", "ticket block", "note", "progress", "question"],
 };
 
-/**
- * Task threads only: the stage and stack-lock commands their coordinator runs (§13). `thread waiting` joins them once
- * it has a USAGE line.
- */
+/** Task threads only: the stage, stack-lock and waiting commands their coordinator runs (§13). */
 const COMMANDS_TASK: Partial<Record<SessionRole, string[]>> = {
-  coordinator: ["stage", "stack acquire", "stack release"],
+  coordinator: ["stage", "stack acquire", "stack release", "thread waiting"],
 };
 
 /** Where a role's command line differs from the shared USAGE line, keyed by the prefix in COMMANDS. */

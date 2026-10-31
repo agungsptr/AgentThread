@@ -67,7 +67,7 @@ test("thread.new opens a tab in the thread directory and records it", async () =
     "--env", `GIT_CEILING_DIRECTORIES=${join(root, ".worktrees")}`,
   ]);
   expect(frontmatter("001-fix-race")).toMatchObject({ tab: "w1:t1" });
-  expect(await events()).toEqual(["project.initialized", "layout.registered", "thread.created", "thread.tab_opened", "session.created"]);
+  expect(await events()).toEqual(["project.initialized", "layout.registered", "thread.created", "stage.recorded", "stage.recorded", "thread.tab_opened", "session.created"]);
 });
 
 test("done closes the tab", async () => {

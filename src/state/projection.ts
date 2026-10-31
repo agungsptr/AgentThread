@@ -150,6 +150,11 @@ export interface Thread {
   stages: Partial<Record<number, { state: Exclude<StageState, "approve">; by: StageBy; reason?: string; ts: string }>>;
   /** The user approved the e2e stage (`agt stage <thread> 7 approve --by user`). */
   stage7Approved: boolean;
+  /**
+   * The coordinator said it waits for the user. `idleSeen` is set by the coordinator's next idle; the turn start after
+   * that (the user answering) clears it.
+   */
+  waiting?: { what: string; since: string; idleSeen: boolean };
   decisions: Entry[];
   findings: Entry[];
   questions: Question[];
@@ -209,7 +214,7 @@ export function actorSession(state: State, actor: Actor): string | undefined {
 export const COMMAND_OUTPUT_TYPES: ReadonlySet<string> = new Set([
   "thread.status_changed", "ticket.created", "ticket.claimed", "ticket.completed", "ticket.blocked", "ticket.reopened",
   "ticket.reviewed", "ticket.accepted", "ticket.returned", "stage.recorded", "log.appended", "decision.recorded", "note.recorded", "progress.recorded", "question.recorded", "question.answered",
-  "worker.queued",
+  "worker.queued", "thread.waiting",
 ]);
 
 /**
@@ -444,6 +449,11 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       t.rootPane = ev.payload.pane;
       note(t, ev, `root pane is now ${ev.payload.pane}`);
       break;
+    case "thread.waiting":
+      // A repeat replaces the text and starts the wait over.
+      t.waiting = { what: ev.payload.what, since: ev.ts, idleSeen: false };
+      note(t, ev, `waiting for the user: ${ev.payload.what}`);
+      break;
     case "worker.queued":
       t.workerQueue.push(ev.payload.ticket);
       if (ev.payload.agent) t.workerAgents[ev.payload.ticket] = ev.payload.agent;
@@ -549,6 +559,15 @@ function threadNote(state: State, ev: StoredEvent, message: string): void {
   if (t) note(t, ev, message);
 }
 
+/** A coordinator's turn start after its idle: the user answered, so the thread no longer waits. */
+function clearWaiting(state: State, s: Session, ev: StoredEvent): void {
+  if (ev.type !== "session.active" || s.role !== "coordinator" || !s.thread) return;
+  const t = state.threads.get(s.thread);
+  if (!t?.waiting?.idleSeen) return;
+  delete t.waiting;
+  note(t, ev, "the user answered; no longer waiting");
+}
+
 /**
  * The first turn end (idle) or end of a worker whose ticket waits in review is when the coordinator hears it is ready:
  * edits the worker makes after `agt ticket done` within that turn are then in. Records that event's seq once.
@@ -613,6 +632,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
         if (ev.type === "session.active" && ev.actor.role !== "user") s.hooksSeen = true;
         s.status = atPrompt ? "idle" : "active";
         s.lastActiveAt = ev.ts;
+        clearWaiting(state, s, ev);
       }
       return true;
     }
@@ -631,6 +651,8 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
         }
         s.status = "idle";
         s.lastActiveAt = ev.ts;
+        const w = s.role === "coordinator" && s.thread ? state.threads.get(s.thread)?.waiting : undefined;
+        if (w) w.idleSeen = true;
         if (ev.payload.contextTokens !== undefined) s.contextTokens = ev.payload.contextTokens;
       }
       return true;

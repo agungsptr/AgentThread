@@ -350,6 +350,9 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         fillWorkers(ev.thread);
         notify(coordinatorToNotify(ev.thread), `Ticket ${ev.payload.ticket} is blocked: ${ev.payload.reason}.`);
         break;
+      case "thread.waiting":
+        notify(liveSessions(state, undefined, "main")[0], `Thread ${ev.thread} (${state.threads.get(ev.thread)?.title ?? ""}) waits for you in its tab: ${ev.payload.what}`);
+        break;
       case "thread.status_changed": {
         const t = state.threads.get(ev.thread);
         if (ev.payload.from === "blocked" && ev.payload.to === "open") {

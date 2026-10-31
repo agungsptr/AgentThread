@@ -25,6 +25,7 @@ export const CommandSchema = z.discriminatedUnion("cmd", [
   }),
   z.object({ cmd: z.literal("thread.choose"), thread: threadId, tier: tierName, auto: z.boolean().optional() }),
   z.object({ cmd: z.literal("thread.cancel"), thread: threadId }),
+  z.object({ cmd: z.literal("thread.waiting"), thread: threadId, what: text }),
   z.object({ cmd: z.literal("thread.status"), thread: threadId, status: z.enum(THREAD_STATUSES), reason: z.string().optional() }),
   z.object({
     cmd: z.literal("ticket.add"),

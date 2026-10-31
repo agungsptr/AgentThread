@@ -38,7 +38,8 @@ export const STAGE_NAMES = [
 export const STAGE_STATES = ["done", "skipped", "na", "approve"] as const;
 export type StageState = (typeof STAGE_STATES)[number];
 /** Who recorded a stage. Plan 12 adds "agt". */
-export type StageBy = "coordinator" | "user";
+/** `agt` is the daemon itself: the stages the config rules out are recorded na at task-thread creation. */
+export type StageBy = "coordinator" | "user" | "agt";
 
 export interface Layout {
   workspace: string;
@@ -88,6 +89,7 @@ export type EventBody =
   | { type: "ticket.reviewed"; thread: string; payload: { ticket: string; summary: string } }
   | { type: "ticket.accepted"; thread: string; payload: { ticket: string } }
   | { type: "ticket.returned"; thread: string; payload: { ticket: string; note: string } }
+  | { type: "thread.waiting"; thread: string; payload: { what: string } }
   | { type: "stage.recorded"; thread: string; payload: { stage: number; state: StageState; by: StageBy; reason?: string } }
   | { type: "stack.acquired" | "stack.queued"; thread: string; payload: { thread: string; purpose?: string } }
   | { type: "stack.released"; thread: string; payload: { thread: string; reason: string } }

@@ -1,9 +1,11 @@
 import type { GitTrail } from "../project/gittrail.ts";
 import { progressBy, stageLine, type Session, type Thread } from "../state/projection.ts";
 import { DEFAULT_CONFIG, type Config } from "../config/config.ts";
+import { migrationConfigured } from "../workflow/project-config.ts";
 import { capBytes, clampHeadings, oneLine, scopeOf, tierLines } from "./markdown.ts";
 
 const MAX_BYTES = 16384;
+const MIGRATION_LINE = "Migration SQL: not needed (no migration tool configured).";
 const TRUNC = "_(truncated — see sub.thread.md)_";
 
 export { capBytes };
@@ -51,13 +53,13 @@ export function renderBrief(o: { thread: Thread; sessions?: Session[]; trail?: G
   let md = "";
   const tier = tierLines(o.thread, o.sessions ?? [], o.config ?? DEFAULT_CONFIG);
   for (const lim of LEVELS) {
-    md = build(o.thread, o.trail, o.trails ?? {}, lim, tier);
+    md = build(o.thread, o.trail, o.trails ?? {}, lim, tier, o.config ?? DEFAULT_CONFIG);
     if (Buffer.byteLength(md) < MAX_BYTES) return md;
   }
   return hardFit(md);
 }
 
-function build(t: Thread, trail: GitTrail | undefined, trails: Record<string, GitTrail | undefined>, lim: Limits, tier: string[]): string {
+function build(t: Thread, trail: GitTrail | undefined, trails: Record<string, GitTrail | undefined>, lim: Limits, tier: string[], config: Config): string {
   const full = LEVELS[0]!;
   let handoff: string[];
   if (!t.handoff) handoff = ["None yet."];
@@ -117,6 +119,7 @@ function build(t: Thread, trail: GitTrail | undefined, trails: Record<string, Gi
     "",
     `Status: ${t.status}`,
     ...stageLine(t),
+    ...(!t.legacy && !migrationConfigured(config) ? [MIGRATION_LINE] : []),
     ...tier,
     t.progress ? `Latest progress: ${t.progress.ts} ${progressBy(t.progress)} ${capBytes(oneLine(t.progress.message), 1000)}` : "No progress recorded yet.",
     "",
