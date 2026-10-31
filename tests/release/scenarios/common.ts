@@ -145,12 +145,18 @@ export async function verifyThread(h: H, thread: string, o: { coordinator: strin
   const stalls = all.filter((e) => e.type === "session.stalled" && e.thread === thread);
   h.check("no session reported stalled in a healthy run", stalls.length === 0, stalls.map((e) => JSON.stringify(e.payload)).join(",") || "none");
 
-  // Worker panes are closed once their ticket is done.
-  const panes = await h.herdr.panes();
+  // Worker panes are closed once their ticket is done. A worker ends when its turn does, and an agent may keep working
+  // after `agt ticket done` (omp writes its summary for 15s or more) while the coordinator already moved the thread to
+  // review, so the panes get a bounded wait instead of one snapshot.
   const workerPanes = all
     .filter((e): e is EventOf<"session.attached"> => e.type === "session.attached" && workers.some((w) => w.payload.session === e.payload.session))
     .map((e) => e.payload.pane);
   h.check("worker panes opened", workerPanes.length > 0, workerPanes.join(","));
+  let panes = await h.herdr.panes();
+  for (const until = Date.now() + Math.min(90_000, Math.max(0, h.left() - 30_000)); workerPanes.some((p) => panes.includes(p)) && Date.now() < until; ) {
+    await Bun.sleep(2_000);
+    panes = await h.herdr.panes();
+  }
   h.check("worker panes closed", workerPanes.every((p) => !panes.includes(p)), workerPanes.filter((p) => panes.includes(p)).join(",") || "all closed");
 }
 
