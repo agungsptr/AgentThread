@@ -1,0 +1,23 @@
+# Multi-repo workspaces (Plan 10): rulings and follow-ups
+
+Source: the SDD ledger for docs/superpowers/plans/2026-11-01-workspaces.md (branch feat/workspaces, ca863ee..99031de). Plans 11–13 continue §13.
+
+## Carried into later plans
+- Plan 11: tickets carry a repo and a file list; a worker's cwd becomes its ticket's repo worktree; the pre-commit hook checks staged files against the ticket's files; stages and gates; stack lock.
+- Plan 12: workflow content, extra config fields, setup prefill, `agt thread cleanup`; the non-autonomous permissions of the other adapters for worker commits and coordinator git switch/merge.
+- Plan 13: the release e2e on a multi-repo scratch workspace (the scenarios still assume one worktree per thread); check with real Herdr whether a user shell opened in a thread tab inherits AGT_ROLE=coordinator (its commits on wip/<task> would be refused).
+- Zentro: set workspace.worktree_setup to `make wt-new TASK={task} SRC={src} REPOS={repo}` (its script already creates .worktrees/<task>/<repo> on wip/<task> from origin/$SRC).
+
+## Rulings
+- Task 2: Ruling: a task name derived from the title gets a numeric suffix (-2, -3, …) when taken; an explicit --task collision is still rejected — why: main creates threads autonomously; a repeated title must not stop it — cost if wrong: less predictable folder names.
+- Task 2: Ruling: GIT_CEILING_DIRECTORIES=<root>/.worktrees in non-legacy thread pane envs — why: in a single-repo project the thread dir sits inside the user's checkout and git there would act on it unguarded — cost if wrong: an agent running git in the thread dir gets 'not a git repository' (intended).
+- Task 3: Ruling: worktree add becomes asynchronous (command emits worktree.requested + background job outside the queue; result re-enters as worktree.report → worktree.added|worktree.failed + coordinator notice); setup command runs in its own process group, killed as a group on timeout — why: a minutes-long setup must not stall every thread's commands/hooks, and orphaned children could create unrecorded worktrees — cost if wrong: the coordinator waits for a notice instead of a synchronous result.
+- Ruling: one fix wave per final-fix-brief.md (I1–I4 + cheap: per-repo serialisation, kill on verify-fail, registered-check verification, done-thread reject, CLI wording) — why: git surprises / lost work for this user — cost if wrong: none found. Note: Zentro make wt-new already creates .worktrees/<task>/<repo> on wip/<task> from origin/$SRC (checked .scripts/7-worktree-new.sh).
+
+## Deferred
+- Task 1: minor (deferred → final triage, likely fix-before-merge): re-running agt setup drops a configured source_branch on blank and replaces workspace.repos wholesale (drops hand-added entries) — show current as default and merge; symlinked child repos skipped; .docs existing-but-not-git never initialised / partial .docs not repaired; folder nested inside a parent repo counts as workspace and gets .gitignore lines; repo named "shared" collides with .docs/shared; tests missing for .docs preservation, identity fallback, symlink, submodule.
+- Task 2: minor (deferred): guide legacy detection parses sub.thread.md (best effort); stray .worktrees/<task> folder adopted silently; main prompt/guide don't mention --task; no RED this round.
+- Task 3: minor (deferred → final triage, likely fix-before-merge): stop() neither kills nor awaits in-flight setup groups (orphan setup can race a re-request); excludes migration only re-points the written repo's worktrees; background jobs not serialised per repo (concurrent git config / shared hooks); setup exit 0 + failed verification leaves children running; no notice when no coordinator is live; worktree.report has no job nonce.
+- Task 4: minor (deferred → final triage): pre-merge-commit not guarded (non-squash merge on any branch); coordinator thread/* allowance ignores AGT_TASK; tests missing for detached HEAD / empty AGT_TASK / non-squash merge; coordinator prompt "review and commit" bullet contradicts the new rule; task-thread tabs created before this change lack AGT_TASK.
+- Task 5: minor (deferred → final triage): byte budget unbounded beyond ~30 repos (cap repo sections); trail empties after wip merges into source (use reflog when merge-base == HEAD); root-HEAD fallback wrong for nested repos; tests missing for bad-source fallback and byte-for-byte legacy; e2e sleeps on the 3s TTL; brief only refreshes on events (pre-existing).
+- Final: deferred — a user shell opened in a thread tab may inherit AGT_ROLE=coordinator from the tab env and get its commits refused on wip/<task> (pre-existing tab-env behaviour; verify with Herdr in Plan 13).
