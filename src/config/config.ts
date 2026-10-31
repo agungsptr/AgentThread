@@ -115,6 +115,8 @@ export const ConfigSchema = z
          * session whose job is still retrying its report.
          */
         spawn_timeout: durationAtLeast("60s").default("3m"),
+        /** How long a worker may keep running after its ticket is done before the sweep closes it. At least 30s. */
+        finished_worker_grace: durationAtLeast("30s").default("5m"),
       })
       .strict()
       .default({}),

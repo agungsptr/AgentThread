@@ -41,6 +41,7 @@ test("defaults match the spec", () => {
       rotation: { on_precompact: true, context_threshold: 0.7, idle_timeout: "24h", context_window: 200000, max_turns: 150, max_age: "8h" },
       handoff: { timeout: "5m", fallback_generate: true },
       spawn_timeout: "3m",
+      finished_worker_grace: "5m",
     },
     checkpoint: { reminder_turns: 8, reminder_after: "30m" },
     herdr: { main_tab_label: "main", close_tab_on_done: true, close_worker_pane_on_end: true, poll_interval: "2s" },

@@ -19,6 +19,20 @@ export function sweep(state: State, now: string, ctx: ReactorContext): { events:
       events.push({ type: "session.failed", ...(s.thread ? { thread: s.thread } : {}), payload: { session: s.id, reason: `spawn report lost after ${spawnTimeout}` } } as EventBody);
     }
   }
+  // A worker whose ticket is done but that never goes idle would hold its slot forever: close it. The ended event makes
+  // the reactor send the coordinator's done notice, so the hung-worker notice goes first.
+  const grace = ctx.config.session.finished_worker_grace;
+  for (const w of liveSessions(state, undefined, "worker")) {
+    const t = w.thread ? state.threads.get(w.thread) : undefined;
+    const k = t?.tickets.find((x) => x.id === w.ticket);
+    if (!t || t.status === "done" || k?.status !== "done" || k.assignee !== w.id || !k.completedAt) continue;
+    if (Date.parse(now) - Date.parse(k.completedAt) <= durationMs(grace)) continue;
+    const coordinators = [...state.sessions.values()].filter((x) => x.thread === t.id && x.role === "coordinator");
+    const target = liveSessions(state, t.id, "coordinator")[0] ?? coordinators.filter((x) => x.status === "lost").at(-1) ?? coordinators.filter((x) => x.status !== "rotated").at(-1);
+    if (target) events.push({ type: "notice.queued", thread: t.id, payload: { session: target.id, text: `The worker for ticket ${k.id} finished its ticket but did not stop within ${grace}; closed it.` } });
+    events.push({ type: "session.ended", thread: t.id, payload: { session: w.id } });
+    if (ctx.config.herdr.close_worker_pane_on_end && w.pane) effects.push({ kind: "pane.close", pane: w.pane });
+  }
   for (const s of liveSessions(state, undefined, "coordinator")) {
     if (s.status === "starting") continue;
     if (!s.pane) continue; // not attached yet: it cannot have seen a handoff request
