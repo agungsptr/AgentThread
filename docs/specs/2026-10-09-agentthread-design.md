@@ -615,3 +615,98 @@ Known facts, still to be verified in the plan's research step:
 - **Legacy permission keys (my call):**
   - Autonomous mode is the default for every role.
   - `claude.permission_mode` and `claude.extra_allowed_tools` still load, but they no longer reduce autonomy. They are ignored with a one-time warning, unless the user sets `agents.autonomous: false` to keep the old restricted behavior.
+
+## 13. Revision 2026-10-31: Multi-repo workspaces and the feature workflow
+
+**Why.** The user's real projects are workspaces of several git repos in one parent folder that is not itself a repo. Examples:
+- `Clients/project-a`, with `web`, `web-fe`, `admin-fe`, `auth`, `auth-fe`, `finance` and `notif`;
+- `Clients/project-b`, with `project-b-api` and `project-b-web`.
+
+One task often spans several of these repos (most often an API repo plus its frontend). The user already runs a proven process there by hand: the `feature-workflow` skill, with ten stages, one manager and three workers, one worktree per task per repo, workers that commit, and a manager that squashes. AgentThread must run that same process, with the same results in every project, including new projects set up from scratch. This revision supersedes the single-repo parts of §4, §11.3 and §12 where they conflict.
+
+### 13.1 Roles
+| Role | Focus | Talks to the user | Never |
+|---|---|---|---|
+| **main** | Manages many tasks at once. It takes a task from the user, creates its thread, proposes a tier (§12.6), watches every thread, and tells the user which pane needs an answer. | yes | discusses one task's details, or edits repos |
+| **coordinator** | Does one task through the ten stages (§13.4). It discusses the task with the user directly, decides which repos the task needs, and creates the worktrees. It writes the spec and tickets, dispatches workers, reviews each commit, runs tests, the stack, e2e and the browser check, writes the release doc, and squashes. | yes, directly in its pane | edits a repo file (even one line: it sends the worker the exact change), pushes, opens PRs |
+| **worker** | One ticket in a fresh session. It edits only the files its ticket lists, validates its own work first, commits them with a pathspec on `wip/<task>`, and reports back. | no (it asks the coordinator) | pushes, amends, rebases, resets, stashes, runs `git add -A`/`.`/`commit -a`, touches servers, or edits the user's checkouts |
+| **user** | Decides, pushes, opens PRs, and runs manual migration SQL. An optional browser check of their own whenever they like. | — | — |
+
+- **Communication chain.** Worker → coordinator uses `agt question` and `agt answer` (§12.9). The coordinator talks to the user directly.
+- **Needs-you notices.** When a coordinator waits for the user, main is notified and tells the user which pane and which thread need an answer. The coordinator emits this with a new command, `agt thread waiting <id> "<what>"`; the next activity in that thread clears it.
+
+### 13.2 Workspace
+- **Project root.** `agt init` runs in the workspace folder, which does not have to be a git repo.
+- **Repos.** The repos are the workspace's direct child folders that are git top levels. They are listed in config as `workspace.repos`, which can be edited by hand.
+- **Single-repo projects.** A workspace whose root is itself a git repo is a one-repo workspace: the repo is the root, under its folder name. Existing projects keep working (my call).
+- **Private docs.** `.docs/` at the workspace root is a private git repo. It holds `shared/` plus one folder per repo, each with `issues/`, `specs/`, `plans/`, `adr/`, `notes/` and `agents/`. `agt init` creates it when it is missing. The coordinator commits its own `.docs` changes automatically, one commit per logical change, and never pushes.
+- **Shared docs.** Each repo's own `docs/` holds shared docs, committed with the code. Each touched repo gets one new feature doc after the final test. Existing docs are never edited. Nothing in a repo may point at `.docs/`.
+
+### 13.3 Threads, worktrees and branches
+- **One thread per task.**
+  - The task name is a slug; the user may give one, such as `kyc-reject-pg`. It must be unique. Otherwise it is derived from the title (my call).
+  - Thread directory: `<root>/.worktrees/<task>/`. It is not a git repo. It is the coordinator's working directory and holds that thread's `AGENTS.md`/`CLAUDE.md` and the generated skills.
+- **The coordinator creates the worktrees** after asking the user for the source branch (the default comes from config, per repo).
+  - Command: `agt worktree add <thread> <repo> [--from <branch>]`, which produces `<root>/.worktrees/<task>/<repo>` on a new `wip/<task>` from the source branch.
+  - When config names a setup command (for example `make wt-new TASK={task} SRC={src} REPOS={repo}`), agt runs it instead and then verifies the result. Otherwise it runs plain `git worktree add`.
+  - A worktree is never moved or renamed once a session has used it.
+- **Tickets share the task's worktree.** There is no per-ticket worktree. Parallel workers in one worktree only work on disjoint file sets.
+- **Squash.** At stage 10 the coordinator creates `feat/<task>` from the source branch, runs `git merge --squash wip/<task>`, and makes one plain commit. Commit messages carry no AI attribution, session trailers, ticket ids, `.docs` mentions, or the config's banned words. This overrides any harness attribution reminder.
+- **Commit guard** (replaces §12.9's worker refusal):
+  - A worker may commit only on `wip/<task>`, and only files listed in its ticket. The per-worktree pre-commit hook checks the staged files against the ticket through `agt`.
+  - The coordinator may commit only the squash on `feat/<task>`. It also commits in `.docs/`.
+  - Nobody pushes.
+  - In the user's own checkouts (the repo folders at the workspace root), agents never commit.
+- **Instruction files.** Every repo worktree gets `AGENTS.md` + `CLAUDE.md` + the generated skills, hidden from git as today (§11.3, Plan 9).
+- **brief.md.** The brief's git trail covers each of the task's worktrees.
+
+### 13.4 The ten stages (the built-in workflow)
+agt carries the content of the user's `feature-workflow` skill, at `~/.agents/my-marketplace/plugins/my-skills/skills/feature-workflow/`, with its templates `spec.md`, `ticket.md`, `release.md` and `project-config.md`. It also carries the content of `manage-docs`. Both are delivered through the coordinator and worker role rules, through `agt guide`, and as skills generated into the thread and worktree directories (§Plan 9 mechanism). One source lives in agt, so the result is the same in every project.
+
+1. **Task discussion.** The coordinator and the user go story by story, down to file level. Each decision is recorded as `Dn (user|coordinator, date)`. The e2e cases, the browser checklist per role and viewport, and the shared docs affected are all designed here. The source branch is asked here.
+2. **Spec** in `.docs/<area>/issues/<task>/spec.md`. The area is `shared` when the task spans repos. The API contract is read from the controllers.
+3. **Tickets** in `issues/NN-<slug>.md`, each with its repo and the files it may edit, plus a file matrix that decides parallel versus sequence.
+4. **Delegation.** One fresh worker session per ticket, with a fixed dispatch message shape. Up to `workers.max_workers` run in parallel. Implementation questions are answered by the coordinator itself.
+5. **Review per commit:**
+   - (a) the stat ⊆ the ticket's files;
+   - (b) the diff matches the spec;
+   - (c) the coordinator re-runs the ticket's tests;
+   - (d) red-first is proven for bug fixes;
+   - (e) no banned mentions;
+   - (f) any extras are noted.
+
+   A returned ticket goes back to the same worker, as a new commit.
+6. **Combined verification:** the full unit suite plus a type check, once per repo, in the task worktree.
+7. **Staged e2e.** The coordinator decides how many stages the task needs. Stages 2 and 3 run without asking. Stage 4 (all suites) runs only after the user confirms, and is compared against a saved baseline of the source branch.
+8. **Browser check by the coordinator** (Chrome DevTools MCP when available), on the stack restarted from the task worktrees. Workers validate their own ticket first. This check gates stages 9–10. The user's own final check is optional.
+9. **Shared feature docs**, one new file per touched repo, written by the worker who wrote the code.
+10. **`release.md`** covers PR order, deploy order, manual migration SQL (simulated, stopping before COMMIT), post-deploy checks and rollback. Then the squash. The user pushes and opens the PRs.
+
+### 13.5 Project config (replaces `.docs/shared/notes/feature-workflow.md`)
+`agt setup` asks for these, and they are stored in `.agentthread/config.yaml`:
+- **Repos.** `workspace.repos`, and per repo: production and staging branches, the default source branch, and PR order.
+- **Commands.** Worktree setup, stack restart (`{task}` is substituted), stack status, and per-repo unit, typecheck and e2e commands.
+- **Rules.** Banned words in commits and repo files, never-commit paths, and the rule files every agent must read first (for example `.docs/shared/notes/product-decisions.md`).
+- **Report words** for workers' reports: Zentro uses `SELESAI` and `TERHALANG`; the default is `done` and `blocked`.
+
+Project-owned skills, such as Zentro's `run-stack` and `run-e2e`, stay the project's own. Config only points at them.
+
+### 13.6 Non-goals
+- A Telegram bridge. That is the next feature, after a week of real use.
+- Pushing, PRs, or merges to protected branches.
+- Per-ticket worktrees.
+- Dokploy or any deploy target.
+- Persistent named worker panes. agt spawns a fresh worker per ticket, which matches the "fresh session per ticket" rule.
+
+### 13.7 Anti-goals
+- A coordinator that edits code.
+- A worker commit that contains files outside its ticket.
+- Anything committed in the user's own checkouts.
+- A `.docs` path or AI attribution in a repo or a commit message.
+- The process silently skipping a stage. A stage is skipped only when the user says so, and the spec records that.
+
+### 13.8 Left to the builder
+- How the pre-commit hook asks agt for a ticket's files (for example `agt ticket files <thread>/<T>` from the hook).
+- How `agt worktree add` reports setup-command failures.
+- How old single-repo threads in existing logs keep replaying. They keep their old worktree path, and only new threads use the workspace layout.
+- The exact wording of the role rules, as long as they carry every rule above.
