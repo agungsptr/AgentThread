@@ -9,7 +9,11 @@
 | Codex 0.164.0 | `codex` | `codex` | `-m <m>` | `-c model_reasoning_effort="<minimal\|low\|medium\|high\|xhigh>"` | `-s workspace-write -a never -c sandbox_workspace_write.network_access=true --add-dir <git common dir>` (coordinator only) `--search -c 'projects={"<root>"={trust_level="trusted"},"<worktree>"={trust_level="trusted"}}'` | positional | `AGENTS.md` |
 | omp 18.12.6 | `omp` | `omp` (standalone binary in `~/.local/bin`; the npm build needs a newer Bun) | `--model <m>` | `--thinking <off\|minimal\|low\|medium\|high\|xhigh\|max\|auto>` | `--approval-mode yolo` | positional | `AGENTS.md` |
 
-Codex and omp: autonomous start verified from `--help` only; pending the release matrix.
+Claude Code (2.1.314) in every role: autonomous start (`--permission-mode bypassPermissions` with `skipDangerousModePermissionPrompt`), positional first prompt and the `CLAUDE.md` symlink are verified by the release matrix 2026-10-31 (`happy-claude-code`), and so is the failure message of a missing binary (`edge-missing-binary`).
+
+omp (18.13.3; the flags above are unchanged from 18.12.6's `--help`) as a worker under a Claude Code coordinator: autonomous start (`--approval-mode yolo`) and positional first prompt are verified by the release matrix 2026-10-31 (`happy-worker-omp`). An omp worker keeps working for 15s or more after `agt ticket done`, so its pane closes only when that turn ends. omp as a coordinator (`happy-coord-omp`, workers on OpenCode) and `--model`/`--thinking` were not part of that run; still verified from `--help` only.
+
+Codex: autonomous start verified from `--help` only; pending the release matrix.
 
 OpenCode needs `--standalone`: by default its TUI attaches to the shared background service (`opencode serve`), whose own config wins, so `OPENCODE_CONFIG_CONTENT` (model and permissions) was ignored in the release e2e. `--standalone` runs a private server that reads it.
 
@@ -34,7 +38,7 @@ Source: https://opencode.ai/docs/permissions (fetched 2026-10-24). The docs conf
 The docs show `"permission": "allow"` as the allow-everything shorthand and do not show `"*": "allow"` literally. We use the explicit object `{"*":"allow","external_directory":"allow","doom_loop":"allow"}` so the two non-default-covered keys are named.
 
 ### Claude Code `skipDangerousModePermissionPrompt`
-Source: https://code.claude.com/docs/en/settings-reference.md (settings index, fetched 2026-10-24): "Skip the confirmation dialog before bypassPermissions mode", category Permission settings, scope "User, local, or managed". Per https://code.claude.com/docs/en/settings.md, `--settings <json>` is applied above user and project files and can set any key a user settings file can, so passing it inline through `--settings` is valid. `claude --help` lists `--permission-mode`, `--effort`, `--model`, `--settings` and `--dangerously-skip-permissions` (the fallback if the key were absent). The detailed entry (type, default) was beyond the truncated part of the page and was not read. The release row `happy-claude-code` confirmed it: with `skipDangerousModePermissionPrompt` passed through `--settings`, Claude Code showed no bypass-permissions dialog.
+Source: https://code.claude.com/docs/en/settings-reference.md (settings index, fetched 2026-10-24): "Skip the confirmation dialog before bypassPermissions mode", category Permission settings, scope "User, local, or managed". Per https://code.claude.com/docs/en/settings.md, `--settings <json>` is applied above user and project files and can set any key a user settings file can, so passing it inline through `--settings` is valid. `claude --help` lists `--permission-mode`, `--effort`, `--model`, `--settings` and `--dangerously-skip-permissions` (the fallback if the key were absent). The detailed entry (type, default) was beyond the truncated part of the page and was not read. The release row `happy-claude-code` confirmed it (verified by the release matrix 2026-10-31): with `skipDangerousModePermissionPrompt` passed through `--settings`, Claude Code showed no bypass-permissions dialog.
 
 ### Codex directory trust
 `codex --help` (0.164.0) has no trust flag; it documents `-c key=value` as a TOML override of `~/.codex/config.toml`.
