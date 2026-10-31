@@ -358,9 +358,10 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       k.status = "review";
       k.summary = ev.payload.summary;
       delete k.returnNote;
-      // The coordinator hears it when the worker's turn ends (see reviewNoticeAt), at once when no turn of it can come.
+      // The coordinator hears it when the worker's turn ends (see reviewNoticeAt); at once when the worker is gone or
+      // already recorded idle (a polled worker whose idle came first: no further idle may come).
       const w = k.assignee ? state.sessions.get(k.assignee) : undefined;
-      if (!w || !isLive(w) || (w.status === "idle" && ev.actor.session !== w.id)) k.reviewNoticeSeq = ev.seq;
+      if (!w || !isLive(w) || w.status === "idle") k.reviewNoticeSeq = ev.seq;
       note(t, ev, `${k.id} ready for review: ${ev.payload.summary}`);
       break;
     }

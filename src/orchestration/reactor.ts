@@ -33,6 +33,8 @@ function workerRef(ticket: string | undefined, lead: string, noun = ""): string 
   return ticket ? `${lead} for ${noun}${ticket}` : NO_TICKET;
 }
 
+/** The coordinator's notice when a returned ticket's worker is gone while fixing it. */
+const FRESH = "a fresh worker takes over the returned ticket.";
 const doneNotice = (ticket: string, summary: string | undefined) => `Ticket ${ticket} is done${summary ? `: ${summary}` : ""}.`;
 const reviewNotice = (thread: string, ticket: string, summary: string | undefined) =>
   `Ticket ${ticket} is ready for review: ${summary ?? ""}. Review its commits, then agt ticket accept ${thread}/${ticket} or agt ticket return ${thread}/${ticket} "<what to fix>".`;
@@ -273,11 +275,13 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         } else if (s.role === "worker") {
           doneWorkerEnded(s, t);
           const k = t.tickets.find((x) => x.id === s.ticket);
-          const release = k?.status === "in_progress" && k.assignee === s.id;
-          if (release) releaseTicket(t.id, k.id, "worker session lost");
+          const held = k?.status === "in_progress" && k.assignee === s.id;
+          // A returned ticket always reaches a worker: fillWorkers gives it a fresh one (with the note), not the coordinator.
+          const returned = held && k.returnNote !== undefined;
+          if (held && !returned) releaseTicket(t.id, k.id, "worker session lost");
           const w = cap(workerRef(s.ticket, "worker"));
-          notify(coordinatorToNotify(t.id), release ? `${w} was lost; the ticket is open again.` : `${w} was lost.`);
-          // The released ticket is not open in `state` yet, so this only spawns other queued tickets; the coordinator decides on the released one.
+          notify(coordinatorToNotify(t.id), returned ? `${w} was lost; ${FRESH}` : held ? `${w} was lost; the ticket is open again.` : `${w} was lost.`);
+          // A released ticket is not open in `state` yet, so this only spawns other queued tickets (and returned ones); the coordinator decides on the released one.
           fillWorkers(t.id);
         }
         break;
@@ -350,7 +354,8 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
           // A fresh worker for a returned ticket holds it from its creation: a failed spawn must not strand it either.
           const k = t && t.status !== "done" ? t.tickets.find((x) => x.id === s.ticket) : undefined;
           if (k?.status === "in_progress" && k.assignee === s.id && (lostSpawn || k.returnNote !== undefined)) {
-            releaseTicket(t!.id, k.id, lostSpawn ? "worker spawn report lost" : "worker spawn failed");
+            // Released, not respawned: a spawn that keeps failing must not loop. A worker that had run failed as a session.
+            releaseTicket(t!.id, k.id, lostSpawn ? "worker spawn report lost" : s.pane || s.turns > 0 ? "worker session failed" : "worker spawn failed");
           }
           notify(coordinatorToNotify(s.thread), text ?? `${cap(workerRef(s.ticket, "worker"))} failed: ${ev.payload.reason}.`);
         }
@@ -420,7 +425,10 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
           if (s.status === "ended") doneWorkerEnded(s, t);
           // A worker that exits on its own must not leave its ticket stuck; one ended by teardown has a done or blocked ticket.
           const k = t.tickets.find((x) => x.id === s.ticket);
-          if (k?.status === "in_progress" && k.assignee === s.id) {
+          if (k?.status === "in_progress" && k.assignee === s.id && k.returnNote !== undefined) {
+            // A returned ticket always reaches a worker: the fillWorkers below gives it a fresh one, with the note.
+            notify(coordinatorToNotify(t.id), `${cap(workerRef(k.id, "worker"))} ended; ${FRESH}`);
+          } else if (k?.status === "in_progress" && k.assignee === s.id) {
             releaseTicket(t.id, k.id, "worker session ended");
             notify(coordinatorToNotify(t.id), `${cap(workerRef(k.id, "worker"))} ended; the ticket is open again.`);
           }

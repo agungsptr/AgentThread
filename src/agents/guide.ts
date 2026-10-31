@@ -73,6 +73,12 @@ const WRONG: Record<SessionRole, string[]> = {
   ],
 };
 
+/** Task threads only: what to do in the review loop, listed before the commit rule. */
+const WRONG_TASK: Partial<Record<SessionRole, string[]>> = {
+  coordinator: ["- A ticket is in review with no notice: review it, then accept or return it."],
+  worker: ["- A return notice arrives: fix it in a new commit, then run agt ticket done again."],
+};
+
 /** A task thread's workers commit on wip/<task> (the coordinator only squashes); in a legacy thread only the coordinator commits. */
 const NEVER_TASK: Partial<Record<SessionRole, string>> = {
   coordinator: "- Never push; never commit on wip/<task>; never bypass the commit guard.",
@@ -107,7 +113,7 @@ function roleGuide(role: SessionRole, o: GuideInput, level: "#" | "##"): string 
     "",
     `${h} When things go wrong`,
     "",
-    ...WRONG[role].map((l) => (l === NEVER_LEGACY && t.dir !== undefined ? (NEVER_TASK[role] ?? l) : l)),
+    ...WRONG[role].flatMap((l) => (l === NEVER_LEGACY && t.dir !== undefined ? [...(WRONG_TASK[role] ?? []), NEVER_TASK[role] ?? l] : [l])),
     "",
     `${h} Where state lives`,
     "",

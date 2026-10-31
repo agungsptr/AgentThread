@@ -10,6 +10,15 @@ const T = { id: "002", title: "Fix race", slug: "fix-race", worktree: "/repo/wt"
 const usage = (needle: string) => USAGE.split("\n").find((l) => l.trim().startsWith(needle))!.trim();
 
 describe("guide", () => {
+  test("task threads: what to do on a return notice, and with a ticket in review", () => {
+    const worker = "- A return notice arrives: fix it in a new commit, then run agt ticket done again.";
+    const coordinator = "- A ticket is in review with no notice: review it, then accept or return it.";
+    expect(guide({ role: "worker", ...base })).toContain(worker);
+    expect(guide({ role: "coordinator", ...base })).toContain(coordinator);
+    expect(guide({ role: "worker", ...base, legacy: true })).not.toContain(worker);
+    expect(guide({ role: "coordinator", ...base, legacy: true })).not.toContain(coordinator);
+  });
+
   test("each role lists its USAGE command lines verbatim", () => {
     const want = {
       main: ["thread new", "thread choose", "thread cancel", "tell"],

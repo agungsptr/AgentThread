@@ -136,6 +136,26 @@ describe("ticket done on a task thread", () => {
   });
 });
 
+describe("a worker whose recorded status is already idle (polled, no hooks)", () => {
+  test("runs ticket done itself: the coordinator gets the exact notice at once", () => {
+    const s = world();
+    addTicket(s, "T1", ["src/a.ts"]);
+    exec(s, { cmd: "worker.spawn", thread: "001", ticket: "T1" });
+    const w = workerOf(s, "T1");
+    apply(s, [
+      { type: "session.attached", thread: "001", payload: { session: w.id, pane: "w1:p3" } },
+      { type: "session.started", thread: "001", payload: { session: w.id } },
+    ]);
+    expect(s.sessions.get(w.id)!.status).toBe("idle");
+    exec(s, { cmd: "ticket.claim", thread: "001", ticket: "T1" }, asWorker(w));
+    exec(s, { cmd: "ticket.done", thread: "001", ticket: "T1", summary: "added a" }, asWorker(w));
+    expect(coordNotices(s)).toEqual([REVIEW]);
+    // its next idle does not repeat it
+    signal(s, w.id, "agent.idle");
+    expect(coordNotices(s)).toEqual([REVIEW]);
+  });
+});
+
 describe("ticket accept", () => {
   test("marks it done, ends the worker and closes its pane, and starts the waiting ticket; no second notice", () => {
     const s = world();
@@ -221,6 +241,47 @@ describe("ticket return", () => {
     exec(s, { cmd: "ticket.return", thread: "001", ticket: "T1", note: "add the missing test." });
     expect(workerOf(s, "T1").id).not.toBe(w.id);
     expect(ticketOf(s, "T1").assignee).toBe(workerOf(s, "T1").id);
+  });
+
+  for (const how of ["lost", "ended"] as const) {
+    test(`its worker ${how} while fixing: a fresh worker takes the ticket over, with the note`, () => {
+      const s = world();
+      const w = toReview(s);
+      signal(s, w.id, "agent.idle");
+      exec(s, { cmd: "ticket.return", thread: "001", ticket: "T1", note: "add the missing test." });
+      expect(ticketOf(s, "T1").assignee).toBe(w.id);
+      effects = [];
+      settle(s, apply(s, [how === "lost" ? { type: "session.lost", thread: "001", payload: { session: w.id, reason: "gone" } } : { type: "session.ended", thread: "001", payload: { session: w.id } }]));
+      const fresh = workerOf(s, "T1");
+      expect(fresh.id).not.toBe(w.id);
+      expect(ticketOf(s, "T1")).toMatchObject({ status: "in_progress", assignee: fresh.id });
+      expect(effects.find((e) => e.kind === "agent.spawn")).toMatchObject({ session: fresh.id, cwd: "/repo/.worktrees/kyc-1/api", notice: RETURN });
+    });
+  }
+
+  test("its worker ended while fixing at max_workers: the fresh worker waits for a slot", () => {
+    const s = world(1);
+    addTicket(s, "T1", ["src/a.ts"]);
+    addTicket(s, "T2", ["src/b.ts"]);
+    const w = toReview(s);
+    signal(s, w.id, "agent.idle");
+    exec(s, { cmd: "ticket.return", thread: "001", ticket: "T1", note: "add the missing test." });
+    exec(s, { cmd: "worker.spawn", thread: "001", ticket: "T2" }); // queued: T1's worker holds the slot
+    settle(s, apply(s, [{ type: "session.ended", thread: "001", payload: { session: w.id } }]));
+    // the returned ticket goes first
+    const fresh = workerOf(s, "T1");
+    expect(fresh.id).not.toBe(w.id);
+    expect(workerOf(s, "T2")).toBeUndefined();
+    expect(ticketOf(s, "T1")).toMatchObject({ status: "in_progress", assignee: fresh.id });
+  });
+
+  test("its worker fails after it ran: released with reason worker session failed", () => {
+    const s = world();
+    const w = toReview(s);
+    signal(s, w.id, "agent.idle");
+    exec(s, { cmd: "ticket.return", thread: "001", ticket: "T1", note: "add the missing test." });
+    const out = react(s, apply(s, [{ type: "session.failed", thread: "001", payload: { session: w.id, reason: "boom" } }]), { root: "/repo", config: DEFAULT_CONFIG, newId });
+    expect(out.events).toContainEqual({ type: "ticket.released", thread: "001", payload: { ticket: "T1", reason: "worker session failed" } });
   });
 
   test("at max_workers the fresh worker queues and starts later, still carrying the note", () => {
