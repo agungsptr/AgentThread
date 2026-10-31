@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { HANDOFF_REQUEST_PREFIX } from "../../src/agents/prompts.ts";
 import { DEFAULT_CONFIG } from "../../src/config/config.ts";
 import type { EventBody, StoredEvent } from "../../src/domain/types.ts";
 import { react } from "../../src/orchestration/reactor.ts";
@@ -415,8 +416,10 @@ test("a coordinator replacement whose root pane is gone closes the old tab, open
       ctx(),
     );
     const spawned = opened.events.filter((e) => e.type === "session.created");
-    expect(spawned).toEqual([expect.objectContaining({ payload: expect.objectContaining({ role: "coordinator" }) })]);
-    expect(opened.effects).toEqual([expect.objectContaining({ kind: "agent.spawn", role: "coordinator", pane: "w1:p5" })]);
+    // F replaces R (the brake counts it), in the fresh root pane, from the handoff generated for R
+    expect(spawned).toEqual([expect.objectContaining({ payload: expect.objectContaining({ role: "coordinator", replaces: R }) })]);
+    expect(opened.effects).toEqual([expect.objectContaining({ kind: "agent.spawn", role: "coordinator", pane: "w1:p5", bootstrap: "handoff" })]);
+    expect(opened.effects[0]).not.toHaveProperty("splitFrom");
     apply(s, ...opened.events);
     expect([...s.sessions.values()].filter((x) => x.role === "coordinator" && ["starting", "active", "idle"].includes(x.status))).toHaveLength(1);
   }
@@ -477,4 +480,37 @@ test("a coordinator failure for any other reason, or with a live coordinator, or
   const done = replaced();
   done.s.threads.get("001")!.status = "done";
   expect(react(done.s, apply(done.s, { type: "session.failed", thread: "001", payload: { session: done.R, reason: "pane_not_found" } }), ctx()).effects).toEqual([]);
+});
+
+test("the fresh tab's coordinator replaces the failed one: it gets the notices queued to it, never the handoff request", () => {
+  const { s, R } = replaced();
+  apply(
+    s,
+    { type: "notice.queued", thread: "001", payload: { session: R, text: "Ticket T1 is blocked: x." } },
+    { type: "notice.queued", thread: "001", payload: { session: R, text: `${HANDOFF_REQUEST_PREFIX} now.` } },
+  );
+  const r = react(s, apply(s, { type: "session.failed", thread: "001", payload: { session: R, reason: "pane_not_found" } }), ctx());
+  // nothing else is spawned into the tab that is going away
+  expect(r.effects.map((e) => e.kind)).toEqual(["herdr.tab.close", "herdr.tab.ensure"]);
+  apply(s, ...r.events);
+  const opened = react(
+    s,
+    apply(s, { type: "thread.tab_closed", thread: "001", payload: { tab: "w1:t2" } }, { type: "thread.tab_opened", thread: "001", payload: { tab: "w1:t5", rootPane: "w1:p5" } }),
+    ctx(),
+  );
+  const created = opened.events.find((e) => e.type === "session.created")!;
+  const F = created.type === "session.created" ? created.payload.session : "";
+  expect(opened.events).toContainEqual({ type: "notice.queued", thread: "001", payload: { session: F, text: "Ticket T1 is blocked: x." } });
+  expect(opened.effects).toEqual([expect.objectContaining({ kind: "agent.spawn", session: F, pane: "w1:p5", bootstrap: "handoff" })]);
+  // a first coordinator (no earlier session) still starts from the brief
+  const first = stateOf(INIT, threadCreated("002", { status: "in_progress" }));
+  const r1 = react(first, apply(first, { type: "thread.tab_opened", thread: "002", payload: { tab: "w1:t3", rootPane: "w1:p3" } }), ctx());
+  expect(r1.events).toEqual([expect.objectContaining({ type: "session.created", payload: expect.not.objectContaining({ replaces: expect.anything() }) })]);
+});
+
+test("a reason that names something else not found (a cwd) does not reopen the tab", () => {
+  const { s, R } = replaced();
+  const r = react(s, apply(s, { type: "session.failed", thread: "001", payload: { session: R, reason: "herdr pane split: cwd /x not found" } }), ctx());
+  expect(r.effects.filter((e) => e.kind.startsWith("herdr.tab"))).toEqual([]);
+  expect(r.events).toEqual([{ type: "notice.queued", payload: { session: M, text: "Coordinator for thread 001 failed: herdr pane split: cwd /x not found." } }]);
 });

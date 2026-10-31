@@ -44,7 +44,9 @@ export function smokeScenarios(): Scenario[] {
         for (let i = 0; i < 10 && !(paneGone && tabGone); i++) {
           await Bun.sleep(300);
           paneGone = !(await h.herdr.panes()).includes(lastPane);
-          tabGone = (await h.herdr.run(["tab", "get", lastTab])).exitCode !== 0;
+          // Gone only when Herdr says so: any other failure of `tab get` proves nothing.
+          const got = await h.herdr.run(["tab", "get", lastTab]);
+          tabGone = got.exitCode !== 0 && (got.error?.code === "tab_not_found" || got.error?.code === "not_found");
         }
         const refused = closed.exitCode !== 0 ? `herdr refused pane close: ${closed.error ? `${closed.error.code}: ${closed.error.message}` : closed.stderr.trim()}; ` : "";
         h.check("herdr closes a tab's last pane", closed.exitCode === 0 && paneGone && tabGone, `${refused}pane ${lastPane} ${paneGone ? "gone" : "still there"}, tab ${lastTab} ${tabGone ? "gone" : "still there"}`);

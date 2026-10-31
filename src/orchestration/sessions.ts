@@ -122,7 +122,7 @@ export function spawnReplacement(
   t: Thread,
   old: Session,
   ctx: SpawnContext,
-  how: { splitFrom?: string; retirePane?: string; bootstrap: "start" | "handoff"; fallbacks?: string[] },
+  how: { splitFrom?: string; retirePane?: string; bootstrap: "start" | "handoff"; fallbacks?: string[]; pane?: string },
 ): { events: EventBody[]; effects: Effect[] } {
   const session = ctx.newId();
   const name = agentName(ctx.root, "coordinator", t.id, undefined, session);
@@ -151,9 +151,14 @@ export function spawnReplacement(
         name,
         thread: t.id,
         cwd: t.worktree,
-        splitFrom: how.splitFrom ?? old.pane ?? t.rootPane!,
-        ...(how.fallbacks?.length ? { splitFallbacks: how.fallbacks } : {}),
-        direction: "right" as const,
+        // The pane-target form starts the agent in `how.pane` itself (a fresh tab's empty root pane) instead of a split.
+        ...(how.pane
+          ? { pane: how.pane }
+          : {
+              splitFrom: how.splitFrom ?? old.pane ?? t.rootPane!,
+              ...(how.fallbacks?.length ? { splitFallbacks: how.fallbacks } : {}),
+              direction: "right" as const,
+            }),
         bootstrap: how.bootstrap,
       },
     ],

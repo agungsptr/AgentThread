@@ -225,7 +225,17 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
           lose(c, "tab was reopened");
           for (const w of liveSessions(state, t.id, "worker")) lose(w, "tab was reopened");
         } else if (!c && !coordinatorLostIn.has(t.id)) {
-          take(spawnCoordinator(t, ctx));
+          // A tab reopened after its coordinator failed or ended (a root pane gone, or agt start reopening it): the new
+          // coordinator replaces that session in the fresh root pane, carrying its queued notices; the brake counts it.
+          const latest = [...state.sessions.values()].filter((x) => x.thread === t.id && x.role === "coordinator").at(-1);
+          if (latest && (latest.status === "failed" || latest.status === "ended") && !rotatedTo.has(latest.id)) {
+            const r = spawnReplacement(t, latest, ctx, { pane: t.rootPane, bootstrap: t.handoff ? "handoff" : "start" });
+            const created = r.events.find((e) => e.type === "session.created");
+            if (created?.type === "session.created") redirect(latest.id, created.payload.session);
+            take(r);
+          } else {
+            take(spawnCoordinator(t, ctx));
+          }
         }
         break;
       }
@@ -279,7 +289,8 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         const s = state.sessions.get(ev.payload.session);
         const lostSpawn = /^spawn report lost after (.+)$/.exec(ev.payload.reason);
         // Herdr's missing-pane errors: the code itself, or the bridge's "herdr <cmd>: [agent target ]pane <id> not found".
-        const paneGone = /pane_not_found|pane .* not found/i.test(ev.payload.reason);
+        const paneGone = /pane_not_found|\bpane \S+ not found/i.test(ev.payload.reason);
+        let reopened = false;
         const text = lostSpawn && s ? `Session ${s.id} (${s.role}) never reported back from its spawn; marked failed after ${lostSpawn[1]}.` : undefined;
         const t = s?.thread ? state.threads.get(s.thread) : undefined;
         if (s?.role === "worker") {
@@ -319,12 +330,14 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
               if (t.tab) effects.push({ kind: "herdr.tab.close", thread: t.id, tab: t.tab });
               effects.push(tabEnsure({ ...t, tab: undefined }, ctx));
               notify(main, `Thread ${t.id} lost its tab pane; reopening its tab with a fresh coordinator.`);
+              // Workers split from the root pane, which is gone with the tab: they wait for the fresh tab.
+              reopened = true;
             }
           } else {
             notify(main, text ?? `Coordinator for thread ${s.thread} failed: ${ev.payload.reason}.`);
           }
         }
-        fillWorkers(s?.thread);
+        if (!reopened) fillWorkers(s?.thread);
         break;
       }
       case "session.ended": {
