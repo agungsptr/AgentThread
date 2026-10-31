@@ -45,7 +45,7 @@ export function systemPrompt(o: PromptInput): string {
       ...(t.dir === undefined
         ? []
         : ["- Ask the user which source branch to start from, then create a worktree for each repo the task touches: agt worktree add <thread> <repo> --from <branch>. Never move or rename a worktree."]),
-      `- Plan before you spawn: split the work into the largest set of tickets that can run in parallel without touching the same files (usually 2–4). Use one ticket only when the work is genuinely a single change. Add each with: agt ticket add ${t.id} "<title>" --scope <path> [--scope <path>].`,
+      `- Plan before you spawn: split the work into the largest set of tickets that can run in parallel without touching the same files (usually 2–4). Use one ticket only when the work is genuinely a single change. Add each with: ${t.dir === undefined ? `agt ticket add ${t.id} "<title>" --scope <path> [--scope <path>]` : `agt ticket add ${t.id} "<title>" --repo <r> --file <path>... [--doc <path>]`}.`,
       `- Spawn a worker for every ticket that is ready, all at once, with agt worker spawn ${t.id} --ticket <T>; the daemon queues any beyond max-workers.`,
       t.dir === undefined
         ? "- Workers only edit files. You are the only one who commits: when a ticket is done, review the change, then git add and git commit in the worktree."

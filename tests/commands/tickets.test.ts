@@ -78,7 +78,7 @@ describe("worker.spawn on a task thread", () => {
   test("rejects when the ticket's repo has no worktree", () => {
     const s = taskBase();
     exec(s, add());
-    expect(errorOf(run(s, { cmd: "worker.spawn", thread: "001", ticket: "T1" }))).toBe("ticket T1 is for repo api, which has no worktree in thread 001; run agt worktree add 001 api");
+    expect(errorOf(run(s, { cmd: "worker.spawn", thread: "001", ticket: "T1" }))).toBe("ticket T1 needs a worktree for api; create it with agt worktree add 001 api");
   });
 
   test("starts the worker in the repo's worktree", () => {

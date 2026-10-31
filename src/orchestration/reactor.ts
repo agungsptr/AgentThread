@@ -345,6 +345,10 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         if (!reopened) fillWorkers(s?.thread);
         break;
       }
+      case "worktree.added":
+        // A ticket queued while its repo had no worktree can start now.
+        fillWorkers(ev.thread);
+        break;
       case "session.ended": {
         const s = state.sessions.get(ev.payload.session);
         // Without a main session nobody is replying: a paused proposal must not wait forever.

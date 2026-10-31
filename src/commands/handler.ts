@@ -99,7 +99,7 @@ function reject(message: string): never {
   throw new Rejection(message);
 }
 
-const noWorktree = (t: Thread, k: Ticket) => `ticket ${k.id} is for repo ${k.repo}, which has no worktree in thread ${t.id}; run agt worktree add ${t.id} ${k.repo}`;
+const noWorktree = (t: Thread, k: Ticket) => `ticket ${k.id} needs a worktree for ${k.repo}; create it with agt worktree add ${t.id} ${k.repo}`;
 
 /** A ticket file path as the repo-relative, normalised form: no leading /, no .. segment, no empty or . segment. */
 function repoRelative(p: string): string {

@@ -3,7 +3,7 @@ import { DEFAULT_CONFIG } from "../../src/config/config.ts";
 import type { EventBody, StoredEvent } from "../../src/domain/types.ts";
 import { react } from "../../src/orchestration/reactor.ts";
 import { applyEvent, type State } from "../../src/state/projection.ts";
-import { INIT, USER, stateOf, threadCreated } from "../helpers.ts";
+import { INIT, USER, stateOf, taskThreadCreated, threadCreated } from "../helpers.ts";
 
 const C = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const W1 = "11111111-1111-4111-8111-111111111111";
@@ -323,4 +323,19 @@ test("replaying the log gives the same coordinator notices as the live run", () 
   expect(replayed.sessions.get(C)!.notices).toEqual(s.sessions.get(C)!.notices);
   expect(replayed.sessions.get(W1)!.status).toBe("ended");
   expect(s.sessions.get(C)!.notices.filter((x) => x.startsWith("Ticket T1 is done"))).toEqual(["Ticket T1 is done: ok."]);
+});
+
+test("a worker queued for a ticket whose repo has no worktree starts when worktree.added arrives", () => {
+  n = 0;
+  const s = stateOf(INIT, taskThreadCreated("001", "kyc-1", { maxWorkers: 1 }), { type: "thread.tab_opened", thread: "001", payload: { tab: "w1:t2", rootPane: "w1:p2" } });
+  apply(
+    s,
+    { type: "session.created", thread: "001", payload: { session: C, role: "coordinator", agent: "claude-code", name: "c" } },
+    { type: "session.attached", thread: "001", payload: { session: C, pane: "w1:p2" } },
+    { type: "ticket.created", thread: "001", payload: { ticket: "T1", title: "x", scope: ["a"], repo: "api", files: ["a"] } },
+    { type: "worker.queued", thread: "001", payload: { ticket: "T1" } },
+  );
+  const added = apply(s, { type: "worktree.added", thread: "001", payload: { repo: "api", path: "/repo/.worktrees/kyc-1/api", branch: "wip/kyc-1", source: "main" } });
+  const r = react(s, added, ctx());
+  expect(r.effects.find((e) => e.kind === "agent.spawn")).toMatchObject({ ticket: "T1", cwd: "/repo/.worktrees/kyc-1/api" });
 });

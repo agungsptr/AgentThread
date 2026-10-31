@@ -326,3 +326,11 @@ test("the coordinator of a thread-directory thread is told to create worktrees; 
   expect(systemPrompt({ root: "/repo", role: "coordinator", thread: s.threads.get("001")! }).split("\n")).toContain(rule);
   expect(systemPrompt({ root: "/repo", role: "coordinator", thread: s.threads.get("002")! })).not.toContain("agt worktree add");
 });
+
+test("the coordinator prompt names --repo/--file for a task thread's tickets and --scope for a legacy thread's", () => {
+  const s = stateOf(INIT, taskThreadCreated("001", "kyc-1"), threadCreated("002"));
+  const task = systemPrompt({ root: "/repo", role: "coordinator", thread: s.threads.get("001")! });
+  expect(task).toContain('agt ticket add 001 "<title>" --repo <r> --file <path>... [--doc <path>].');
+  expect(task).not.toContain("--scope");
+  expect(systemPrompt({ root: "/repo", role: "coordinator", thread: s.threads.get("002")! })).toContain('agt ticket add 002 "<title>" --scope <path> [--scope <path>].');
+});
