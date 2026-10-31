@@ -38,7 +38,7 @@ test("encode/decode round-trips", () => {
 test("success: split, start, bootstrap, report attached", async () => {
   const { b, calls } = bridge();
   const reports: object[] = [];
-  await runSpawnJob(JOB, { herdr: b, report: async (c) => void reports.push(c) });
+  await runSpawnJob(JOB, { herdr: b, report: async (c) => (reports.push(c), true) });
   expect(calls).toEqual(["split w1:p2", "start agt-ab12-w001-t1 w1:p3", "prompt agt-ab12-w001-t1 Start ticket T1 of thread 001 now."]);
   expect(reports).toEqual([{ cmd: "session.attached", session: "s-1", pane: "w1:p3" }]);
 });
@@ -46,21 +46,21 @@ test("success: split, start, bootstrap, report attached", async () => {
 test("failure closes the pane it split and reports failed", async () => {
   const { b, calls } = bridge("start");
   const reports: object[] = [];
-  await runSpawnJob(JOB, { herdr: b, report: async (c) => void reports.push(c) });
+  await runSpawnJob(JOB, { herdr: b, report: async (c) => (reports.push(c), true) });
   expect(calls.at(-1)).toBe("close w1:p3");
   expect(reports).toEqual([{ cmd: "session.failed", session: "s-1", reason: "herdr agent start: herdr server unavailable" }]);
 });
 
 test("existing pane is never closed on failure; empty bootstrap sends no prompt", async () => {
   const { b, calls } = bridge("start");
-  await runSpawnJob({ ...JOB, split: undefined, pane: "w1:p2", bootstrap: "" }, { herdr: b, report: async () => {} });
+  await runSpawnJob({ ...JOB, split: undefined, pane: "w1:p2", bootstrap: "" }, { herdr: b, report: async () => true });
   expect(calls).toEqual(["start agt-ab12-w001-t1 w1:p2"]);
 });
 
 test("agent_not_ready means the agent is in the pane: keep the pane and report attached with the bootstrap pending", async () => {
   const { b, calls } = bridge("not_ready");
   const reports: object[] = [];
-  await runSpawnJob(JOB, { herdr: b, report: async (c) => void reports.push(c) });
+  await runSpawnJob(JOB, { herdr: b, report: async (c) => (reports.push(c), true) });
   expect(calls).not.toContain("close w1:p3");
   expect(reports).toEqual([{ cmd: "session.attached", session: "s-1", pane: "w1:p3", pending: "Start ticket T1 of thread 001 now." }]);
 });
@@ -68,7 +68,7 @@ test("agent_not_ready means the agent is in the pane: keep the pane and report a
 test("a failed bootstrap prompt still reports attached, with the bootstrap pending", async () => {
   const { b, calls } = bridge("prompt");
   const reports: object[] = [];
-  await runSpawnJob(JOB, { herdr: b, report: async (c) => void reports.push(c) });
+  await runSpawnJob(JOB, { herdr: b, report: async (c) => (reports.push(c), true) });
   expect(calls).toEqual(["split w1:p2", "start agt-ab12-w001-t1 w1:p3", "prompt agt-ab12-w001-t1 Start ticket T1 of thread 001 now."]);
   expect(reports).toEqual([{ cmd: "session.attached", session: "s-1", pane: "w1:p3", pending: "Start ticket T1 of thread 001 now." }]);
 });
@@ -126,13 +126,13 @@ test("a split whose source pane is gone tries the fallback panes in order", asyn
     closePane: (p: string) => void calls.push(`close ${p}`),
   } as unknown as HerdrBridge;
   const reports: object[] = [];
-  await runSpawnJob({ ...JOB, split: { ...JOB.split!, fallbacks: ["w1:p4", "w1:p5"] } }, { herdr: b, report: async (c) => void reports.push(c) });
+  await runSpawnJob({ ...JOB, split: { ...JOB.split!, fallbacks: ["w1:p4", "w1:p5"] } }, { herdr: b, report: async (c) => (reports.push(c), true) });
   expect(calls).toEqual(["split w1:p2", "split w1:p4", "split w1:p5", "start w1:p6"]);
   expect(reports).toEqual([{ cmd: "session.attached", session: "s-1", pane: "w1:p6" }]);
   // any other split error is not retried
   calls.length = 0;
   const other = { ...b, splitPane: (o: { pane: string }) => { calls.push(`split ${o.pane}`); throw new HerdrError("server_unavailable", "down"); } } as unknown as HerdrBridge;
-  await runSpawnJob({ ...JOB, split: { ...JOB.split!, fallbacks: ["w1:p5"] } }, { herdr: other, report: async () => {} });
+  await runSpawnJob({ ...JOB, split: { ...JOB.split!, fallbacks: ["w1:p5"] } }, { herdr: other, report: async () => true });
   expect(calls).toEqual(["split w1:p2"]);
 });
 
@@ -150,14 +150,14 @@ test("agent start in a just-split pane whose shell is not at its prompt yet (age
     closePane: (p: string) => void calls.push(`close ${p}`),
   } as unknown as HerdrBridge;
   const reports: object[] = [];
-  await runSpawnJob(JOB, { herdr: b, report: async (c) => void reports.push(c), sleep: async () => {} });
+  await runSpawnJob(JOB, { herdr: b, report: async (c) => (reports.push(c), true), sleep: async () => {} });
   expect(calls).toEqual(["start w1:p3", "start w1:p3", "start w1:p3"]);
   expect(reports).toEqual([{ cmd: "session.attached", session: "s-1", pane: "w1:p3" }]);
   // a pane that stays busy fails in the end, and the split pane is closed again
   calls.length = 0;
   busy = 1e9;
   const failed: object[] = [];
-  await runSpawnJob(JOB, { herdr: b, report: async (c) => void failed.push(c), sleep: async () => {}, busyRetries: 3 });
+  await runSpawnJob(JOB, { herdr: b, report: async (c) => (failed.push(c), true), sleep: async () => {}, busyRetries: 3 });
   expect(calls).toEqual(["start w1:p3", "start w1:p3", "start w1:p3", "start w1:p3", "close w1:p3"]);
   expect(failed).toEqual([{ cmd: "session.failed", session: "s-1", reason: "herdr agent start: agent target pane w1:p3 is not an available shell" }]);
 });
@@ -184,4 +184,54 @@ test("reportWithRetry gives up after the attempts, and never retries another ref
   calls = 0;
   await reportWithRetry(async () => (calls++, { ok: false, error: "daemon is shutting down" }), { delayMs: 1 });
   expect(calls).toBe(20);
+});
+
+test("reportWithRetry says whether the report was delivered and accepted", async () => {
+  expect(await reportWithRetry(async () => ({ ok: true }), { delayMs: 1 })).toBe(true);
+  expect(await reportWithRetry(async () => ({ ok: false, error: "session s-1 is no longer live" }), { delayMs: 1 })).toBe(false);
+  expect(await reportWithRetry(async () => { throw new Error("down"); }, { attempts: 2, delayMs: 1 })).toBe(false);
+  expect(await reportWithRetry(async () => ({ ok: false, error: "daemon is shutting down" }), { attempts: 2, delayMs: 1 })).toBe(false);
+});
+
+/** Runs `fn` with console.error captured. */
+async function captureErrors(fn: () => Promise<void>): Promise<string[]> {
+  const lines: string[] = [];
+  const orig = console.error;
+  console.error = (...a: unknown[]) => void lines.push(a.map(String).join(" "));
+  try {
+    await fn();
+  } finally {
+    console.error = orig;
+  }
+  return lines;
+}
+
+test("an attach report the daemon refuses or never gets stops the agent: the split pane is closed", async () => {
+  const { b, calls } = bridge();
+  const reports: object[] = [];
+  const logged = await captureErrors(() => runSpawnJob(JOB, { herdr: b, report: async (c) => (reports.push(c), false) }));
+  expect(calls).toEqual(["split w1:p2", "start agt-ab12-w001-t1 w1:p3", "prompt agt-ab12-w001-t1 Start ticket T1 of thread 001 now.", "close w1:p3"]);
+  // no session.failed report follows: the daemon already failed the session (or cannot be reached)
+  expect(reports).toEqual([{ cmd: "session.attached", session: "s-1", pane: "w1:p3" }]);
+  expect(logged).toEqual(["agt __spawn: session s-1 was failed by the daemon; stopped its agent"]);
+});
+
+test("a refused attach report for an agent started in a given root pane closes that pane only", async () => {
+  const { b, calls } = bridge();
+  const logged = await captureErrors(() =>
+    runSpawnJob({ ...JOB, split: undefined, pane: "w1:p2" }, { herdr: b, report: async () => false }),
+  );
+  expect(calls).toEqual(["start agt-ab12-w001-t1 w1:p2", "prompt agt-ab12-w001-t1 Start ticket T1 of thread 001 now.", "close w1:p2"]);
+  expect(logged).toEqual(["agt __spawn: session s-1 was failed by the daemon; stopped its agent"]);
+  // an accepted report closes nothing
+  calls.length = 0;
+  await runSpawnJob({ ...JOB, split: undefined, pane: "w1:p2" }, { herdr: b, report: async () => true });
+  expect(calls.some((c) => c.startsWith("close"))).toBe(false);
+});
+
+test("the report retry window is overridable from the environment (tests keep spawn jobs short-lived)", async () => {
+  const { spawnReportRetry } = await import("../../src/agents/spawn-job.ts");
+  expect(spawnReportRetry({})).toEqual({ attempts: 20, delayMs: 500 });
+  expect(spawnReportRetry({ AGT_SPAWN_REPORT_ATTEMPTS: "3", AGT_SPAWN_REPORT_DELAY_MS: "50" })).toEqual({ attempts: 3, delayMs: 50 });
+  expect(spawnReportRetry({ AGT_SPAWN_REPORT_ATTEMPTS: "x", AGT_SPAWN_REPORT_DELAY_MS: "-1" })).toEqual({ attempts: 20, delayMs: 500 });
 });

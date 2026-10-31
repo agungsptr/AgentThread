@@ -96,6 +96,13 @@ test("herdr.poll_interval must be at least 100ms", () => {
   expect(loadConfig(ok.root, ok.env).herdr.poll_interval).toBe("100ms");
 });
 
+test("session.spawn_timeout must be at least 60s, well above the spawn job's report retry window (20 × 500ms)", () => {
+  const short = setup({ project: "session:\n  spawn_timeout: 30s\n" });
+  expect(() => loadConfig(short.root, short.env)).toThrow(/session\.spawn_timeout: must be at least 60s/);
+  const ok = setup({ project: "session:\n  spawn_timeout: 60s\n" });
+  expect(loadConfig(ok.root, ok.env).session.spawn_timeout).toBe("60s");
+});
+
 test("non-mapping and unparseable files are rejected", () => {
   const list = setup({ project: "- a\n- b\n" });
   expect(() => loadConfig(list.root, list.env)).toThrow("must contain a YAML mapping");

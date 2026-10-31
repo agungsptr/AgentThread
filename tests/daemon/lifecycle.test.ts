@@ -135,7 +135,7 @@ test("tab env carries CLAUDE_CONFIG_DIR", async () => {
 });
 
 test("a spawn report lost across a daemon restart: the sweep fails the starting session", async () => {
-  await boot("session:\n  spawn_timeout: 30s\n", 200);
+  await boot("session:\n  spawn_timeout: 60s\n", 200);
   const c = await coordinator(); // its fake spawn job split the pane but never reports
   expect((await events()).some((e) => e.type === "session.failed")).toBe(false); // young: left alone
   await daemon.stop(); // the daemon restarts between the job's split and its report
@@ -144,5 +144,5 @@ test("a spawn report lost across a daemon restart: the sweep fails the starting 
   db.close();
   daemon = await startDaemon(root, { log: () => {}, launch: (j) => void jobs.push(j), sweepIntervalMs: 200 });
   await waitFor(async () => (await events()).some((e) => e.type === "session.failed"), 5000);
-  expect((await events()).find((e) => e.type === "session.failed")!.payload).toEqual({ session: c, reason: "spawn report lost after 30s" });
+  expect((await events()).find((e) => e.type === "session.failed")!.payload).toEqual({ session: c, reason: "spawn report lost after 60s" });
 });

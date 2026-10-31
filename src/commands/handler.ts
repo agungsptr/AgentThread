@@ -105,6 +105,10 @@ function attribute(state: State, cmd: Command, actor: Actor): Actor {
 export function handle(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): HandleResult {
   try {
     const who = attribute(state, cmd, actor);
+    // A failed or ended session's agent may still be running (its spawn report was lost, or it kept going after it
+    // ended): it must not act for the thread any more. Its own lifecycle signals are still taken (and ignored).
+    const by = cmd.cmd === "session.signal" || !who.session ? undefined : state.sessions.get(who.session);
+    if (by && (by.status === "failed" || by.status === "ended")) reject(`session ${by.id} is no longer live`);
     const d = decide(state, cmd, who, ctx);
     return { ok: true, events: d.events, effects: d.effects ?? [], result: d.result ?? null, ...(who !== actor ? { actor: who } : {}) };
   } catch (e) {
@@ -160,7 +164,13 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
   }
   if (cmd.cmd === "session.attached" || cmd.cmd === "session.failed") {
     const s = state.sessions.get(cmd.session) ?? reject(`unknown session ${cmd.session}`);
-    if (!isLive(s)) return { events: [] };
+    if (!isLive(s)) {
+      // The spawn job stops an agent whose attach is refused: nobody would track it (a replacement may already run).
+      if (cmd.cmd === "session.attached") reject(`session ${s.id} is no longer live`);
+      return { events: [] };
+    }
+    // A repeated report (a retry whose first attempt did get through) changes nothing.
+    if (cmd.cmd === "session.attached" && s.pane === cmd.pane) return { events: [] };
     return cmd.cmd === "session.attached"
       ? {
           events: [

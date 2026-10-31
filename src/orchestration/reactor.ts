@@ -254,13 +254,30 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         const s = state.sessions.get(ev.payload.session);
         const lostSpawn = /^spawn report lost after (.+)$/.exec(ev.payload.reason);
         const text = lostSpawn && s ? `Session ${s.id} (${s.role}) never reported back from its spawn; marked failed after ${lostSpawn[1]}.` : undefined;
-        if (s?.role === "worker") notify(coordinatorToNotify(s.thread), text ?? `${cap(workerRef(s.ticket, "worker"))} failed: ${ev.payload.reason}.`);
+        const t = s?.thread ? state.threads.get(s.thread) : undefined;
+        if (s?.role === "worker") {
+          // Its agent may have claimed the ticket before the report was lost (the spawn job stops that agent): free it.
+          const k = lostSpawn && t && t.status !== "done" ? t.tickets.find((x) => x.id === s.ticket) : undefined;
+          if (k?.status === "in_progress" && k.assignee === s.id) out.push({ type: "ticket.released", thread: t!.id, payload: { ticket: k.id, reason: "worker spawn report lost" } });
+          notify(coordinatorToNotify(s.thread), text ?? `${cap(workerRef(s.ticket, "worker"))} failed: ${ev.payload.reason}.`);
+        }
         if (s?.role === "coordinator") {
-          notify(liveSessions(state, undefined, "main")[0], text ?? `Coordinator for thread ${s.thread} failed: ${ev.payload.reason}.`);
+          const main = liveSessions(state, undefined, "main")[0];
           // A coordinator whose spawn report was lost never started: a fresh one takes over (same brake as an exit loop).
-          const t = s.thread ? state.threads.get(s.thread) : undefined;
-          if (lostSpawn && t && t.status !== "done" && !coordinatorOf(t.id) && recentReplacements(t.id, ev.ts) < MAX_AUTO_REPLACEMENTS) {
-            replaceCoordinator(s, t, "the previous coordinator never reported back from its spawn");
+          if (lostSpawn && t && t.status !== "done" && !coordinatorOf(t.id)) {
+            if (recentReplacements(t.id, ev.ts) >= MAX_AUTO_REPLACEMENTS) {
+              notify(main, text!);
+              if (!braked.has(t.id)) {
+                braked.add(t.id);
+                notify(main, `Coordinator for thread ${t.id} could not be replaced (too many recent replacements); run agt start after fixing the cause.`);
+              }
+            } else if (replaceCoordinator(s, t, "the previous coordinator never reported back from its spawn")) {
+              notify(main, `${text!} A replacement is starting.`);
+            } else {
+              notify(main, text!);
+            }
+          } else {
+            notify(main, text ?? `Coordinator for thread ${s.thread} failed: ${ev.payload.reason}.`);
           }
         }
         fillWorkers(s?.thread);

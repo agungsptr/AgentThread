@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
 import { initProject } from "../../src/project/init.ts";
-import { FAKE_HERDR, fakeHerdrState, isolatedConfigHome, tempRepo } from "../helpers.ts";
+import { FAKE_HERDR, fakeHerdrState, isolatedConfigHome, tempRepo, SPAWN_REPORT_ENV } from "../helpers.ts";
 
 const BIN = join(import.meta.dir, "../../bin/agt");
 let root: string;
@@ -18,6 +18,7 @@ function agt(args: string[], extra: Record<string, string> = {}) {
       HOME: "/nonexistent",
       XDG_CONFIG_HOME: xdg,
       AGT_ROOT: root,
+      ...SPAWN_REPORT_ENV,
       FAKE_HERDR_STATE: fake.file,
       HERDR_ENV: "1",
       HERDR_WORKSPACE_ID: "w1",

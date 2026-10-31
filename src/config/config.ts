@@ -109,8 +109,12 @@ export const ConfigSchema = z
           .object({ timeout: duration.default("5m"), fallback_generate: z.boolean().default(true) })
           .strict()
           .default({}),
-        /** How long a spawned session may stay `starting` without a pane before the sweep fails it (its spawn report was lost). */
-        spawn_timeout: durationAtLeast("30s").default("3m"),
+        /**
+         * How long a spawned session may stay `starting` without a pane before the sweep fails it (its spawn report was
+         * lost). At least 60s: well beyond the spawn job's report retry window (20 × 500ms), so the sweep never fails a
+         * session whose job is still retrying its report.
+         */
+        spawn_timeout: durationAtLeast("60s").default("3m"),
       })
       .strict()
       .default({}),

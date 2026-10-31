@@ -127,8 +127,37 @@ describe("sessions", () => {
     const id = "00000000-0000-4000-8000-000000000001";
     exec(s, { cmd: "session.failed", session: id, reason: "agent_not_ready" });
     expect(s.sessions.get(id)!.status).toBe("failed");
-    expect(exec(s, { cmd: "session.attached", session: id, pane: "w1:p9" })).toMatchObject({ ok: true, events: [] });
+    // the spawn job must learn that its agent is unwanted: it stops it
+    expect(err(exec(s, { cmd: "session.attached", session: id, pane: "w1:p9" }))).toBe(`session ${id} is no longer live`);
+    expect(exec(s, { cmd: "session.failed", session: id, reason: "late" })).toMatchObject({ ok: true, events: [] });
     expect(err(exec(s, { cmd: "session.failed", session: id, reason: "x" }, COORD))).toBe("role coordinator may not run session.failed");
+  });
+
+  test("a repeated attach of a live session to the same pane emits nothing", () => {
+    const s = threadWithTab();
+    exec(s, { cmd: "worker.spawn", thread: "001", ticket: "T1" }, COORD);
+    const id = "00000000-0000-4000-8000-000000000001";
+    expect(exec(s, { cmd: "session.attached", session: id, pane: "w1:p3" })).toMatchObject({ ok: true, events: [{ type: "session.attached" }] });
+    expect(exec(s, { cmd: "session.attached", session: id, pane: "w1:p3" })).toMatchObject({ ok: true, events: [] });
+    expect(exec(s, { cmd: "session.attached", session: id, pane: "w1:p3", pending: "again" })).toMatchObject({ ok: true, events: [] });
+  });
+
+  test("a command from a failed or ended session is rejected; its lifecycle signals still pass", () => {
+    const s = threadWithTab();
+    exec(s, { cmd: "worker.spawn", thread: "001", ticket: "T1" }, COORD);
+    exec(s, { cmd: "worker.spawn", thread: "001", ticket: "T2" }, COORD);
+    const [w1, w2] = ["00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"];
+    const worker = (session: string, ticket: string): Actor => ({ role: "worker", thread: "001", ticket, session });
+    exec(s, { cmd: "session.failed", session: w1, reason: "spawn report lost after 3m" });
+    expect(err(exec(s, { cmd: "ticket.claim", thread: "001", ticket: "T1" }, worker(w1, "T1")))).toBe(`session ${w1} is no longer live`);
+    expect(err(exec(s, { cmd: "progress", thread: "001", message: "x" }, worker(w1, "T1")))).toBe(`session ${w1} is no longer live`);
+    exec(s, { cmd: "session.attached", session: w2, pane: "w1:p4" });
+    expect(exec(s, { cmd: "ticket.claim", thread: "001", ticket: "T2" }, worker(w2, "T2")).ok).toBe(true);
+    exec(s, { cmd: "session.signal", session: w2, signal: "ended" });
+    expect(err(exec(s, { cmd: "ticket.done", thread: "001", ticket: "T2", summary: "x" }, worker(w2, "T2")))).toBe(`session ${w2} is no longer live`);
+    expect(exec(s, { cmd: "session.signal", session: w2, signal: "idle" }, worker(w2, "T2"))).toMatchObject({ ok: true, events: [] });
+    // any other actor session (here one the log does not know) passes
+    expect(exec(s, { cmd: "progress", thread: "001", message: "x" }, COORD).ok).toBe(true);
   });
 
   test("attached with a pending bootstrap queues it as a notice for the session", () => {

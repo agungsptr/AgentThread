@@ -311,7 +311,68 @@ test("a lost-spawn failure of a coordinator notifies main and spawns a replaceme
   const failed = sweep(s, "2026-10-11T10:05:00.000Z", ctx()).events;
   expect(failed).toEqual([{ type: "session.failed", thread: "001", payload: { session: C2, reason: "spawn report lost after 3m" } }]);
   const r = react(s, apply(s, "2026-10-11T10:05:00.000Z", ...failed), ctx());
-  expect(notices(r.events, MAIN)).toEqual([`Session ${C2} (coordinator) never reported back from its spawn; marked failed after 3m.`]);
+  expect(notices(r.events, MAIN)).toEqual([`Session ${C2} (coordinator) never reported back from its spawn; marked failed after 3m. A replacement is starting.`]);
   expect(r.events.some((e) => e.type === "session.created" && e.payload.role === "coordinator" && e.payload.replaces === C2)).toBe(true);
   expect(r.effects.map((e) => e.kind)).toContain("agent.spawn");
+});
+
+test("a lost-spawn worker that claimed its ticket releases it, as a lost worker does", () => {
+  const s = base();
+  apply(
+    s,
+    "2026-10-11T10:01:00.000Z",
+    { type: "ticket.created", thread: "001", payload: { ticket: "T1", title: "a", scope: ["a"] } },
+    { type: "ticket.created", thread: "001", payload: { ticket: "T2", title: "b", scope: ["b"] } },
+    { type: "session.created", thread: "001", payload: { session: W, role: "worker", agent: "claude-code", name: "w", ticket: "T1" } },
+    // its agent started and claimed the ticket, but the attach report never reached the daemon
+    { type: "ticket.claimed", thread: "001", payload: { ticket: "T1", assignee: W } },
+  );
+  const failed = sweep(s, "2026-10-11T10:05:00.000Z", ctx()).events;
+  const r = react(s, apply(s, "2026-10-11T10:05:00.000Z", ...failed), ctx());
+  expect(r.events.filter((e) => e.type === "ticket.released")).toEqual([
+    { type: "ticket.released", thread: "001", payload: { ticket: "T1", reason: "worker spawn report lost" } },
+  ]);
+  expect(notices(r.events, C)).toEqual([SPAWN_LOST(W)]);
+  // a ticket assigned to someone else, or a failure that is not a lost spawn, releases nothing
+  const W2 = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+  apply(
+    s,
+    "2026-10-11T10:06:00.000Z",
+    { type: "session.created", thread: "001", payload: { session: W2, role: "worker", agent: "claude-code", name: "w2", ticket: "T2" } },
+    { type: "ticket.claimed", thread: "001", payload: { ticket: "T2", assignee: "someone-else" } },
+  );
+  const r2 = react(s, apply(s, "2026-10-11T10:10:00.000Z", ...sweep(s, "2026-10-11T10:10:00.000Z", ctx()).events), ctx());
+  expect(r2.events.some((e) => e.type === "ticket.released")).toBe(false);
+});
+
+test("a lost-spawn coordinator past the replacement brake is not replaced, and main is told to run agt start", () => {
+  const s = base();
+  apply(
+    s,
+    "2026-10-11T10:00:00.000Z",
+    { type: "session.created", thread: "001", payload: { session: MAIN, role: "main", agent: "claude-code", name: "m" } },
+    { type: "session.attached", thread: "001", payload: { session: MAIN, pane: "w1:p0" } },
+  );
+  // three replacements in the last 10 minutes; the last one never reports back
+  let prev = C;
+  const ids = ["e1", "e2", "e3"].map((x) => `eeeeeeee-eeee-4eee-8eee-eeeeeeeee${x}0`);
+  for (const [i, id] of ids.entries()) {
+    apply(
+      s,
+      `2026-10-11T10:0${i + 1}:00.000Z`,
+      { type: "session.failed", thread: "001", payload: { session: prev, reason: "x" } },
+      { type: "session.created", thread: "001", payload: { session: id, role: "coordinator", agent: "claude-code", name: "c", replaces: prev } },
+    );
+    if (i < 2) apply(s, `2026-10-11T10:0${i + 1}:00.000Z`, { type: "session.attached", thread: "001", payload: { session: id, pane: `w1:p${i + 5}` } });
+    prev = id;
+  }
+  const failed = sweep(s, "2026-10-11T10:06:30.000Z", ctx()).events;
+  expect(failed).toEqual([{ type: "session.failed", thread: "001", payload: { session: ids[2]!, reason: "spawn report lost after 3m" } }]);
+  const r = react(s, apply(s, "2026-10-11T10:06:30.000Z", ...failed), ctx());
+  expect(notices(r.events, MAIN)).toEqual([
+    `Session ${ids[2]} (coordinator) never reported back from its spawn; marked failed after 3m.`,
+    "Coordinator for thread 001 could not be replaced (too many recent replacements); run agt start after fixing the cause.",
+  ]);
+  expect(r.events.some((e) => e.type === "session.created")).toBe(false);
+  expect(r.effects.some((e) => e.kind === "agent.spawn")).toBe(false);
 });

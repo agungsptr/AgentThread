@@ -8,7 +8,7 @@ import { agentEnv } from "../agents/claude.ts";
 import { adapterFor, agentBin } from "../agents/adapters.ts";
 import { configWarnings, installWarnings, roleAgent, trustWarning } from "../agents/roles.ts";
 import { systemPrompt } from "../agents/prompts.ts";
-import { decodeJob, loggedArgv, reportWithRetry, runSpawnJob } from "../agents/spawn-job.ts";
+import { decodeJob, loggedArgv, reportWithRetry, runSpawnJob, spawnReportRetry } from "../agents/spawn-job.ts";
 import { contextTokensFromTranscript } from "../agents/transcript.ts";
 import { isAlive, request } from "../daemon/client.ts";
 import { startDaemon } from "../daemon/server.ts";
@@ -96,9 +96,10 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
         timeoutMs: 90_000,
       });
       const socket = paths(job.root).socket;
+      const retry = spawnReportRetry(process.env);
       await runSpawnJob(job, {
         herdr,
-        report: (command) => reportWithRetry(() => request(socket, { op: "command", command, actor: { role: "user" } })),
+        report: (command) => reportWithRetry(() => request(socket, { op: "command", command, actor: { role: "user" } }), retry),
       });
       return 0;
     }

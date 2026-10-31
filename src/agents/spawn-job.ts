@@ -20,25 +20,39 @@ export interface SpawnJob {
 export const encodeJob = (job: SpawnJob): string => Buffer.from(JSON.stringify(job)).toString("base64");
 export const decodeJob = (s: string): SpawnJob => JSON.parse(Buffer.from(s, "base64").toString("utf8")) as SpawnJob;
 
+/** The default report retry window, 20 × 500ms: well inside the minimum `session.spawn_timeout` (60s). */
+const REPORT_ATTEMPTS = 20;
+const REPORT_DELAY_MS = 500;
+
+/** The report retry window, with AGT_SPAWN_REPORT_ATTEMPTS / AGT_SPAWN_REPORT_DELAY_MS overrides (tests keep it short). */
+export function spawnReportRetry(env: Record<string, string | undefined>): { attempts: number; delayMs: number } {
+  const int = (v: string | undefined, min: number, fallback: number) => {
+    const n = v === undefined || v.trim() === "" ? NaN : Number(v);
+    return Number.isInteger(n) && n >= min ? n : fallback;
+  };
+  return { attempts: int(env.AGT_SPAWN_REPORT_ATTEMPTS, 1, REPORT_ATTEMPTS), delayMs: int(env.AGT_SPAWN_REPORT_DELAY_MS, 0, REPORT_DELAY_MS) };
+}
+
 /**
  * Sends a spawn report, retrying while the daemon is down or shutting down (it may be restarting). Any other refusal is
- * final. Gives up quietly after `attempts`; the daemon's sweep then fails the session.
+ * final. Gives up quietly after `attempts`; the daemon's sweep then fails the session. Returns whether the report was
+ * delivered and accepted.
  */
 export async function reportWithRetry(
   send: () => Promise<{ ok: boolean; error?: string }>,
   o: { attempts?: number; delayMs?: number } = {},
-): Promise<void> {
-  const attempts = o.attempts ?? 20;
-  const delayMs = o.delayMs ?? 500;
+): Promise<boolean> {
+  const attempts = o.attempts ?? REPORT_ATTEMPTS;
+  const delayMs = o.delayMs ?? REPORT_DELAY_MS;
   for (let i = 1; i <= attempts; i++) {
     let error: string;
     try {
       const res = await send();
-      if (res.ok) return;
+      if (res.ok) return true;
       error = res.error ?? "unknown error";
       if (error !== "daemon is shutting down") {
         console.error(`agt __spawn: ${error}`);
-        return;
+        return false;
       }
     } catch (e) {
       error = `cannot report to daemon: ${e instanceof Error ? e.message : String(e)}`;
@@ -46,6 +60,7 @@ export async function reportWithRetry(
     if (i === attempts) console.error(`agt __spawn: ${error}`);
     else await Bun.sleep(delayMs);
   }
+  return false;
 }
 
 /** Runs in the `agt __spawn` child so the daemon never waits for an agent to boot. */
@@ -55,10 +70,11 @@ const BUSY_RETRY_MS = 500;
 
 export async function runSpawnJob(
   job: SpawnJob,
-  deps: { herdr: HerdrBridge; report: (command: object) => Promise<void>; sleep?: (ms: number) => Promise<void>; busyRetries?: number },
+  deps: { herdr: HerdrBridge; report: (command: object) => Promise<boolean>; sleep?: (ms: number) => Promise<void>; busyRetries?: number },
 ): Promise<void> {
   const sleep = deps.sleep ?? ((ms: number) => Bun.sleep(ms));
   let created: string | undefined;
+  let attached: { pane: string; pending?: string };
   try {
     const pane = job.pane ?? (created = splitWithFallbacks(deps.herdr, job.split!));
     for (let attempt = 0; ; attempt++) {
@@ -84,16 +100,25 @@ export async function runSpawnJob(
         pending = job.bootstrap; // the daemon queues it and delivers it at the agent's first idle
       }
     }
-    await deps.report({ cmd: "session.attached", session: job.session, pane, ...(pending ? { pending } : {}) });
+    attached = { pane, ...(pending ? { pending } : {}) };
   } catch (e) {
-    if (created) {
-      try {
-        deps.herdr.closePane(created);
-      } catch {
-        // best effort: the pane may already be gone
-      }
-    }
+    if (created) closeQuietly(deps.herdr, created);
     await deps.report({ cmd: "session.failed", session: job.session, reason: e instanceof Error ? e.message : String(e) });
+    return;
+  }
+  if (await deps.report({ cmd: "session.attached", session: job.session, ...attached })) return;
+  // The daemon refused the report (it failed the session: its spawn report was lost, and a replacement may be running),
+  // or never got it (its sweep will fail the session). Either way nobody tracks this agent: stop it. Its pane is the
+  // split this job made, or the thread root pane it was given (the daemon never hands a job main's pane).
+  closeQuietly(deps.herdr, attached.pane);
+  console.error(`agt __spawn: session ${job.session} was failed by the daemon; stopped its agent`);
+}
+
+function closeQuietly(herdr: HerdrBridge, pane: string): void {
+  try {
+    herdr.closePane(pane);
+  } catch {
+    // best effort: the pane may already be gone
   }
 }
 
