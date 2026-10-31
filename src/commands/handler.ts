@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { DEFAULT_CONFIG, type Config } from "../config/config.ts";
 import { canTransitionThread, canTransitionTicket, scopesOverlap, slugify, validateHandoff } from "../domain/rules.ts";
@@ -352,16 +353,19 @@ function newThread(state: State, cmd: Extract<Command, { cmd: "thread.new" }>, c
     const at = join(ctx.root, ".worktrees", name);
     return [...state.threads.values()].find((t) => t.task === name || t.dir === at || t.worktree === at);
   };
+  // A folder no thread owns (made by hand, or left behind) is never adopted: its name is taken as well.
+  const taken = (name: string) => ownerOf(name) !== undefined || existsSync(join(ctx.root, ".worktrees", name));
   let task: string;
   if (cmd.task !== undefined) {
     task = cmd.task;
     if (!TASK_NAME.test(task)) reject(`task name must match ${TASK_NAME.source}`);
     const owner = ownerOf(task);
     if (owner) reject(`task ${task} is already used by thread ${owner.id}`);
+    if (existsSync(join(ctx.root, ".worktrees", task))) reject(`folder .worktrees/${task} already exists`);
   } else {
     // A derived name (the slug always matches TASK_NAME) that is taken gets the first free numeric suffix.
     task = slug;
-    for (let n = 2; ownerOf(task); n++) task = `${slug}-${n}`;
+    for (let n = 2; taken(task); n++) task = `${slug}-${n}`;
   }
   const dir = join(ctx.root, ".worktrees", task);
   const status: ThreadStatus = depsDone(state, cmd.dependsOn) ? "open" : "blocked";

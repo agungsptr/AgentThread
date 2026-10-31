@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, readdir, rm } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { agentEnv, claudeConfigDir } from "../agents/claude.ts";
 import { adapterFor } from "../agents/adapters.ts";
@@ -129,7 +129,9 @@ export function createEffectRunner(opts: {
         return [];
       }
       case "thread.dir.ensure":
-        // Only from a command (thread.new): a failure to make the directory fails the command.
+        // Only from a command (thread.new): a failure to make the directory fails the command. A non-empty folder
+        // already there is someone else's: it is never adopted.
+        if ((await readdir(effect.thread.dir).catch(() => [])).length > 0) throw new Error(`${effect.thread.dir} already exists and is not empty`);
         await mkdir(effect.thread.dir, { recursive: true });
         writeDirAgents(effect.thread, effect.thread.dir);
         return [];

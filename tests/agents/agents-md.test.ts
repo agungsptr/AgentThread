@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { agentsMd, writeAgentsFiles, writeThreadDirFiles } from "../../src/agents/agents-md.ts";
@@ -545,6 +545,23 @@ describe("thread directory", () => {
     expect(readFileSync(join(dir, SKILL_REL), "utf8")).toContain("name: agt");
     expect(existsSync(join(dir, ".git"))).toBe(false);
     expect(existsSync(join(root, ".agentthread", "worktree-excludes"))).toBe(false);
+  });
+
+  test("I3: thread.dir.ensure refuses an existing non-empty directory and leaves it untouched", async () => {
+    const root = workspace();
+    const dir = join(root, ".worktrees", "kyc-1");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "notes.txt"), "mine\n");
+    const run = createEffectRunner({ root, config: NO_SKILL, layout: () => undefined, thread: () => undefined, log: () => {} });
+    await expect(run({ kind: "thread.dir.ensure", thread: { id: "001", title: "Fix login", slug: "fix-login", task: "kyc-1", dir } })).rejects.toThrow(
+      `${dir} already exists and is not empty`,
+    );
+    expect(readdirSync(dir)).toEqual(["notes.txt"]);
+    // an existing empty directory is fine
+    const empty = join(root, ".worktrees", "kyc-2");
+    mkdirSync(empty, { recursive: true });
+    expect(await run({ kind: "thread.dir.ensure", thread: { id: "002", title: "X", slug: "x", task: "kyc-2", dir: empty } })).toEqual([]);
+    expect(existsSync(join(empty, "AGENTS.md"))).toBe(true);
   });
 
   test("thread.dir.ensure makes the directory and writes the files; agent.spawn rewrites them there", async () => {

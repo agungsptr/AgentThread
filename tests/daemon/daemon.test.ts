@@ -103,9 +103,14 @@ test("large payloads round-trip", async () => {
 
 test("a failing effect rejects the command and writes no event", async () => {
   await cmd({ cmd: "thread.new", title: "X", type: "bug" });
-  // a file where the thread directory goes: mkdir -p fails
-  writeFileSync(join(root, ".worktrees", "y"), "");
-  const r = await cmd({ cmd: "thread.new", title: "Y", type: "bug" });
+  // .worktrees is read-only: making the thread directory fails (a file at its path would only rename the task)
+  chmodSync(join(root, ".worktrees"), 0o555);
+  let r;
+  try {
+    r = await cmd({ cmd: "thread.new", title: "Y", type: "bug" });
+  } finally {
+    chmodSync(join(root, ".worktrees"), 0o755);
+  }
   expect(r.ok).toBe(false);
   const events = await request(sock(), { op: "events.since", seq: 0 });
   expect(events.ok && (events.result as StoredEvent[]).map((e) => e.type)).toEqual(["project.initialized", "thread.created"]);

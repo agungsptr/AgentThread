@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { handle, type HandleResult } from "../../src/commands/handler.ts";
 import { CommandSchema } from "../../src/commands/schema.ts";
 import type { Actor, StoredEvent } from "../../src/domain/types.ts";
@@ -77,6 +80,18 @@ describe("thread.new", () => {
   test("a task name that would reuse a legacy thread's worktree is rejected", () => {
     const s = stateOf(INIT, threadCreated("001"));
     expect(errorOf(run(s, { cmd: "thread.new", title: "X", type: "bug", task: "001-thread-001" }))).toBe("task 001-thread-001 is already used by thread 001");
+  });
+
+  test("I3: an existing .worktrees/<name> folder is taken: a derived name gets -2, an explicit --task is rejected, its files untouched", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "agt-hand-")));
+    const folder = join(root, ".worktrees", "same");
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, "notes.txt"), "mine\n");
+    const s = stateOf(INIT);
+    const at = (cmd: unknown) => handle(s, CommandSchema.parse(cmd), USER, { root });
+    expect(at({ cmd: "thread.new", title: "Same", type: "bug" })).toMatchObject({ ok: true, result: { task: "same-2", dir: join(root, ".worktrees", "same-2") } });
+    expect(errorOf(at({ cmd: "thread.new", title: "Other", type: "bug", task: "same" }))).toBe("folder .worktrees/same already exists");
+    expect(readFileSync(join(folder, "notes.txt"), "utf8")).toBe("mine\n");
   });
 
   test("a derived task name that collides with a legacy worktree gets a suffix", () => {
