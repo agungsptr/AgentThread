@@ -75,7 +75,7 @@ test("a thread with a task: the tab, the coordinator, a replacement and a worker
   const s = taskBase();
   const t = s.threads.get("001")!;
   expect(t).toMatchObject({ task: "kyc-1", dir: "/repo/.worktrees/kyc-1", worktrees: {}, legacy: false });
-  expect(tabEnsure(t, ctx())).toMatchObject({ kind: "herdr.tab.ensure", cwd: "/repo/.worktrees/kyc-1" });
+  expect(tabEnsure(t, ctx())).toMatchObject({ kind: "herdr.tab.ensure", cwd: "/repo/.worktrees/kyc-1", env: { AGT_TASK: "kyc-1" } });
   expect(spawnCoordinator(t, ctx()).effects[0]).toMatchObject({ kind: "agent.spawn", cwd: "/repo/.worktrees/kyc-1" });
   expect(spawnReplacement(t, s.sessions.get(C)!, ctx(), { bootstrap: "handoff" }).effects[0]).toMatchObject({ cwd: "/repo/.worktrees/kyc-1" });
   expect(spawnWorker(s, t, "T1", ctx()).effects[0]).toMatchObject({ kind: "agent.spawn", cwd: "/repo/.worktrees/kyc-1" });
@@ -88,6 +88,7 @@ test("an old log's thread (branch and worktree) replays as legacy and still runs
   expect(t.dir).toBeUndefined();
   expect(t.task).toBeUndefined();
   expect(tabEnsure(t, ctx())).toMatchObject({ cwd: "/repo/.worktrees/001-thread-001" });
+  expect((tabEnsure(t, ctx()) as { env: Record<string, string> }).env).not.toHaveProperty("AGT_TASK");
   expect(spawnCoordinator(t, ctx()).effects[0]).toMatchObject({ cwd: "/repo/.worktrees/001-thread-001" });
   expect(spawnWorker(s, t, "T1", ctx()).effects[0]).toMatchObject({ cwd: "/repo/.worktrees/001-thread-001" });
 });

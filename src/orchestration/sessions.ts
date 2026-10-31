@@ -21,9 +21,9 @@ const runFields = (run: RoleAgent) => ({ agent: run.agent, ...(run.model ? { mod
  * The env of a thread's tab, which its first coordinator inherits in the root pane: the AGT_* env with the
  * coordinator adapter's env merged over it.
  */
-export function tabEnv(t: { id: string; tier?: string; dir?: string }, ctx: { root: string; config: Config }): Record<string, string> {
+export function tabEnv(t: { id: string; tier?: string; dir?: string; task?: string }, ctx: { root: string; config: Config }): Record<string, string> {
   const run = tierAgent(ctx.config, t.tier);
-  const base = agentEnv({ root: ctx.root, role: "coordinator", agent: run.agent, thread: t.id, configDir: claudeConfigDir(ctx.config) });
+  const base = agentEnv({ root: ctx.root, role: "coordinator", agent: run.agent, thread: t.id, ...(t.dir !== undefined && t.task ? { task: t.task } : {}), configDir: claudeConfigDir(ctx.config) });
   return { ...base, ...adapterFor(run.agent).launch({ role: "coordinator", run, config: ctx.config, root: ctx.root }).env, ...threadGitEnv(t, ctx.root) };
 }
 

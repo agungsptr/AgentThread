@@ -416,6 +416,71 @@ describe("worker commit guard", () => {
   });
 });
 
+describe("branch-aware commit guard and no-push hook", () => {
+  const WIP = "AgentThread: workers commit only on wip/<task>.";
+  const FEAT = "AgentThread: the coordinator commits only the squash on feat/<task>.";
+  const PUSH = "AgentThread: agents never push; the user pushes.";
+  function taskWt(branch: string) {
+    const root = tempRepo();
+    const wt = join(root, ".worktrees", "t1", "repo");
+    addWorktree(root, branch, wt);
+    write({ root, worktree: wt, content: SECTION });
+    return { root, wt };
+  }
+  const err = (r: ReturnType<typeof commit>) => r.stderr.toString();
+
+  test("a worker commits on wip/<task> and is refused elsewhere", () => {
+    expect(commit(taskWt("wip/t1").wt, { AGT_ROLE: "worker", AGT_TASK: "t1" }).exitCode).toBe(0);
+    const r = commit(taskWt("feat/t1").wt, { AGT_ROLE: "worker", AGT_TASK: "t1" });
+    expect(r.exitCode).not.toBe(0);
+    expect(err(r)).toContain(WIP);
+    const other = commit(taskWt("wip/t2").wt, { AGT_ROLE: "worker", AGT_TASK: "t1" });
+    expect(other.exitCode).not.toBe(0);
+    expect(err(other)).toContain(WIP);
+  });
+
+  test("the coordinator commits on feat/<task> and is refused on wip/<task>", () => {
+    expect(commit(taskWt("feat/t1").wt, { AGT_ROLE: "coordinator", AGT_TASK: "t1" }).exitCode).toBe(0);
+    const r = commit(taskWt("wip/t1").wt, { AGT_ROLE: "coordinator", AGT_TASK: "t1" });
+    expect(r.exitCode).not.toBe(0);
+    expect(err(r)).toContain(FEAT);
+  });
+
+  test("with no AGT_ROLE, or main, any branch commits", () => {
+    expect(commit(taskWt("wip/t1").wt, {}).exitCode).toBe(0);
+    expect(commit(taskWt("feat/t1").wt, { AGT_ROLE: "main" }).exitCode).toBe(0);
+    expect(commit(taskWt("other/x").wt, {}).exitCode).toBe(0);
+  });
+
+  test("legacy thread/* branches: the worker is refused with the old message, the coordinator commits", () => {
+    const { wt } = taskWt("thread/x");
+    const r = commit(wt, { AGT_ROLE: "worker", AGT_TASK: "t1" });
+    expect(r.exitCode).not.toBe(0);
+    expect(err(r)).toContain("AgentThread: workers do not commit; the coordinator commits.");
+    expect(commit(wt, { AGT_ROLE: "coordinator" }).exitCode).toBe(0);
+  });
+
+  test("any agent role is refused a push; no role pushes; the project's pre-commit still runs after an allowed commit", () => {
+    const { root, wt } = taskWt("wip/t1");
+    const bare = mkdtempSync(join(tmpdir(), "agt-bare-"));
+    git(bare, "init", "-q", "--bare");
+    git(root, "remote", "add", "origin", bare);
+    const push = (env: Record<string, string>) =>
+      Bun.spawnSync(["git", "-C", wt, "push", "-q", "origin", "HEAD:refs/heads/wip/t1"], { env: { ...ENV, ...env }, stdout: "pipe", stderr: "pipe" });
+    for (const role of ["worker", "coordinator", "main"]) {
+      const r = push({ AGT_ROLE: role });
+      expect(r.exitCode).not.toBe(0);
+      expect(r.stderr.toString()).toContain(PUSH);
+    }
+    expect(push({}).exitCode).toBe(0);
+    writeFileSync(join(root, ".git", "hooks", "pre-commit"), "#!/bin/sh\necho project-hook-ran >&2\nexit 1\n", { mode: 0o755 });
+    const c = commit(wt, { AGT_ROLE: "worker", AGT_TASK: "t1" });
+    expect(c.exitCode).not.toBe(0);
+    expect(err(c)).toContain("project-hook-ran");
+    rmSync(bare, { recursive: true, force: true });
+  });
+});
+
 describe("effect runner", () => {
   const LAYOUT = { workspace: "w", mainTab: "t", managerPane: "p0", loggerPane: "p1", herdrBin: "/nonexistent/herdr" };
 

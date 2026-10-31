@@ -45,6 +45,7 @@ export function agentEnv(o: {
   session?: string;
   thread?: string;
   ticket?: string;
+  task?: string;
   configDir?: string;
 }): Record<string, string> {
   return {
@@ -54,6 +55,7 @@ export function agentEnv(o: {
     ...(o.session ? { AGT_SESSION: o.session } : {}),
     AGT_AGENT: o.agent,
     ...(o.ticket ? { AGT_TICKET: o.ticket } : {}),
+    ...(o.task && o.role !== "main" ? { AGT_TASK: o.task } : {}),
     ...(o.configDir && o.agent === "claude-code" ? { CLAUDE_CONFIG_DIR: o.configDir } : {}),
     PATH: `${dirname(AGT_BIN)}:${process.env.PATH ?? ""}`,
   };

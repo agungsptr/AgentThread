@@ -45,6 +45,9 @@ describe("claude adapter", () => {
   test("agent env puts agt on PATH and identifies the session", () => {
     const env = agentEnv({ root: "/repo", role: "worker", agent: "claude-code", session: "s-1", thread: "002", ticket: "T3" });
     expect(env).toMatchObject({ AGT_ROOT: "/repo", AGT_ROLE: "worker", AGT_SESSION: "s-1", AGT_AGENT: "claude-code", AGT_THREAD: "002", AGT_TICKET: "T3" });
+    expect(agentEnv({ root: "/repo", role: "worker", agent: "codex", task: "t1" }).AGT_TASK).toBe("t1");
+    expect(agentEnv({ root: "/repo", role: "main", agent: "codex", task: "t1" })).not.toHaveProperty("AGT_TASK");
+    expect(agentEnv({ root: "/repo", role: "worker", agent: "codex" })).not.toHaveProperty("AGT_TASK");
     expect(env.PATH!.startsWith(`${dirname(AGT_BIN)}:`)).toBe(true);
     expect(agentEnv({ root: "/repo", role: "worker", agent: "codex", session: "s-1" }).AGT_AGENT).toBe("codex");
     expect(agentEnv({ root: "/repo", role: "main", agent: "claude-code", session: "m" })).not.toHaveProperty("AGT_THREAD");
@@ -52,6 +55,15 @@ describe("claude adapter", () => {
 });
 
 describe("prompts", () => {
+  test("the coordinator's commit rule: legacy keeps git commit, a task thread squashes from wip/<task>", () => {
+    const legacy = systemPrompt({ root: "/repo", role: "coordinator", thread: T });
+    expect(legacy).toContain("then git add and git commit in the worktree.");
+    const t = { id: "002", title: "Fix race", slug: "fix-race", dir: "/repo/.worktrees/fix-race", task: "fix-race" };
+    const p = systemPrompt({ root: "/repo", role: "coordinator", thread: t });
+    expect(p).toContain("- Workers commit their tickets on wip/fix-race. You never edit or commit repo files; at the end you squash: in each repo worktree, git switch -c feat/fix-race <source>, git merge --squash wip/fix-race, then one plain commit.");
+    expect(p).not.toContain("git add and git commit");
+  });
+
   test("coordinator prompt names its thread, files and commands", () => {
     const p = systemPrompt({ root: "/repo", role: "coordinator", thread: T });
     for (const s of [`thread 002 ("Fix race")`, T.worktree, `${DIR}/sub.thread.md`, `${DIR}/board.md`, "agt ticket add 002", "agt worker spawn 002 --ticket <T>", "HANDOFF REQUEST", "git commit", "agt thread status 002 review", '- Plan before you spawn: split the work into the largest set of tickets that can run in parallel without touching the same files (usually 2–4). Use one ticket only when the work is genuinely a single change. Add each with: agt ticket add 002 "<title>" --scope <path> [--scope <path>].', "- Spawn a worker for every ticket that is ready, all at once, with agt worker spawn 002 --ticket <T>; the daemon queues any beyond max-workers.", "- Do not implement tickets yourself: every change to project files is made by a worker. You may read code and docs, run the tests and the stack, review and commit.", 'answer each with agt answer <thread> <Q> "<answer>". Only you and the main manager ever ask the user.']) {

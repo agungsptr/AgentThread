@@ -4,7 +4,7 @@ import { tierList } from "../orchestration/tiers.ts";
 import { paths } from "../project/paths.ts";
 
 /** A thread as the prompts see it: a thread directory (`dir`), or a legacy thread's single git worktree. */
-export type PromptThread = { id: string; title: string; slug: string; worktree?: string; dir?: string };
+export type PromptThread = { id: string; title: string; slug: string; worktree?: string; dir?: string; task?: string };
 
 /** Where the thread's agents work: its thread directory, else its (legacy) worktree. */
 export const workDir = (t: PromptThread) => t.dir ?? t.worktree ?? "";
@@ -47,7 +47,9 @@ export function systemPrompt(o: PromptInput): string {
         : ["- Ask the user which source branch to start from, then create a worktree for each repo the task touches: agt worktree add <thread> <repo> --from <branch>. Never move or rename a worktree."]),
       `- Plan before you spawn: split the work into the largest set of tickets that can run in parallel without touching the same files (usually 2–4). Use one ticket only when the work is genuinely a single change. Add each with: agt ticket add ${t.id} "<title>" --scope <path> [--scope <path>].`,
       `- Spawn a worker for every ticket that is ready, all at once, with agt worker spawn ${t.id} --ticket <T>; the daemon queues any beyond max-workers.`,
-      "- Workers only edit files. You are the only one who commits: when a ticket is done, review the change, then git add and git commit in the worktree.",
+      t.dir === undefined
+        ? "- Workers only edit files. You are the only one who commits: when a ticket is done, review the change, then git add and git commit in the worktree."
+        : `- Workers commit their tickets on wip/${t.task}. You never edit or commit repo files; at the end you squash: in each repo worktree, git switch -c feat/${t.task} <source>, git merge --squash wip/${t.task}, then one plain commit.`,
       "- Do not implement tickets yourself: every change to project files is made by a worker. You may read code and docs, run the tests and the stack, review and commit.",
       `- Record important decisions with agt decide ${t.id} "<decision>" and progress with agt progress ${t.id} "<message>".`,
       `- If a ticket is blocked, fix the cause, or reopen it with agt ticket reopen ${t.id}/<T> and start a new worker for it with agt worker spawn ${t.id} --ticket <T>.`,

@@ -253,6 +253,9 @@ function* excludeInWorktree(c: Ctx, root: string, repo: string, repoName: string
 }
 
 const GUARD_MESSAGE = "AgentThread: workers do not commit; the coordinator commits.";
+const WORKER_BRANCH_MESSAGE = "AgentThread: workers commit only on wip/<task>.";
+const COORDINATOR_BRANCH_MESSAGE = "AgentThread: the coordinator commits only the squash on feat/<task>.";
+const PUSH_MESSAGE = "AgentThread: agents never push; the user pushes.";
 const shq = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
 
 function writeIfChanged(file: string, text: string): void {
@@ -271,7 +274,24 @@ function hookStub(guardDir: string): string {
   return [
     "#!/bin/sh",
     'N=${0##*/}',
-    `if [ "$N" = "pre-commit" ] && [ "\${AGT_ROLE:-}" = "worker" ]; then`, `  echo ${shq(GUARD_MESSAGE)} >&2`, "  exit 1", "fi",
+    `if [ "$N" = "pre-push" ] && [ -n "\${AGT_ROLE:-}" ]; then`, `  echo ${shq(PUSH_MESSAGE)} >&2`, "  exit 1", "fi",
+    'if [ "$N" = "pre-commit" ]; then',
+    "  B=$(git symbolic-ref -q --short HEAD 2>/dev/null)",
+    '  case "${AGT_ROLE:-}" in',
+    "    worker)",
+    '      case "$B" in',
+    `        thread/*) echo ${shq(GUARD_MESSAGE)} >&2; exit 1 ;;`,
+    `        wip/*) [ -n "\${AGT_TASK:-}" ] && [ "$B" = "wip/$AGT_TASK" ] || { echo ${shq(WORKER_BRANCH_MESSAGE)} >&2; exit 1; } ;;`,
+    `        *) echo ${shq(WORKER_BRANCH_MESSAGE)} >&2; exit 1 ;;`,
+    "      esac ;;",
+    "    coordinator)",
+    '      case "$B" in',
+    "        thread/*) ;;",
+    `        feat/*) [ -n "\${AGT_TASK:-}" ] && [ "$B" = "feat/$AGT_TASK" ] || { echo ${shq(COORDINATOR_BRANCH_MESSAGE)} >&2; exit 1; } ;;`,
+    `        *) echo ${shq(COORDINATOR_BRANCH_MESSAGE)} >&2; exit 1 ;;`,
+    "      esac ;;",
+    "  esac",
+    "fi",
     "TOP=$(pwd -P)",
     'V=$(git config --worktree --get agentthread.hooksPath 2>/dev/null)',
     'if [ -z "$V" ]; then',
@@ -291,7 +311,7 @@ function hookStub(guardDir: string): string {
 }
 
 /**
- * Worker commit guard: a per-worktree core.hooksPath whose pre-commit refuses commits when $AGT_ROLE is "worker". Every
+ * Worker commit guard: a per-worktree core.hooksPath whose pre-commit refuses commits by role and branch (workers on wip/<task>, the coordinator on feat/<task>), pre-push refuses any push by an agent. Every
  * standard hook is a stub that then runs the project's own hook, found at run time through the worktree-scoped
  * agentthread.hooksPath (the original core.hooksPath as configured, empty when unset), so the shared stubs hold no
  * worktree-specific path. Needs extensions.worktreeConfig (set up by excludeInWorktree); the main checkout is untouched.

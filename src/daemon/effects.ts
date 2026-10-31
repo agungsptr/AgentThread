@@ -181,7 +181,7 @@ export function createEffectRunner(opts: {
                     direction: effect.direction ?? "right",
                     cwd: effect.cwd,
                     env: {
-                      ...agentEnv({ root: opts.root, role: effect.role, agent: effect.run.agent, session: effect.session, thread: effect.thread, ticket: effect.ticket, configDir }),
+                      ...agentEnv({ root: opts.root, role: effect.role, agent: effect.run.agent, session: effect.session, thread: effect.thread, ticket: effect.ticket, ...(t.dir !== undefined && t.task ? { task: t.task } : {}), configDir }),
                       ...launched.env,
                       ...threadGitEnv(t, opts.root),
                     },
