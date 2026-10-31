@@ -136,6 +136,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
     take(r);
     return true;
   };
+  let stackGiven = false;
   const requested = new Set<string>();
   const reminded = new Set<string>();
   const requestRotation = (s: Session | undefined, reason: string) => {
@@ -300,6 +301,16 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
           break;
         }
         notify(coordinatorToNotify(ev.thread), doneNotice(ev.payload.ticket, ev.payload.summary));
+        break;
+      }
+      case "stack.released": {
+        // The freed lock goes to the first thread in the queue (state is the post-batch one, so a queue entry that left in
+        // this batch is already gone); it is handed on once per call.
+        const next = state.stack.holder || stackGiven ? undefined : state.stack.queue[0];
+        if (!next) break;
+        stackGiven = true;
+        out.push({ type: "stack.acquired", thread: next.thread, payload: { thread: next.thread, ...(next.purpose ? { purpose: next.purpose } : {}) } });
+        notify(coordinatorToNotify(next.thread), `The stack lock is yours for thread ${next.thread}.`);
         break;
       }
       case "ticket.reopened":

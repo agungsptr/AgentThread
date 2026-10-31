@@ -59,5 +59,11 @@ export function sweep(state: State, now: string, ctx: ReactorContext): { events:
       effects.push(...r.effects);
     }
   }
+  // The stack lock needs a live coordinator to release it: one without is dropped, and the queue moves on (the reactor
+  // hands the freed lock to the next). A dead queued thread is dropped too, so it never receives the lock.
+  const dead = (thread: string) => state.threads.get(thread)?.status === "done" || liveSessions(state, thread, "coordinator").length === 0;
+  const { holder, queue } = state.stack;
+  if (holder && dead(holder.thread)) events.push({ type: "stack.released", thread: holder.thread, payload: { thread: holder.thread, reason: "holder thread has no live coordinator" } });
+  for (const q of queue) if (dead(q.thread)) events.push({ type: "stack.released", thread: q.thread, payload: { thread: q.thread, reason: "left the queue" } });
   return { events, effects };
 }

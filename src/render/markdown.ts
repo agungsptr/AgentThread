@@ -27,6 +27,16 @@ export const clampHeadings = (s: string) => {
 };
 const orNone = (lines: string[], none: string) => (lines.length ? lines : [none]);
 
+/** The workspace stack lock for main.thread.md: its holder and the queue in order. */
+function stackLines(state: State): string[] {
+  const { holder, queue } = state.stack;
+  const who = (x: { thread: string; purpose?: string }) => `${x.thread}${x.purpose ? ` (${x.purpose})` : ""}`;
+  return [
+    holder ? `Held by thread ${who(holder)} since ${holder.since}` : "Stack: free",
+    ...(queue.length ? [`Queue: ${queue.map(who).join(", ")}`] : []),
+  ];
+}
+
 export function renderMain(state: State, config: Config = DEFAULT_CONFIG): string {
   const threads = [...state.threads.values()];
   const rows = threads.map((t) => {
@@ -52,6 +62,10 @@ export function renderMain(state: State, config: Config = DEFAULT_CONFIG): strin
     "## Needs user attention",
     "",
     ...orNone(attention, "_Nothing right now._"),
+    "",
+    "## Stack",
+    "",
+    ...stackLines(state),
     "",
   ].join("\n");
 }

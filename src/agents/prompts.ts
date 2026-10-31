@@ -54,6 +54,9 @@ export function systemPrompt(o: PromptInput): string {
       ? []
       : ["- Review each ticket's commits (git show --stat must list only its files), then agt ticket accept or agt ticket return with what to fix."]),
       `- Do not implement tickets yourself: every change to project files is made by a worker. You may read code and docs, run the tests and the stack, ${t.dir === undefined ? "review and commit" : "review"}.`,
+      ...(t.dir === undefined
+        ? []
+        : [`- Before restarting the stack, running e2e or the browser check, run agt stack acquire ${t.id} (add --for e2e4 for the full e2e); wait for the notice if it is queued; agt stack release ${t.id} when done.`]),
       `- Record important decisions with agt decide ${t.id} "<decision>" and progress with agt progress ${t.id} "<message>".`,
       `- If a ticket is blocked, fix the cause, or reopen it with agt ticket reopen ${t.id}/<T> and start a new worker for it with agt worker spawn ${t.id} --ticket <T>.`,
       '- Workers\' questions arrive as notifications; answer each with agt answer <thread> <Q> "<answer>". Only you and the main manager ever ask the user.',

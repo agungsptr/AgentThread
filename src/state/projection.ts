@@ -172,11 +172,13 @@ export interface State {
   project?: { name: string };
   threads: Map<string, Thread>;
   sessions: Map<string, Session>;
+  /** The workspace's one stack lock: who holds it and who waits, in order. */
+  stack: { holder?: { thread: string; purpose?: string; since: string }; queue: { thread: string; purpose?: string }[] };
   lastSeq: number;
 }
 
 export function emptyState(): State {
-  return { threads: new Map(), sessions: new Map(), lastSeq: 0 };
+  return { threads: new Map(), sessions: new Map(), stack: { queue: [] }, lastSeq: 0 };
 }
 
 export function project(events: StoredEvent[]): State {
@@ -236,6 +238,17 @@ export function applyEvent(state: State, ev: StoredEvent): void {
 
   if (ev.type === "layout.registered") {
     state.layout = ev.payload;
+    return;
+  }
+
+  if (ev.type === "stack.acquired" || ev.type === "stack.queued" || ev.type === "stack.released") {
+    const { thread } = ev.payload;
+    const purpose = "purpose" in ev.payload ? ev.payload.purpose : undefined;
+    const { stack } = state;
+    stack.queue = stack.queue.filter((q) => q.thread !== thread);
+    if (ev.type === "stack.acquired") stack.holder = { thread, ...(purpose ? { purpose } : {}), since: ev.ts };
+    else if (ev.type === "stack.queued") stack.queue.push({ thread, ...(purpose ? { purpose } : {}) });
+    else if (stack.holder?.thread === thread) delete stack.holder;
     return;
   }
 

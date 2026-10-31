@@ -89,6 +89,8 @@ export type EventBody =
   | { type: "ticket.accepted"; thread: string; payload: { ticket: string } }
   | { type: "ticket.returned"; thread: string; payload: { ticket: string; note: string } }
   | { type: "stage.recorded"; thread: string; payload: { stage: number; state: StageState; by: StageBy; reason?: string } }
+  | { type: "stack.acquired" | "stack.queued"; thread: string; payload: { thread: string; purpose?: string } }
+  | { type: "stack.released"; thread: string; payload: { thread: string; reason: string } }
   | { type: "log.appended"; thread: string; payload: { message: string } }
   | { type: "decision.recorded"; thread: string; payload: { message: string } }
   | { type: "note.recorded" | "progress.recorded"; thread: string; payload: { message: string } }

@@ -70,6 +70,9 @@ const ALLOWED: Record<CommandName, readonly Role[]> = {
   "ticket.accept": ["coordinator"],
   "ticket.return": ["coordinator"],
   stage: ["user", "coordinator"],
+  "stack.acquire": ["user", "coordinator"],
+  "stack.release": ["user", "coordinator"],
+  "stack.status": ROLES,
   log: ROLES,
   decide: ["coordinator"],
   note: ROLES,
@@ -164,6 +167,8 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
     const recovery = recoverCoordinators(state, open, ctx);
     return { events: recovery.events, effects: [...open.map((t) => tabEnsure(t, ctx)), ...closes, ...probes, ...recovery.effects], result: { threads: open.length } };
   }
+
+  if (cmd.cmd === "stack.status") return { events: [], result: state.stack };
 
   if (cmd.cmd === "tell") {
     const target =
@@ -278,6 +283,22 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
       return {
         events: [{ type: "stage.recorded", thread: t.id, payload: { stage: cmd.stage, state: cmd.state, by: cmd.by ?? "coordinator", ...(cmd.reason ? { reason: cmd.reason } : {}) } }],
       };
+    }
+    case "stack.acquire": {
+      const { holder, queue } = state.stack;
+      if (holder?.thread === t.id) return { events: [], result: { acquired: true } };
+      // The queue keeps a waiting thread's place.
+      const waiting = queue.findIndex((q) => q.thread === t.id);
+      if (waiting >= 0) return { events: [], result: { acquired: false, position: waiting + 1 } };
+      // Task threads only: stages do not exist on a legacy thread, which cannot be approved.
+      if (cmd.for === "e2e4" && !t.legacy && !t.stage7Approved) reject(`stage 4 e2e needs the user's approval: agt stage ${t.id} 7 approve --by user`);
+      const payload = { thread: t.id, ...(cmd.for ? { purpose: cmd.for } : {}) };
+      if (!holder) return { events: [{ type: "stack.acquired", thread: t.id, payload }], result: { acquired: true } };
+      return { events: [{ type: "stack.queued", thread: t.id, payload }], result: { acquired: false, position: queue.length + 1 } };
+    }
+    case "stack.release": {
+      const reason = state.stack.holder?.thread === t.id ? "released" : state.stack.queue.some((q) => q.thread === t.id) ? "left the queue" : undefined;
+      return { events: reason ? [{ type: "stack.released", thread: t.id, payload: { thread: t.id, reason } }] : [] };
     }
     case "ticket.files":
       return { events: [], result: { files: findTicket(t, cmd.ticket).files ?? [] } };

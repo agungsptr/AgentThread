@@ -19,6 +19,7 @@ import { refreshRootSkill } from "../agents/skill.ts";
 import { initCommand, setupIfNeeded, setupOnTty } from "../project/setup.ts";
 import { paths } from "../project/paths.ts";
 import { findRoot } from "../project/root.ts";
+import type { State } from "../state/projection.ts";
 import { USAGE } from "./usage.ts";
 import { guide, isLegacyThread } from "../agents/guide.ts";
 
@@ -117,6 +118,23 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
         ...(values.reason !== undefined ? { reason: values.reason } : {}),
         ...(values.by ? { by: values.by } : {}),
       });
+    }
+    case "stack": {
+      const stackRoot = findRoot(cwd, env);
+      if (sub === "status") {
+        if (rest.length) throw new UsageError("stack status takes no arguments");
+        const res = await request(paths(stackRoot).socket, { op: "command", command: { cmd: "stack.status" }, actor: actorFromEnv(env) });
+        if (!res.ok) throw new Error(res.error);
+        const { holder, queue } = res.result as State["stack"];
+        console.log(holder ? `holder: thread ${holder.thread}${holder.purpose ? ` for ${holder.purpose}` : ""}, since ${holder.since}` : "holder: none (the stack is free)");
+        console.log(queue.length ? `queue: ${queue.map((q) => `${q.thread}${q.purpose ? ` (${q.purpose})` : ""}`).join(", ")}` : "queue: empty");
+        return 0;
+      }
+      if (sub !== "acquire" && sub !== "release") throw new UsageError(`unknown stack subcommand '${sub ?? ""}'`);
+      const { values, positionals } = parse(rest, { for: { type: "string" } });
+      if (positionals.length !== 1) throw new UsageError(`stack ${sub} needs <thread>`);
+      if (values.for !== undefined && (sub !== "acquire" || values.for !== "e2e4")) throw new UsageError("--for is only e2e4, and only for stack acquire");
+      return send(stackRoot, env, { cmd: `stack.${sub}`, thread: positionals[0], ...(values.for ? { for: values.for } : {}) });
     }
     case "log":
     case "decide":
