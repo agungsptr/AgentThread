@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { parse } from "yaml";
 import { systemPrompt } from "../../src/agents/prompts.ts";
 import { initProject } from "../../src/project/init.ts";
-import { FAKE_CLAUDE, FAKE_HERDR, fakeHerdrState, isolatedConfigHome, tempRepo, waitFor, SPAWN_REPORT_ENV } from "../helpers.ts";
+import { FAKE_CLAUDE, FAKE_HERDR, fakeHerdrState, isolatedConfigHome, repoName, tempRepo, waitFor, waitWorktreeAdded, SPAWN_REPORT_ENV } from "../helpers.ts";
 
 const BIN = join(import.meta.dir, "../../bin/agt");
 let root: string;
@@ -68,13 +68,15 @@ test("--no-manager skips Claude", () => {
   expect(existsSync(claudeLog)).toBe(false);
 });
 
-test("thread new --max-workers, worker spawn and tell", () => {
+test("thread new --max-workers, worker spawn and tell", async () => {
   agt(["start", "--no-manager"]);
   expect(agt(["thread", "new", "X", "--type", "bug", "--max-workers", "x"]).code).toBe(2);
   agt(["thread", "new", "X", "--type", "bug", "--max-workers", "1"]);
   const coord = { AGT_ROLE: "coordinator", AGT_THREAD: "001" };
-  agt(["ticket", "add", "001", "A", "--scope", "a"], coord);
-  agt(["ticket", "add", "001", "B", "--scope", "b"], coord);
+  agt(["worktree", "add", "001", repoName(root), "--from", "main"], coord);
+  await waitWorktreeAdded(root);
+  agt(["ticket", "add", "001", "A", "--repo", repoName(root), "--file", "a"], coord);
+  agt(["ticket", "add", "001", "B", "--repo", repoName(root), "--file", "b"], coord);
   expect(JSON.parse(agt(["worker", "spawn", "001", "--ticket", "T1"], coord).out)).toMatchObject({ queued: false });
   expect(agt(["worker", "spawn", "001", "--ticket", "T2", "--agent", "omp"], coord).out).toBe('{"queued":true}');
   const bad = agt(["worker", "spawn", "001", "--ticket", "T2", "--agent", "gpt"], coord);

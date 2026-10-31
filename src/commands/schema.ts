@@ -26,7 +26,17 @@ export const CommandSchema = z.discriminatedUnion("cmd", [
   z.object({ cmd: z.literal("thread.choose"), thread: threadId, tier: tierName, auto: z.boolean().optional() }),
   z.object({ cmd: z.literal("thread.cancel"), thread: threadId }),
   z.object({ cmd: z.literal("thread.status"), thread: threadId, status: z.enum(THREAD_STATUSES), reason: z.string().optional() }),
-  z.object({ cmd: z.literal("ticket.add"), thread: threadId, title: text, scope: z.array(text).min(1) }),
+  z.object({
+    cmd: z.literal("ticket.add"),
+    thread: threadId,
+    title: text,
+    /** A legacy thread's scope paths; a task thread's scope is its files. */
+    scope: z.array(text).default([]),
+    repo: text.optional(),
+    files: z.array(z.string()).optional(),
+    doc: text.optional(),
+  }),
+  z.object({ cmd: z.literal("ticket.files"), thread: threadId, ticket: ticketId }),
   z.object({ cmd: z.literal("ticket.claim"), thread: threadId, ticket: ticketId }),
   z.object({ cmd: z.literal("ticket.done"), thread: threadId, ticket: ticketId, summary: text }),
   z.object({ cmd: z.literal("ticket.block"), thread: threadId, ticket: ticketId, reason: text }),

@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
 import { initProject } from "../../src/project/init.ts";
-import { FAKE_CLAUDE, FAKE_HERDR, fakeHerdrState, isolatedConfigHome, tempRepo, waitFor, SPAWN_REPORT_ENV } from "../helpers.ts";
+import { FAKE_CLAUDE, FAKE_HERDR, fakeHerdrState, isolatedConfigHome, repoName, tempRepo, waitFor, waitWorktreeAdded, SPAWN_REPORT_ENV } from "../helpers.ts";
 
 const BIN = join(import.meta.dir, "../../bin/agt");
 let root: string;
@@ -59,8 +59,10 @@ test("coordinator spawns, workers queue and rotate, notices reach the idle coord
   expect(c.pane).toBe("w1:p2");
   hook("started", c.id, coordEnv);
   agt(["thread", "status", "001", "in_progress"], coordEnv);
-  agt(["ticket", "add", "001", "API", "--scope", "src/api"], coordEnv);
-  agt(["ticket", "add", "001", "UI", "--scope", "src/ui"], coordEnv);
+  agt(["worktree", "add", "001", repoName(root), "--from", "main"], coordEnv);
+  await waitWorktreeAdded(root);
+  agt(["ticket", "add", "001", "API", "--repo", repoName(root), "--file", "src/api"], coordEnv);
+  agt(["ticket", "add", "001", "UI", "--repo", repoName(root), "--file", "src/ui"], coordEnv);
   agt(["worker", "spawn", "001", "--ticket", "T1"], coordEnv);
   expect(agt(["worker", "spawn", "001", "--ticket", "T2"], coordEnv)).toBe('{"queued":true}');
   hook("idle", c.id, coordEnv);
@@ -92,7 +94,9 @@ test("every role starts through its own agent kind", async () => {
     agt(["thread", "new", "Login", "--type", "feature"]);
     const c = await waitFor(() => spawned("coordinator"), 10_000);
     expect(fake.read().kinds).toEqual({ [c.pane!]: "opencode" });
-    agt(["ticket", "add", "001", "API", "--scope", "src/api"], coordEnv);
+    agt(["worktree", "add", "001", repoName(root), "--from", "main"], coordEnv);
+    await waitWorktreeAdded(root);
+    agt(["ticket", "add", "001", "API", "--repo", repoName(root), "--file", "src/api"], coordEnv);
     agt(["worker", "spawn", "001", "--ticket", "T1"], coordEnv);
     const w = await waitFor(() => spawned("worker", "T1"), 10_000);
     expect(fake.read().kinds).toEqual({ [c.pane!]: "opencode", [w.pane!]: "codex" });

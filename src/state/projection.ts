@@ -65,6 +65,10 @@ export interface Ticket {
   id: string;
   title: string;
   scope: string[];
+  /** A task thread's ticket: the repo it works in, the repo-relative files it may change, and its doc path. */
+  repo?: string;
+  files?: string[];
+  doc?: string;
   status: TicketStatus;
   assignee?: string;
   /** The summary of `agt ticket done` (set while the ticket is done). */
@@ -316,7 +320,15 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       break;
     }
     case "ticket.created":
-      t.tickets.push({ id: ev.payload.ticket, title: ev.payload.title, scope: ev.payload.scope, status: "open" });
+      t.tickets.push({
+        id: ev.payload.ticket,
+        title: ev.payload.title,
+        scope: ev.payload.scope,
+        ...(ev.payload.repo !== undefined ? { repo: ev.payload.repo } : {}),
+        ...(ev.payload.files !== undefined ? { files: ev.payload.files } : {}),
+        ...(ev.payload.doc !== undefined ? { doc: ev.payload.doc } : {}),
+        status: "open",
+      });
       note(t, ev, `${ev.payload.ticket} created: ${ev.payload.title}`);
       break;
     case "ticket.claimed": {

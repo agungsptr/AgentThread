@@ -33,6 +33,11 @@ export function writeAll(
     writeAtomic(join(dir, "sub.thread.md"), renderSub(t, sessions, config));
     writeAtomic(join(dir, "brief.md"), renderBrief({ thread: t, sessions, trail: t.legacy ? trailOf(t) : undefined, trails: t.legacy ? undefined : Object.fromEntries(Object.keys(t.worktrees).map((r) => [r, trailOf(t, r)])), config }));
     writeAtomic(join(dir, "board.md"), renderBoard(t));
+    // The files each task-thread ticket may change, one repo-relative path per line (the worker's commit hook reads them).
+    if (!t.legacy) {
+      mkdirSync(join(dir, "tickets"), { recursive: true });
+      for (const k of t.tickets) if (k.files) writeAtomic(join(dir, "tickets", `${k.id}.files`), k.files.map((f) => `${f}\n`).join(""));
+    }
     writeAtomic(join(dir, "log.md"), renderLog(t));
   }
 }

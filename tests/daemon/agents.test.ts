@@ -9,7 +9,7 @@ import { startDaemon, type Daemon } from "../../src/daemon/server.ts";
 import type { Actor, StoredEvent } from "../../src/domain/types.ts";
 import { initProject } from "../../src/project/init.ts";
 import { paths } from "../../src/project/paths.ts";
-import { FAKE_HERDR, fakeHerdrState, isolatedConfigHome, tempRepo, waitFor } from "../helpers.ts";
+import { FAKE_HERDR, fakeHerdrState, isolatedConfigHome, repoName, tempRepo, waitFor } from "../helpers.ts";
 
 let root: string;
 let daemon: Daemon;
@@ -45,6 +45,11 @@ const sessionOf = async (role: string, ticket?: string) =>
   (await events()).find((e) => e.type === "session.created" && e.payload.role === role && (ticket === undefined || e.payload.ticket === ticket))
     ?.payload as { session: string } | undefined;
 const coord: Actor = { role: "coordinator", thread: "001" };
+/** Gives thread 001 a real worktree of the (single) repo, so its tickets can spawn workers. */
+async function worktree() {
+  await cmd({ cmd: "worktree.add", thread: "001", repo: repoName(root), from: "main" }, coord);
+  await waitFor(async () => (await events()).some((e) => e.type === "worktree.added"), 10_000);
+}
 
 test("a new thread gets a coordinator that is started through the spawner child", async () => {
   await boot();
@@ -64,7 +69,8 @@ test("worker capacity: queue, finish, next worker spawns; coordinator gets notif
   await cmd({ cmd: "thread.new", title: "X", type: "bug", maxWorkers: 1 });
   const c = (await sessionOf("coordinator"))!.session;
   await cmd({ cmd: "session.attached", session: c, pane: "w1:p1" });
-  for (const t of ["A", "B"]) await cmd({ cmd: "ticket.add", thread: "001", title: t, scope: [t] }, coord);
+  await worktree();
+  for (const t of ["A", "B"]) await cmd({ cmd: "ticket.add", thread: "001", title: t, repo: repoName(root), files: [t] }, coord);
   expect(await cmd({ cmd: "worker.spawn", thread: "001", ticket: "T1" }, coord)).toMatchObject({ ok: true, result: { queued: false } });
   expect(await cmd({ cmd: "worker.spawn", thread: "001", ticket: "T2" }, coord)).toMatchObject({ ok: true, result: { queued: true } });
   const w1 = (await sessionOf("worker", "T1"))!.session;
@@ -81,7 +87,9 @@ test("worker capacity: queue, finish, next worker spawns; coordinator gets notif
   expect(jobs.filter((j) => j.split)).toHaveLength(2);
   // coordinator idle → one delivery with the queued notice
   await cmd({ cmd: "session.signal", session: c, signal: "idle" });
-  expect(fake.read().calls.filter((x) => x[0] === "agent" && x[1] === "prompt" && x[2] === "w1:p1").map((x) => x[3])).toEqual(["Ticket T1 is done: ok."]);
+  expect(fake.read().calls.filter((x) => x[0] === "agent" && x[1] === "prompt" && x[2] === "w1:p1").map((x) => x[3])).toEqual([
+    `Worktree for ${repoName(root)} is ready at ${join(root, ".worktrees", "x", repoName(root))} on wip/x.\nTicket T1 is done: ok.`,
+  ]);
   expect((await events()).at(-1)!.type).toBe("notice.delivered");
 });
 
@@ -89,7 +97,8 @@ test("spawn failure: session failed, coordinator notified, slot freed", async ()
   await boot();
   await cmd({ cmd: "thread.new", title: "X", type: "bug", maxWorkers: 1 });
   await waitFor(async () => (await events()).some((e) => e.type === "session.attached"), 10_000);
-  for (const t of ["A", "B"]) await cmd({ cmd: "ticket.add", thread: "001", title: t, scope: [t] }, coord);
+  await worktree();
+  for (const t of ["A", "B"]) await cmd({ cmd: "ticket.add", thread: "001", title: t, repo: repoName(root), files: [t] }, coord);
   // make every later `agent start` fail in the fake
   fake.update(() => ({ fail: ["agent start"] }));
   await cmd({ cmd: "worker.spawn", thread: "001", ticket: "T1" }, coord);
@@ -180,7 +189,8 @@ test("a worker of a thread uses roles.worker: its kind, args and split env come 
   await cmd({ cmd: "thread.new", title: "X", type: "bug" });
   const c = (await sessionOf("coordinator"))!.session;
   await cmd({ cmd: "session.attached", session: c, pane: "w1:p1" });
-  await cmd({ cmd: "ticket.add", thread: "001", title: "A", scope: ["a"] }, coord);
+  await worktree();
+  await cmd({ cmd: "ticket.add", thread: "001", title: "A", repo: repoName(root), files: ["a"] }, coord);
   await cmd({ cmd: "worker.spawn", thread: "001", ticket: "T1" }, coord);
   expect((await sessionOf("worker", "T1")) as object).toMatchObject({ agent: "opencode", model: "p/m" });
   const job = jobs.at(-1)!;
@@ -218,7 +228,8 @@ test("a replacement for an exited coordinator carries the thread's live panes as
   await cmd({ cmd: "thread.new", title: "X", type: "bug" });
   const c = (await sessionOf("coordinator"))!.session;
   await cmd({ cmd: "session.attached", session: c, pane: "w1:p1" });
-  await cmd({ cmd: "ticket.add", thread: "001", title: "A", scope: ["A"] }, coord);
+  await worktree();
+  await cmd({ cmd: "ticket.add", thread: "001", title: "A", repo: repoName(root), files: ["A"] }, coord);
   await cmd({ cmd: "worker.spawn", thread: "001", ticket: "T1" }, coord);
   const w = (await sessionOf("worker", "T1"))!.session;
   await cmd({ cmd: "session.attached", session: w, pane: "w1:p7" });

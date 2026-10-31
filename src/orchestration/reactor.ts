@@ -4,7 +4,7 @@ import { type Config, durationMs } from "../config/config.ts";
 import type { EventBody, StoredEvent } from "../domain/types.ts";
 import { isLive, type Session, type State, type Thread } from "../state/projection.ts";
 import { generateHandoff } from "./handoff.ts";
-import { liveSessions, rotateCoordinator, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure, workerLimit } from "./sessions.ts";
+import { liveSessions, rotateCoordinator, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure, workerCwd, workerLimit } from "./sessions.ts";
 import { tierRun } from "./tiers.ts";
 
 const CHECKPOINT_NOTICE = (thread: string | undefined) =>
@@ -95,6 +95,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
       if (free <= 0) break;
       if (spawnedTickets.has(`${t.id}/${ticket}`)) continue; // already spawned earlier in this call; state isn't updated yet
       if (t.tickets.find((k) => k.id === ticket)?.status !== "open") continue;
+      if (workerCwd(t, ticket) === undefined) continue; // its repo has no worktree (yet)
       spawnedTickets.add(`${t.id}/${ticket}`);
       take(spawnWorker(state, t, ticket, ctx, t.workerAgents[ticket]));
       spawnedPerThread.set(t.id, (spawnedPerThread.get(t.id) ?? 0) + 1);

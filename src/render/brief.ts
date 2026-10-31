@@ -1,7 +1,7 @@
 import type { GitTrail } from "../project/gittrail.ts";
 import { progressBy, type Session, type Thread } from "../state/projection.ts";
 import { DEFAULT_CONFIG, type Config } from "../config/config.ts";
-import { capBytes, clampHeadings, oneLine, tierLines } from "./markdown.ts";
+import { capBytes, clampHeadings, oneLine, scopeOf, tierLines } from "./markdown.ts";
 
 const MAX_BYTES = 16384;
 const TRUNC = "_(truncated — see sub.thread.md)_";
@@ -72,7 +72,7 @@ function build(t: Thread, trail: GitTrail | undefined, trails: Record<string, Gi
   }
   const boardAll = t.tickets.map((k) => {
     const line = capBytes(
-      `- ${k.id} [${k.status}] ${oneLine(k.title)} — scope: ${k.scope.join(", ")}${k.assignee ? ` (assignee: ${k.assignee.slice(0, 8)})` : ""}`,
+      `- ${k.id} [${k.status}] ${oneLine(k.title)} — scope: ${scopeOf(k)}${k.assignee ? ` (assignee: ${k.assignee.slice(0, 8)})` : ""}`,
       300,
     );
     const p = t.workerProgress[k.id];

@@ -8,7 +8,7 @@ import type { Actor, StoredEvent } from "../../src/domain/types.ts";
 import { EventStore } from "../../src/store/event-store.ts";
 import { initProject } from "../../src/project/init.ts";
 import { paths } from "../../src/project/paths.ts";
-import { isolatedConfigHome, tempRepo } from "../helpers.ts";
+import { isolatedConfigHome, repoName, tempRepo } from "../helpers.ts";
 
 let root: string;
 let daemon: Daemon;
@@ -65,8 +65,8 @@ test("invalid commands return validation errors without writing events", async (
 
 test("concurrent overlapping claims: exactly one succeeds", async () => {
   await cmd({ cmd: "thread.new", title: "X", type: "bug" });
-  await cmd({ cmd: "ticket.add", thread: "001", title: "A", scope: ["src/a"] }, COORD);
-  await cmd({ cmd: "ticket.add", thread: "001", title: "B", scope: ["src/a/b.ts"] }, COORD);
+  await cmd({ cmd: "ticket.add", thread: "001", title: "A", repo: repoName(root), files: ["src/a"] }, COORD);
+  await cmd({ cmd: "ticket.add", thread: "001", title: "B", repo: repoName(root), files: ["src/a/b.ts"] }, COORD);
   const results = await Promise.all([
     cmd({ cmd: "ticket.claim", thread: "001", ticket: "T1" }, { role: "worker", thread: "001", session: "w1" }),
     cmd({ cmd: "ticket.claim", thread: "001", ticket: "T2" }, { role: "worker", thread: "001", session: "w2" }),

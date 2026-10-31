@@ -132,6 +132,11 @@ export function renderSub(t: Thread, sessions: Session[] = [], config: Config = 
   ].join("\n");
 }
 
+/** A ticket's scope as shown: `[repo] files…` on a task thread, the scope paths on a legacy one. */
+export function scopeOf(k: { scope: string[]; repo?: string; files?: string[] }): string {
+  return k.repo !== undefined ? `[${k.repo}] ${(k.files ?? k.scope).join(", ")}` : k.scope.join(", ");
+}
+
 export function renderBoard(t: Thread): string {
   return [
     `# Board — ${t.id} ${oneLine(t.title)}`,
@@ -139,7 +144,7 @@ export function renderBoard(t: Thread): string {
     "| Ticket | Title | Scope | Status | Assignee |",
     "|--------|-------|-------|--------|----------|",
     ...t.tickets.map(
-      (k) => `| ${k.id} | ${cell(k.title)} | ${cell(k.scope.join(", "))} | ${k.status} | ${cell(k.assignee ?? "-")} |`,
+      (k) => `| ${k.id} | ${cell(k.title)} | ${cell(scopeOf(k))} | ${k.status} | ${cell(k.assignee ?? "-")} |`,
     ),
     "",
   ].join("\n");

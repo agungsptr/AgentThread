@@ -1,6 +1,8 @@
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import { request } from "../src/daemon/client.ts";
+import { paths } from "../src/project/paths.ts";
 import type { Actor, EventBody, StoredEvent } from "../src/domain/types.ts";
 import { project, type State } from "../src/state/projection.ts";
 
@@ -156,4 +158,15 @@ export function twoRepoFolder(): string {
   }
   mkdirSync(join(root, "plain"));
   return root;
+}
+
+/** The workspace repo name of a tempRepo root (the root itself is the one repo). */
+export const repoName = (root: string): string => basename(root);
+
+/** Waits until the daemon of `root` has recorded a worktree.added event (after `agt worktree add`). */
+export async function waitWorktreeAdded(root: string): Promise<void> {
+  await waitFor(async () => {
+    const r = await request(paths(root).socket, { op: "events.since", seq: 0 });
+    return r.ok && (r.result as StoredEvent[]).some((e) => e.type === "worktree.added");
+  }, 10_000);
 }

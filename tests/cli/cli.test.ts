@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isolatedConfigHome, tempRepo } from "../helpers.ts";
+import { isolatedConfigHome, repoName, tempRepo } from "../helpers.ts";
 
 const BIN = join(import.meta.dir, "../../bin/agt");
 
@@ -52,7 +52,7 @@ test("thread, ticket and log commands", () => {
   expect(JSON.parse(agt(["thread", "new", "Fix", "race", "--type", "bug", "--criteria", "no double charge"]).out)).toMatchObject({
     thread: "001",
   });
-  expect(agt(["ticket", "add", "001", "Lock", "fix", "--scope", "src/lock.ts"], { env: COORD }).out).toBe('{"ticket":"T1"}');
+  expect(agt(["ticket", "add", "001", "Lock", "fix", "--repo", repoName(root), "--file", "src/lock.ts"], { env: COORD }).out).toBe('{"ticket":"T1"}');
   expect(agt(["ticket", "claim", "001/T1"], { env: WORKER }).out).toBe("ok");
   expect(agt(["ticket", "done", "001/T1", "--summary", "fixed"], { env: WORKER }).out).toBe("ok");
   expect(agt(["log", "001", "all", "good"], { env: WORKER }).out).toBe("ok");

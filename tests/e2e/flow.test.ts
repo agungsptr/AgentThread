@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { isolatedConfigHome, tempRepo } from "../helpers.ts";
+import { isolatedConfigHome, repoName, tempRepo } from "../helpers.ts";
 
 const BIN = join(import.meta.dir, "../../bin/agt");
 let root: string;
@@ -41,8 +41,8 @@ test("feature → dependent bugfix → review → done unblocks dependent", () =
   expect(read("main.thread.md")).toContain("| 002 | Fix session race | bug | blocked | 0/0 | 001 |");
 
   agt(["thread", "status", "001", "in_progress"], coord("001"));
-  agt(["ticket", "add", "001", "Backend", "--scope", "src/auth"], coord("001"));
-  agt(["ticket", "add", "001", "Button", "--scope", "src/ui/login.tsx"], coord("001"));
+  agt(["ticket", "add", "001", "Backend", "--repo", repoName(root), "--file", "src/auth"], coord("001"));
+  agt(["ticket", "add", "001", "Button", "--repo", repoName(root), "--file", "src/ui/login.tsx"], coord("001"));
   agt(["ticket", "claim", "001/T1"], worker("001", "w1"));
   agt(["ticket", "claim", "001/T2"], worker("001", "w2"));
   agt(["ticket", "done", "001/T1", "--summary", "ok"], worker("001", "w1"));
@@ -62,6 +62,6 @@ test("feature → dependent bugfix → review → done unblocks dependent", () =
   const sub = read("threads/001-oauth-login/sub.thread.md");
   expect(sub).toContain("- [ ] login works");
   expect(sub).toContain("### Decisions");
-  expect(read("threads/001-oauth-login/board.md")).toContain("| T2 | Button | src/ui/login.tsx | done | w2 |");
+  expect(read("threads/001-oauth-login/board.md")).toContain(`| T2 | Button | [${repoName(root)}] src/ui/login.tsx | done | w2 |`);
   expect(read("threads/001-oauth-login/log.md")).toContain("[coordinator:c001] decision: use PKCE");
 });

@@ -3,7 +3,7 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { join } from "node:path";
 import { parse } from "yaml";
 import { initProject } from "../../src/project/init.ts";
-import { FAKE_CLAUDE, FAKE_HERDR, fakeHerdrState, isolatedConfigHome, tempRepo, waitFor, SPAWN_REPORT_ENV } from "../helpers.ts";
+import { FAKE_CLAUDE, FAKE_HERDR, fakeHerdrState, isolatedConfigHome, tempRepo, waitFor, waitWorktreeAdded, SPAWN_REPORT_ENV } from "../helpers.ts";
 
 // No hook signals anywhere in this file: session state comes only from the polled (fake) Herdr status (claude-code with no hook seen: the poller drives its turns).
 const BIN = join(import.meta.dir, "../../bin/agt");
@@ -69,7 +69,9 @@ test("memory survives a lost coordinator; worker flow runs without hooks", async
   await setStatus(c1.pane!, "idle");
   await waitFor(() => fm().sessions.find((s) => s.id === c1.id)!.status === "idle", 10_000);
 
-  agt(["ticket", "add", "001", "T1", "--scope", "src"], coordEnv);
+  agt(["worktree", "add", "001", "api", "--from", "main"], coordEnv);
+  await waitWorktreeAdded(root);
+  agt(["ticket", "add", "001", "T1", "--repo", "api", "--file", "src"], coordEnv);
   agt(["worker", "spawn", "001", "--ticket", "T1"], coordEnv);
   agt(["note", "001", "root cause in auth.ts:42"], coordEnv);
   agt(["question", "001", "retry 3 or 5?"], coordEnv);
@@ -121,7 +123,6 @@ test("memory survives a lost coordinator; worker flow runs without hooks", async
   expect(existsSync(join(wt, ".git"))).toBe(false);
 
   // the coordinator adds a task worktree, waits (a worker commits on wip/<task>; the guard refuses the coordinator there) for the ready notice, and commits in it: brief.md shows the commit under that repo
-  agt(["worktree", "add", "001", "api", "--from", "main"], coordEnv);
   const apiWt = join(wt, "api");
   await waitFor(() => prompts().some((p) => p.includes(`Worktree for api is ready at ${apiWt}`)), 10_000);
   writeFileSync(join(apiWt, "retry.ts"), "export const retries = 3;\n");

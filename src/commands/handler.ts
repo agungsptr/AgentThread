@@ -60,6 +60,7 @@ const ALLOWED: Record<CommandName, readonly Role[]> = {
   "thread.choose": ["user", "main"],
   "thread.cancel": ["user", "main"],
   "ticket.add": ["coordinator"],
+  "ticket.files": ROLES,
   "ticket.claim": ["worker"],
   "ticket.done": ["worker"],
   "ticket.block": ["worker"],
@@ -96,6 +97,17 @@ class Rejection extends Error {}
 
 function reject(message: string): never {
   throw new Rejection(message);
+}
+
+const noWorktree = (t: Thread, k: Ticket) => `ticket ${k.id} is for repo ${k.repo}, which has no worktree in thread ${t.id}; run agt worktree add ${t.id} ${k.repo}`;
+
+/** A ticket file path as the repo-relative, normalised form: no leading /, no .. segment, no empty or . segment. */
+function repoRelative(p: string): string {
+  const parts = p.split("/");
+  if (!p.trim() || p.startsWith("/") || p.includes("\\") || p.includes("\0") || parts.includes("..")) reject(`file paths are relative to the repo: ${p}`);
+  const norm = parts.filter((s) => s !== "" && s !== ".").join("/");
+  if (!norm) reject(`file paths are relative to the repo: ${p}`);
+  return norm;
 }
 
 /**
@@ -238,16 +250,26 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
     case "ticket.add": {
       if (t.status === "done") reject(`thread ${t.id} is done`);
       const ticket = `T${t.tickets.length + 1}`;
+      if (t.legacy) {
+        if (!cmd.scope.length) reject("ticket add needs at least one --scope <path>");
+        return { events: [{ type: "ticket.created", thread: t.id, payload: { ticket, title: cmd.title, scope: cmd.scope } }], result: { ticket } };
+      }
+      if (!cmd.repo || !cmd.files?.length) reject("a task thread's ticket needs --repo <repo> and at least one --file <path>");
+      if (!Object.hasOwn(workspaceReposNoSpawn(ctx.root, ctx.config ?? DEFAULT_CONFIG), cmd.repo)) reject(`unknown repo ${cmd.repo}`);
+      const files = [...new Set(cmd.files.map(repoRelative))];
       return {
-        events: [{ type: "ticket.created", thread: t.id, payload: { ticket, title: cmd.title, scope: cmd.scope } }],
+        events: [{ type: "ticket.created", thread: t.id, payload: { ticket, title: cmd.title, scope: files, repo: cmd.repo, files, ...(cmd.doc ? { doc: cmd.doc } : {}) } }],
         result: { ticket },
       };
     }
+    case "ticket.files":
+      return { events: [], result: { files: findTicket(t, cmd.ticket).files ?? [] } };
     case "ticket.claim": {
       const k = workerTicket(t, cmd.ticket, actor);
       const session = workerSession(actor);
       transitionTicket(k, "in_progress");
-      const clash = t.tickets.find((o) => o.id !== k.id && o.status === "in_progress" && scopesOverlap(o.scope, k.scope));
+      // On a task thread, file lists are repo-relative: only tickets of the same repo can clash.
+      const clash = t.tickets.find((o) => o.id !== k.id && o.status === "in_progress" && o.repo === k.repo && scopesOverlap(o.scope, k.scope));
       if (clash) reject(`scope of ${k.id} overlaps in-progress ticket ${clash.id}`);
       return { events: [{ type: "ticket.claimed", thread: t.id, payload: { ticket: k.id, assignee: session } }] };
     }
@@ -276,6 +298,7 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
       if (workers.length >= workerLimit(t, ctx.config ?? DEFAULT_CONFIG)) {
         return { events: [{ type: "worker.queued", thread: t.id, payload: { ticket: k.id, ...(cmd.agent ? { agent: cmd.agent } : {}) } }], result: { queued: true } };
       }
+      if (k.repo !== undefined && !t.worktrees[k.repo]) reject(noWorktree(t, k));
       const spawned = spawnWorker(state, t, k.id, spawnContext(ctx), cmd.agent);
       const session = (spawned.events[0] as Extract<EventBody, { type: "session.created" }>).payload.session;
       return { ...spawned, result: { session, queued: false } };

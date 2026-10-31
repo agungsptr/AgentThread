@@ -260,10 +260,29 @@ async function thread(sub: string | undefined, args: string[], root: string, env
 async function ticket(sub: string | undefined, args: string[], root: string, env: Env): Promise<number> {
   switch (sub) {
     case "add": {
-      const { values, positionals } = parse(args, { scope: { type: "string", multiple: true } });
+      const { values, positionals } = parse(args, {
+        scope: { type: "string", multiple: true },
+        repo: { type: "string" },
+        file: { type: "string", multiple: true },
+        doc: { type: "string" },
+      });
       const [threadId, ...title] = positionals;
-      if (!threadId || !title.length) throw new UsageError("ticket add needs <thread> <title> --scope <path>");
-      return send(root, env, { cmd: "ticket.add", thread: threadId, title: title.join(" "), scope: values.scope ?? [] });
+      if (!threadId || !title.length) throw new UsageError("ticket add needs <thread> <title> --scope <path> (or --repo <repo> --file <path>)");
+      return send(root, env, {
+        cmd: "ticket.add",
+        thread: threadId,
+        title: title.join(" "),
+        scope: values.scope ?? [],
+        ...(values.repo !== undefined ? { repo: values.repo } : {}),
+        ...(values.file ? { files: values.file } : {}),
+        ...(values.doc !== undefined ? { doc: values.doc } : {}),
+      });
+    }
+    case "files": {
+      const res = await request(paths(root).socket, { op: "command", command: { cmd: "ticket.files", ...parseTicketRef(args[0]) }, actor: actorFromEnv(env) });
+      if (!res.ok) throw new Error(res.error);
+      for (const f of (res.result as { files: string[] }).files) console.log(f);
+      return 0;
     }
     case "claim":
     case "reopen":

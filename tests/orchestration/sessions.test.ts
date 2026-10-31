@@ -118,3 +118,14 @@ test("single-repo project: with the ceiling env, git fails in the thread directo
   expect(git(root, process.env, "worktree", "add", "-q", "-b", "wip/kyc-1", wt).exitCode).toBe(0);
   expect(git(wt, env, "rev-parse", "--show-toplevel").stdout.toString().trim()).toBe(wt);
 });
+
+test("a task thread's worker starts in its ticket's repo worktree", () => {
+  const s = stateOf(
+    INIT,
+    taskThreadCreated("001", "kyc-1"),
+    { type: "thread.tab_opened", thread: "001", payload: { tab: "w1:t2", rootPane: "w1:p2" } },
+    { type: "worktree.added", thread: "001", payload: { repo: "api", path: "/repo/.worktrees/kyc-1/api", branch: "wip/kyc-1", source: "main" } },
+    { type: "ticket.created", thread: "001", payload: { ticket: "T1", title: "x", scope: ["a"], repo: "api", files: ["a"] } },
+  );
+  expect(spawnWorker(s, s.threads.get("001")!, "T1", ctx()).effects[0]).toMatchObject({ cwd: "/repo/.worktrees/kyc-1/api" });
+});

@@ -105,6 +105,12 @@ export function spawnCoordinator(
  * A worker runs in the thread directory for now (Plan 11 points it at its ticket's repo worktree); a legacy
  * thread's worker runs in the thread's worktree.
  * `agent` (agt worker spawn --agent) replaces the worker role with that adapter's defaults: no model or effort is carried across vendors. */
+/** Where a ticket's worker runs: the ticket's repo worktree on a task thread, else the thread directory. Undefined when that worktree is missing. */
+export function workerCwd(t: Thread, ticket: string): string | undefined {
+  const repo = t.tickets.find((k) => k.id === ticket)?.repo;
+  return repo === undefined ? threadCwd(t) : t.worktrees[repo]?.path;
+}
+
 export function spawnWorker(state: State, t: Thread, ticket: string, ctx: SpawnContext, agent?: AgentKind): { events: EventBody[]; effects: Effect[] } {
   const session = ctx.newId();
   const name = agentName(ctx.root, "worker", t.id, ticket, session);
@@ -123,7 +129,7 @@ export function spawnWorker(state: State, t: Thread, ticket: string, ctx: SpawnC
         name,
         thread: t.id,
         ticket,
-        cwd: threadCwd(t),
+        cwd: workerCwd(t, ticket) ?? threadCwd(t),
         splitFrom: last?.pane ?? t.rootPane!,
         direction: last ? "down" : "right",
       },
