@@ -52,6 +52,16 @@ test("claude non-autonomous keeps permission mode and allowed tools", () => {
   expect(main.slice(-2)).toEqual(["--model", "opus"]);
 });
 
+test("I1: a claude worker of a task thread, not autonomous, may git add and git commit", () => {
+  const tools = (legacy?: boolean) => {
+    const args = adapterFor("claude-code").launch({ ...base, config: nonAuto, run: { agent: "claude-code" }, ...(legacy !== undefined ? { legacy } : {}) }).args;
+    return args[args.indexOf("--allowed-tools") + 1];
+  };
+  expect(tools(false)).toBe("Bash(agt *),Bash(git status*),Bash(git diff*),Bash(git log*),Bash(git add *),Bash(git commit *),Read(//r/.agentthread/**)");
+  expect(tools(true)).toBe("Bash(agt *),Bash(git status*),Bash(git diff*),Bash(git log*),Read(//r/.agentthread/**)");
+  expect(tools()).toBe("Bash(agt *),Bash(git status*),Bash(git diff*),Bash(git log*),Read(//r/.agentthread/**)");
+});
+
 // OpenCode 2 TUIs attach to a shared background service by default, whose own config wins over the TUI's
 // OPENCODE_CONFIG_CONTENT (seen in the release e2e: the model setting was ignored); --standalone runs a private server.
 test("opencode: --auto and config content with model variant and permissions", () => {

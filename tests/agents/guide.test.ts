@@ -48,9 +48,21 @@ describe("guide", () => {
 
   test("failure handling and state location", () => {
     const c = guide({ role: "coordinator", ...base });
-    for (const s of ["HANDOFF REQUEST", "agt handoff <thread> --stdin", "CHECKPOINT", "agt progress", "agt answer", "in_progress", "agt worker spawn", "never push; never commit as a worker; never bypass the commit guard", "brief.md", "sub.thread.md", "board.md", ".agentthread"]) {
+    for (const s of ["HANDOFF REQUEST", "agt handoff <thread> --stdin", "CHECKPOINT", "agt progress", "agt answer", "in_progress", "agt worker spawn", "never push; never commit on wip/<task>; never bypass the commit guard", "brief.md", "sub.thread.md", "board.md", ".agentthread"]) {
       expect(c.toLowerCase()).toContain(s.toLowerCase());
     }
+  });
+
+  test("I1: a task thread's worker guide does not forbid its commits; a legacy guide keeps the old line", () => {
+    const LEGACY = "- Never push; never commit as a worker; never bypass the commit guard.";
+    const TASK = "- Never push; commit only your ticket's files, on wip/<task>; never bypass the commit guard.";
+    expect(guide({ role: "worker", ...base })).toContain(TASK);
+    expect(guide({ role: "worker", ...base })).not.toContain(LEGACY);
+    expect(guide({ role: "coordinator", ...base })).toContain("- Never push; never commit on wip/<task>; never bypass the commit guard.");
+    for (const role of ["worker", "coordinator"] as const) expect(guide({ role, ...base, legacy: true })).toContain(LEGACY);
+    const all = guide({ role: "all", ...base });
+    expect(all).not.toContain("undefined");
+    expect(all).toContain("Commit only your ticket's files, on wip/<task> inside your repo worktree");
   });
 
   test("all has the three headings", () => {

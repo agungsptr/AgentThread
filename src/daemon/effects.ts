@@ -163,6 +163,7 @@ export function createEffectRunner(opts: {
             config: opts.config,
             root: opts.root,
             worktree: effect.cwd,
+            legacy: t.legacy || t.dir === undefined,
             ...(common ? { gitCommonDir: common } : {}),
           });
           launch({

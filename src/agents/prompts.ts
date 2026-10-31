@@ -50,7 +50,7 @@ export function systemPrompt(o: PromptInput): string {
       t.dir === undefined
         ? "- Workers only edit files. You are the only one who commits: when a ticket is done, review the change, then git add and git commit in the worktree."
         : `- Workers commit their tickets on wip/${t.task}. You never edit or commit repo files; at the end you squash: in each repo worktree, git switch -c feat/${t.task} <source>, git merge --squash wip/${t.task}, then one plain commit.`,
-      "- Do not implement tickets yourself: every change to project files is made by a worker. You may read code and docs, run the tests and the stack, review and commit.",
+      `- Do not implement tickets yourself: every change to project files is made by a worker. You may read code and docs, run the tests and the stack, ${t.dir === undefined ? "review and commit" : "review"}.`,
       `- Record important decisions with agt decide ${t.id} "<decision>" and progress with agt progress ${t.id} "<message>".`,
       `- If a ticket is blocked, fix the cause, or reopen it with agt ticket reopen ${t.id}/<T> and start a new worker for it with agt worker spawn ${t.id} --ticket <T>.`,
       '- Workers\' questions arrive as notifications; answer each with agt answer <thread> <Q> "<answer>". Only you and the main manager ever ask the user.',
@@ -70,7 +70,11 @@ export function systemPrompt(o: PromptInput): string {
         : "You may run any command the work needs (tests, the dev stack, installs) inside the worktree."
     } When you need a decision you cannot make, run agt question ${t.id} "<question>", end your turn and wait for the answer.`,
     `3. agt ticket done ${t.id}/${o.ticket} --summary "<one line>" is your last action: make no edits after it — or, if you cannot finish, agt ticket block ${t.id}/${o.ticket} --reason "<why>".`,
-    "Do not commit; the coordinator commits. Never bypass the commit guard (no git commit --no-verify, no changing core.hooksPath or AGT_ROLE). Do not work on other tickets.",
+    `${
+      t.dir === undefined
+        ? "Do not commit; the coordinator commits."
+        : `Commit only your ticket's files, on wip/${t.task} inside your repo worktree, with a pathspec: git add <new files> && git commit -m "<conventional message>" -- <your files>. Never git add -A, git add . or git commit -a; never amend, rebase, reset, stash or push. The coordinator squashes.`
+    } Never bypass the commit guard (no git commit --no-verify, no changing core.hooksPath or AGT_ROLE). Do not work on other tickets.`,
     "When unsure how to do something with agt, run: agt guide worker",
   ].join("\n");
 }

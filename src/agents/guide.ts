@@ -19,7 +19,7 @@ interface GuideInput {
   legacy?: boolean;
 }
 
-const PLACEHOLDER: ThreadRef = { id: "<thread>", title: "<title>", slug: "<slug>", dir: "<root>/.worktrees/<task>" };
+const PLACEHOLDER: ThreadRef = { id: "<thread>", title: "<title>", slug: "<slug>", dir: "<root>/.worktrees/<task>", task: "<task>" };
 const LEGACY_PLACEHOLDER: ThreadRef = { id: "<thread>", title: "<title>", slug: "<slug>", worktree: "<worktree>" };
 
 /**
@@ -50,6 +50,8 @@ const COMMAND_OVERRIDES: Partial<Record<SessionRole, Record<string, string>>> = 
   worker: { "ticket claim|reopen": "ticket claim <thread>/<ticket>" },
 };
 
+const NEVER_LEGACY = "- Never push; never commit as a worker; never bypass the commit guard.";
+
 const WRONG: Record<SessionRole, string[]> = {
   main: [
     "- A thread waits for the user's tier choice: relay the choice with `agt thread choose`, or stop it with `agt thread cancel`.",
@@ -61,14 +63,20 @@ const WRONG: Record<SessionRole, string[]> = {
     "- A worker asks a question: answer it with `agt answer <thread> <Q> \"<answer>\"`.",
     "- A worker is blocked: read the reason, then check the cause or replace the worker (`agt ticket reopen`, then `agt worker spawn`).",
     "- A ticket is left `in_progress` with no worker: reopen it with `agt ticket reopen <thread>/<ticket>` and spawn a worker for it.",
-    "- Never push; never commit as a worker; never bypass the commit guard.",
+    NEVER_LEGACY,
   ],
   worker: [
     "- A CHECKPOINT reminder arrives: run `agt progress <thread> \"<where I am>\"`.",
     "- You need a decision you cannot make: run `agt question <thread> \"<question>\"`, end your turn and wait for the answer.",
     "- You cannot finish: run `agt ticket block <thread>/<ticket> --reason \"<why>\"`.",
-    "- Never push; never commit as a worker; never bypass the commit guard.",
+    NEVER_LEGACY,
   ],
+};
+
+/** A task thread's workers commit on wip/<task> (the coordinator only squashes); in a legacy thread only the coordinator commits. */
+const NEVER_TASK: Partial<Record<SessionRole, string>> = {
+  coordinator: "- Never push; never commit on wip/<task>; never bypass the commit guard.",
+  worker: "- Never push; commit only your ticket's files, on wip/<task>; never bypass the commit guard.",
 };
 
 const TITLES: Record<SessionRole, string> = { main: "Main", coordinator: "Coordinator", worker: "Worker" };
@@ -99,7 +107,7 @@ function roleGuide(role: SessionRole, o: GuideInput, level: "#" | "##"): string 
     "",
     `${h} When things go wrong`,
     "",
-    ...WRONG[role],
+    ...WRONG[role].map((l) => (l === NEVER_LEGACY && t.dir !== undefined ? (NEVER_TASK[role] ?? l) : l)),
     "",
     `${h} Where state lives`,
     "",

@@ -42,6 +42,15 @@ describe("claude adapter", () => {
     expect(allowedTools("main", DEFAULT_CONFIG, "/repo")).toEqual(["Bash(agt *)"]);
   });
 
+  test("I1: a task-thread worker may git add and git commit; a legacy worker may not", () => {
+    const read = "Read(//repo/.agentthread/**)";
+    expect(allowedTools("worker", DEFAULT_CONFIG, "/repo", { legacy: false })).toEqual([
+      "Bash(agt *)", "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)", "Bash(git add *)", "Bash(git commit *)", read,
+    ]);
+    expect(allowedTools("worker", DEFAULT_CONFIG, "/repo", { legacy: true })).toEqual(["Bash(agt *)", "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)", read]);
+    expect(allowedTools("worker", DEFAULT_CONFIG, "/repo")).toEqual(["Bash(agt *)", "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)", read]);
+  });
+
   test("agent env puts agt on PATH and identifies the session", () => {
     const env = agentEnv({ root: "/repo", role: "worker", agent: "claude-code", session: "s-1", thread: "002", ticket: "T3" });
     expect(env).toMatchObject({ AGT_ROOT: "/repo", AGT_ROLE: "worker", AGT_SESSION: "s-1", AGT_AGENT: "claude-code", AGT_THREAD: "002", AGT_TICKET: "T3" });
@@ -82,6 +91,22 @@ describe("prompts", () => {
       expect(p).toContain(s);
     }
     expect(bootstrapPrompt({ root: "/repo", role: "worker", thread: T, ticket: "T3" })).toBe(`You are the worker for ticket T3 of thread 002. Read ${DIR}/brief.md, then follow AGENTS.md.`);
+  });
+
+  test("I1: a task-thread worker commits its own files on wip/<task>; the coordinator only reviews; legacy wording unchanged", () => {
+    const RULE = 'Commit only your ticket\'s files, on wip/fix-race inside your repo worktree, with a pathspec: git add <new files> && git commit -m "<conventional message>" -- <your files>. Never git add -A, git add . or git commit -a; never amend, rebase, reset, stash or push. The coordinator squashes.';
+    const t = { id: "002", title: "Fix race", slug: "fix-race", dir: "/repo/.worktrees/fix-race", task: "fix-race" };
+    const worker = systemPrompt({ root: "/repo", role: "worker", thread: t, ticket: "T3" });
+    expect(worker).toContain(RULE);
+    expect(worker).not.toContain("Do not commit; the coordinator commits.");
+    expect(worker).toContain("Never bypass the commit guard");
+    const legacyWorker = systemPrompt({ root: "/repo", role: "worker", thread: T, ticket: "T3" });
+    expect(legacyWorker).toContain("Do not commit; the coordinator commits. Never bypass the commit guard");
+    expect(legacyWorker).not.toContain("Commit only your ticket's files");
+    const coord = systemPrompt({ root: "/repo", role: "coordinator", thread: t });
+    expect(coord).toContain("- Do not implement tickets yourself: every change to project files is made by a worker. You may read code and docs, run the tests and the stack, review.");
+    expect(coord).not.toContain("review and commit");
+    expect(systemPrompt({ root: "/repo", role: "coordinator", thread: T })).toContain("run the tests and the stack, review and commit.");
   });
 
   test("worker step 2 follows agents.autonomous", () => {

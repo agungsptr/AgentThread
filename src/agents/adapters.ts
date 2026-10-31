@@ -12,6 +12,8 @@ export interface LaunchInput {
   root: string;
   worktree?: string;
   gitCommonDir?: string;
+  /** False for a task thread (a thread directory with repo worktrees), whose workers commit; absent or true: legacy. */
+  legacy?: boolean;
   /** The launching process's env (default process.env); only the release e2e's AGT_E2E_* overrides are read from it. */
   env?: Record<string, string | undefined>;
 }
@@ -43,14 +45,14 @@ const claudeAdapter: AgentAdapter = {
   bin: "claude",
   instructionFiles: ["CLAUDE.md"],
   prompt: "positional",
-  launch({ role, run, config, root }) {
+  launch({ role, run, config, root, legacy }) {
     // Pushing is the user's call: denied by Claude Code's own rules, whatever the permission mode.
     const settings = { ...hookSettings(), permissions: { deny: ["Bash(git push:*)"] } };
     const args = config.agents.autonomous
       ? ["--permission-mode", "bypassPermissions", "--settings", JSON.stringify({ ...settings, skipDangerousModePermissionPrompt: true })]
       : [
           "--permission-mode", config.agents.claude.permission_mode,
-          "--allowed-tools", allowedTools(role, config, root).join(","),
+          "--allowed-tools", allowedTools(role, config, root, legacy === undefined ? {} : { legacy }).join(","),
           "--settings", JSON.stringify(settings),
         ];
     if (run.model) args.push("--model", run.model);

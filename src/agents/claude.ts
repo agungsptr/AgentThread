@@ -30,9 +30,15 @@ export function claudeConfigDir(config: Config, env: Record<string, string | und
 
 const READ_TOOLS = ["Bash(agt *)", "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)"];
 
-/** The thread files live under <root>/.agentthread, outside the agent's worktree cwd; `//abs/path` is Claude's absolute-path rule form. */
-export function allowedTools(role: SessionRole, config: Config, root?: string): string[] {
-  const base = role === "main" ? ["Bash(agt *)"] : role === "coordinator" ? [...READ_TOOLS, "Bash(git add *)", "Bash(git commit *)"] : READ_TOOLS;
+const COMMIT_TOOLS = ["Bash(git add *)", "Bash(git commit *)"];
+
+/**
+ * The thread files live under <root>/.agentthread, outside the agent's worktree cwd; `//abs/path` is Claude's
+ * absolute-path rule form. A worker commits only in a task thread (`legacy: false`); a legacy thread's worker never does.
+ */
+export function allowedTools(role: SessionRole, config: Config, root?: string, o: { legacy?: boolean } = {}): string[] {
+  const workerCommits = o.legacy === false;
+  const base = role === "main" ? ["Bash(agt *)"] : role === "coordinator" || workerCommits ? [...READ_TOOLS, ...COMMIT_TOOLS] : READ_TOOLS;
   const stateFiles = root && role !== "main" ? [`Read(/${root}/.agentthread/**)`] : [];
   return [...base, ...stateFiles, ...config.agents.claude.extra_allowed_tools];
 }
