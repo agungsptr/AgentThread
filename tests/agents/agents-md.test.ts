@@ -502,6 +502,14 @@ describe("branch-aware commit guard and no-push hook", () => {
       expect(err(r)).toContain("AgentThread: no file list for ticket T1; ask the coordinator.");
     });
 
+    test("glob characters in a staged path are not expanded against the list", () => {
+      const { root, wt } = seeded(["i.ts"], []);
+      stage(wt, { "i.ts": "1", "[id].ts": "2" });
+      const r = run(wt, root);
+      expect(r.exitCode).not.toBe(0);
+      expect(err(r)).toContain(NOT("[id].ts"));
+    });
+
     test("paths with spaces", () => {
       const { root, wt } = seeded(["my dir/a b.ts"], []);
       stage(wt, { "my dir/a b.ts": "1" });
