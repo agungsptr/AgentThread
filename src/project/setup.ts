@@ -106,24 +106,29 @@ export async function runSetup(o: {
     console.error("timeout must look like 10s, 5m or 1h and be at least 1s");
   }
 
-  // A workspace records its repos and each one's default source branch (blank: ask per task).
-  const repos: Record<string, { path: string; source_branch?: string }> = {};
-  if (isWorkspaceProject(o.root)) {
-    for (const [name, r] of Object.entries(discoverRepos(o.root))) {
-      const branch = (await ask(`${name} source branch (blank to ask per task)`)).trim();
-      repos[name] = { path: r.path, ...(branch ? { source_branch: branch } : {}) };
-    }
-  }
-
   const file = configPaths(o.root).project;
   const existing = existsSync(file) ? readFileSync(file, "utf8") : "";
   const doc = parseDocument(existing);
   if (doc.contents == null) (doc as { contents: unknown }).contents = doc.createNode({});
+
+  // A workspace records its repos and each one's default source branch (blank: keep the current one, else ask per
+  // task). Answers are merged per repo and field: entries discovery does not find, and fields not asked, are kept.
+  if (isWorkspaceProject(o.root)) {
+    for (const [name, r] of Object.entries(discoverRepos(o.root))) {
+      const current = doc.getIn(["workspace", "repos", name, "source_branch"]);
+      const branch = (await ask(`${name} source branch (blank to ask per task)`, typeof current === "string" && current ? current : undefined)).trim();
+      if (!isMap(doc.get("workspace"))) doc.set("workspace", doc.createNode({}));
+      if (!isMap(doc.getIn(["workspace", "repos"]))) doc.setIn(["workspace", "repos"], doc.createNode({}));
+      if (!isMap(doc.getIn(["workspace", "repos", name]))) doc.setIn(["workspace", "repos", name], doc.createNode({}));
+      if (typeof doc.getIn(["workspace", "repos", name, "path"]) !== "string") doc.setIn(["workspace", "repos", name, "path"], r.path);
+      if (branch) doc.setIn(["workspace", "repos", name, "source_branch"], branch);
+    }
+  }
+
   if (!isMap(doc.get("agents"))) doc.set("agents", doc.createNode({}));
   doc.setIn(["agents", "roles"], doc.createNode(roles));
   doc.setIn(["agents", "complexity"], doc.createNode({ timeout, tiers }));
   doc.setIn(["agents", "autonomous"], true);
-  if (Object.keys(repos).length) doc.setIn(["workspace", "repos"], doc.createNode(repos));
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, doc.toString());
 }

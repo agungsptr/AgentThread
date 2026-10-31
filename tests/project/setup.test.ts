@@ -219,3 +219,30 @@ test("the wizard records a workspace's repos and source branches", async () => {
   await runSetup({ root, ask, detected: ["claude-code"] });
   expect(loadConfig(root, env()).workspace.repos).toEqual({ a: { path: "a", source_branch: "develop" }, b: { path: "b" } });
 });
+
+test("I4: a re-run with blank answers keeps a hand-added repo and an existing source_branch", async () => {
+  const root = twoRepoFolder();
+  mkdirSync(join(root, ".agentthread"), { recursive: true });
+  writeFileSync(
+    cfg(root),
+    ["workspace:", "  repos:", "    a:", "      path: a", "      source_branch: develop", "    extra:", "      path: vendor/extra", "      source_branch: release", ""].join("\n"),
+  );
+  const { ask, asked } = script(["claude-code", "", "", "claude-code", "", "", "claude-code", "", "", "", "", "", ""]);
+  const defaults: Record<string, string | undefined> = {};
+  await runSetup({
+    root,
+    ask: (q, def) => {
+      defaults[q] = def;
+      return ask(q, def);
+    },
+    detected: ["claude-code"],
+  });
+  expect(defaults["a source branch (blank to ask per task)"]).toBe("develop");
+  expect(defaults["b source branch (blank to ask per task)"]).toBeUndefined();
+  expect(asked.filter((q) => q.includes("source branch"))).toEqual(["a source branch (blank to ask per task)", "b source branch (blank to ask per task)"]);
+  expect(loadConfig(root, env()).workspace.repos).toEqual({
+    a: { path: "a", source_branch: "develop" },
+    extra: { path: "vendor/extra", source_branch: "release" },
+    b: { path: "b" },
+  });
+});
