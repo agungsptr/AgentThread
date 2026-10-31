@@ -33,6 +33,8 @@ function workerRef(ticket: string | undefined, lead: string, noun = ""): string 
   return ticket ? `${lead} for ${noun}${ticket}` : NO_TICKET;
 }
 
+const doneNotice = (ticket: string, summary: string | undefined) => `Ticket ${ticket} is done${summary ? `: ${summary}` : ""}.`;
+
 export function react(state: State, events: StoredEvent[], ctx: ReactorContext): { events: EventBody[]; effects: Effect[] } {
   const out: EventBody[] = [];
   const effects: Effect[] = [];
@@ -129,6 +131,14 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
     }
   };
   /**
+   * A worker whose ticket it finished has ended or was lost: its turn is over, so the coordinator now hears that the
+   * ticket is done (deferred at ticket.completed). The idle that ends a finished worker ends it here too.
+   */
+  const doneWorkerEnded = (s: Session, t: Thread) => {
+    const k = t.tickets.find((x) => x.id === s.ticket);
+    if (k?.status === "done" && k.assignee === s.id) notify(coordinatorToNotify(t.id), doneNotice(k.id, k.summary));
+  };
+  /**
    * Replaces a lost or exited coordinator with a fresh split from the thread's root pane, at most once: never when it
    * was replaced earlier in this call or already has a replacement. Returns whether it did.
    */
@@ -223,6 +233,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         if (s.role === "coordinator" && t.rootPane) {
           replaceCoordinator(s, t, "the previous coordinator session was lost");
         } else if (s.role === "worker") {
+          doneWorkerEnded(s, t);
           const k = t.tickets.find((x) => x.id === s.ticket);
           const release = k?.status === "in_progress" && k.assignee === s.id;
           if (release) out.push({ type: "ticket.released", thread: t.id, payload: { ticket: k.id, reason: "worker session lost" } });
@@ -233,9 +244,15 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         }
         break;
       }
-      case "ticket.completed":
-        notify(coordinatorToNotify(ev.thread), `Ticket ${ev.payload.ticket} is done${ev.payload.summary ? `: ${ev.payload.summary}` : ""}.`);
+      case "ticket.completed": {
+        // While its worker still runs, the notice waits for the worker's turn to end (see doneWorkerEnded): a coordinator
+        // that reviews and commits at once would miss edits made after `agt ticket done`.
+        const k = state.threads.get(ev.thread)?.tickets.find((x) => x.id === ev.payload.ticket);
+        const w = k?.assignee ? state.sessions.get(k.assignee) : undefined;
+        if (k?.status === "done" && w && isLive(w) && w.role === "worker") break;
+        notify(coordinatorToNotify(ev.thread), doneNotice(ev.payload.ticket, ev.payload.summary));
         break;
+      }
       case "ticket.blocked":
         notify(coordinatorToNotify(ev.thread), `Ticket ${ev.payload.ticket} is blocked: ${ev.payload.reason}.`);
         break;
@@ -302,6 +319,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
           }
         }
         if (s?.role === "worker" && t && t.status !== "done") {
+          if (s.status === "ended") doneWorkerEnded(s, t);
           // A worker that exits on its own must not leave its ticket stuck; one ended by teardown has a done or blocked ticket.
           const k = t.tickets.find((x) => x.id === s.ticket);
           if (k?.status === "in_progress" && k.assignee === s.id) {

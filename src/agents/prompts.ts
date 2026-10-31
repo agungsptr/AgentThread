@@ -58,7 +58,7 @@ export function systemPrompt(o: PromptInput): string {
         ? "Run tests only with commands you are allowed to run without asking for approval; if a command you need requires approval, block the ticket and name the command in the reason."
         : "You may run any command the work needs (tests, the dev stack, installs) inside the worktree."
     } When you need a decision you cannot make, run agt question ${t.id} "<question>", end your turn and wait for the answer.`,
-    `3. agt ticket done ${t.id}/${o.ticket} --summary "<one line>" — or, if you cannot finish, agt ticket block ${t.id}/${o.ticket} --reason "<why>".`,
+    `3. agt ticket done ${t.id}/${o.ticket} --summary "<one line>" is your last action: make no edits after it — or, if you cannot finish, agt ticket block ${t.id}/${o.ticket} --reason "<why>".`,
     "Do not commit; the coordinator commits. Never bypass the commit guard (no git commit --no-verify, no changing core.hooksPath or AGT_ROLE). Do not work on other tickets.",
   ].join("\n");
 }

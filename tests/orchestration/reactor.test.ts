@@ -86,7 +86,11 @@ test("idle worker with a done ticket ends, closes its pane, and the slot spawns 
   expect(r.events).toEqual([{ type: "session.ended", thread: "001", payload: { session: W1 } }]);
   expect(r.effects).toEqual([{ kind: "pane.close", pane: "w1:p3" }]);
   const next = react(s, apply(s, ...r.events), ctx());
-  expect(next.events).toEqual([expect.objectContaining({ type: "session.created", payload: expect.objectContaining({ ticket: "T2" }) })]);
+  // the worker's turn is over: the coordinator now hears that its ticket is done
+  expect(next.events).toEqual([
+    { type: "notice.queued", thread: "001", payload: { session: C, text: "Ticket T1 is done." } },
+    expect.objectContaining({ type: "session.created", payload: expect.objectContaining({ ticket: "T2" }) }),
+  ]);
   expect(next.effects).toEqual([expect.objectContaining({ kind: "agent.spawn", ticket: "T2", splitFrom: "w1:p2", direction: "right" })]);
 });
 
@@ -209,4 +213,80 @@ test("a queued worker keeps its --agent override when its slot frees", () => {
   expect(next.effects).toEqual([expect.objectContaining({ kind: "agent.spawn", ticket: "T2", run: { agent: "omp" } })]);
   apply(s, ...next.events);
   expect(s.threads.get("001")!.workerAgents).toEqual({});
+});
+
+/** Feeds `evs` and every follow-up back through react() the way the daemon does; returns all follow-up events. */
+function settle(s: State, evs: StoredEvent[], log?: StoredEvent[]): EventBody[] {
+  const all: EventBody[] = [];
+  for (let i = 0; i < 10 && evs.length > 0; i++) {
+    const r = react(s, evs, ctx());
+    all.push(...r.events);
+    evs = apply(s, ...r.events);
+    log?.push(...evs);
+  }
+  return all;
+}
+const doneNotices = (events: EventBody[]) =>
+  events.filter((e) => e.type === "notice.queued" && e.payload.session === C && e.payload.text.startsWith("Ticket T1 is done")).map((e) => (e as { payload: { text: string } }).payload.text);
+
+/** A thread whose worker W1 claimed T1 and is working on it. */
+function working(log?: StoredEvent[]): State {
+  const s = base();
+  const evs = apply(
+    s,
+    { type: "session.created", thread: "001", payload: { session: W1, role: "worker", agent: "claude-code", name: "w", ticket: "T1" } },
+    { type: "session.attached", thread: "001", payload: { session: W1, pane: "w1:p3" } },
+    { type: "ticket.claimed", thread: "001", payload: { ticket: "T1", assignee: W1 } },
+    { type: "session.active", thread: "001", payload: { session: W1 } },
+  );
+  log?.push(...evs);
+  return s;
+}
+
+test("the coordinator hears that a ticket is done only once its worker's turn ends (at the idle that ends the worker)", () => {
+  const s = working();
+  const after = settle(s, apply(s, { type: "ticket.completed", thread: "001", payload: { ticket: "T1", summary: "ok" } }));
+  expect(doneNotices(after)).toEqual([]); // the worker may still be editing
+  const idle = settle(s, apply(s, { type: "agent.idle", thread: "001", payload: { session: W1 } }));
+  expect(idle.some((e) => e.type === "session.ended" && e.payload.session === W1)).toBe(true);
+  expect(doneNotices(idle)).toEqual(["Ticket T1 is done: ok."]);
+  expect(doneNotices(s.sessions.get(C)!.notices.map((text) => ({ type: "notice.queued", payload: { session: C, text } }) as EventBody))).toEqual(["Ticket T1 is done: ok."]);
+  // nothing more later
+  expect(doneNotices(settle(s, apply(s, { type: "agent.idle", thread: "001", payload: { session: W1 } })))).toEqual([]);
+});
+
+test("a worker that ends or is lost after ticket done sends the done notice exactly once instead", () => {
+  for (const end of ["ended", "lost"] as const) {
+    const s = working();
+    expect(doneNotices(settle(s, apply(s, { type: "ticket.completed", thread: "001", payload: { ticket: "T1", summary: "ok" } })))).toEqual([]);
+    const ev: EventBody = end === "ended"
+      ? { type: "session.ended", thread: "001", payload: { session: W1 } }
+      : { type: "session.lost", thread: "001", payload: { session: W1, reason: "no agent in pane w1:p3" } };
+    expect(doneNotices(settle(s, apply(s, ev)))).toEqual(["Ticket T1 is done: ok."]);
+    expect(s.threads.get("001")!.tickets.find((k) => k.id === "T1")!.status).toBe("done"); // not released
+  }
+});
+
+test("a ticket done with no live worker notifies the coordinator at once", () => {
+  const s = working();
+  apply(s, { type: "session.ended", thread: "001", payload: { session: W1 } }); // e.g. replayed from an old log
+  expect(doneNotices(react(s, apply(s, { type: "ticket.completed", thread: "001", payload: { ticket: "T1" } }), ctx()).events)).toEqual(["Ticket T1 is done."]);
+});
+
+test("replaying the log gives the same coordinator notices as the live run", () => {
+  const log: StoredEvent[] = [];
+  const s = working(log);
+  const step = (b: EventBody) => {
+    const evs = apply(s, b);
+    log.push(...evs);
+    settle(s, evs, log);
+  };
+  step({ type: "ticket.completed", thread: "001", payload: { ticket: "T1", summary: "ok" } });
+  step({ type: "agent.idle", thread: "001", payload: { session: W1 } });
+  // a fresh projection of the same log (base() is deterministic), with no reactor involved
+  const replayed = base();
+  for (const e of log) applyEvent(replayed, e);
+  expect(replayed.sessions.get(C)!.notices).toEqual(s.sessions.get(C)!.notices);
+  expect(replayed.sessions.get(W1)!.status).toBe("ended");
+  expect(s.sessions.get(C)!.notices.filter((x) => x.startsWith("Ticket T1 is done"))).toEqual(["Ticket T1 is done: ok."]);
 });

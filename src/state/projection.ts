@@ -67,6 +67,8 @@ export interface Ticket {
   scope: string[];
   status: TicketStatus;
   assignee?: string;
+  /** The summary of `agt ticket done` (set while the ticket is done). */
+  summary?: string;
 }
 
 export interface Entry {
@@ -290,6 +292,8 @@ export function applyEvent(state: State, ev: StoredEvent): void {
     case "ticket.completed": {
       const k = ticket(ev.payload.ticket);
       k.status = "done";
+      if (ev.payload.summary) k.summary = ev.payload.summary;
+      else delete k.summary;
       note(t, ev, `${k.id} done${ev.payload.summary ? `: ${ev.payload.summary}` : ""}`);
       break;
     }
@@ -303,6 +307,7 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       const k = ticket(ev.payload.ticket);
       k.status = "open";
       delete k.assignee;
+      delete k.summary;
       note(t, ev, `${k.id} reopened`);
       break;
     }

@@ -171,7 +171,11 @@ test("worker lost whose ticket is not in progress and assigned to it: no release
   const s = base();
   apply(s, { type: "ticket.completed", thread: "001", payload: { ticket: "T1" } });
   const r = react(s, apply(s, { type: "session.lost", thread: "001", payload: { session: W, reason: "x" } }), ctx());
-  expect(r.events).toEqual([{ type: "notice.queued", thread: "001", payload: { session: C, text: "Worker for T1 was lost." } }]);
+  // a ticket done by the lost worker: its done notice was waiting for the worker's turn to end
+  expect(r.events).toEqual([
+    { type: "notice.queued", thread: "001", payload: { session: C, text: "Ticket T1 is done." } },
+    { type: "notice.queued", thread: "001", payload: { session: C, text: "Worker for T1 was lost." } },
+  ]);
 });
 
 test("a loss of an ended session is ignored", () => {
@@ -215,7 +219,9 @@ test("a worker ended after its ticket is done releases nothing", () => {
   const s = base();
   apply(s, { type: "ticket.completed", thread: "001", payload: { ticket: "T1" } });
   const r = react(s, apply(s, { type: "session.ended", thread: "001", payload: { session: W } }), ctx());
-  expect(r.events.filter((e) => e.type === "ticket.released" || e.type === "notice.queued")).toEqual([]);
+  expect(r.events.filter((e) => e.type === "ticket.released")).toEqual([]);
+  // the done notice that waited for the worker's turn to end is sent now
+  expect(r.events.filter((e) => e.type === "notice.queued")).toEqual([{ type: "notice.queued", thread: "001", payload: { session: C, text: "Ticket T1 is done." } }]);
 });
 
 test("with no live or lost coordinator, notices go to the latest non-rotated one (e.g. failed)", () => {

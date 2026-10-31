@@ -72,7 +72,7 @@ describe("agentsMd", () => {
       expect(coord).toContain(x);
     }
     const worker = s.slice(s.indexOf("## Worker"));
-    for (const x of ["agt ticket claim 002/<T>", "agt ticket done 002/<T> --summary", "agt ticket block 002/<T>", "Do not commit", "$AGT_TICKET"]) {
+    for (const x of ["agt ticket claim 002/<T>", 'agt ticket done 002/<T> --summary "<one line>" is your last action: make no edits after it', "agt ticket block 002/<T>", "Do not commit", "$AGT_TICKET"]) {
       expect(worker).toContain(x);
     }
   });
