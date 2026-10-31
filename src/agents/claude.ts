@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import type { Config } from "../config/config.ts";
 import type { AgentKind, SessionRole, SessionSignal } from "../domain/types.ts";
 import { shellQuote } from "../herdr/bridge.ts";
+import { ticketDocPath } from "./prompts.ts";
 
 export const AGT_BIN = fileURLToPath(new URL("../../bin/agt", import.meta.url));
 
@@ -35,12 +36,23 @@ const COMMIT_TOOLS = ["Bash(git add *)", "Bash(git commit *)"];
 /**
  * The thread files live under <root>/.agentthread, outside the agent's worktree cwd; `//abs/path` is Claude's
  * absolute-path rule form. A worker commits only in a task thread (`legacy: false`); a legacy thread's worker never does.
+ * In a task thread (§13) the worker may also write its own ticket doc (`doc`, workspace-root-relative) and nothing
+ * else outside its worktree, and the coordinator may edit and commit <root>/.docs and squash. Push stays denied
+ * by the launch settings.
  */
-export function allowedTools(role: SessionRole, config: Config, root?: string, o: { legacy?: boolean } = {}): string[] {
-  const workerCommits = o.legacy === false;
-  const base = role === "main" ? ["Bash(agt *)"] : role === "coordinator" || workerCommits ? [...READ_TOOLS, ...COMMIT_TOOLS] : READ_TOOLS;
+export function allowedTools(role: SessionRole, config: Config, root?: string, o: { legacy?: boolean; doc?: string } = {}): string[] {
+  const task = o.legacy === false;
+  const base = role === "main" ? ["Bash(agt *)"] : role === "coordinator" || task ? [...READ_TOOLS, ...COMMIT_TOOLS] : READ_TOOLS;
+  const workflow =
+    !task || !root
+      ? []
+      : role === "coordinator"
+        ? [`Edit(/${root}/.docs/**)`, `Write(/${root}/.docs/**)`, `Bash(git -C ${join(root, ".docs")} *)`, "Bash(git switch *)", "Bash(git merge --squash *)"]
+        : role === "worker" && o.doc !== undefined
+          ? [`Edit(/${ticketDocPath(root, o.doc)})`, `Write(/${ticketDocPath(root, o.doc)})`]
+          : [];
   const stateFiles = root && role !== "main" ? [`Read(/${root}/.agentthread/**)`] : [];
-  return [...base, ...stateFiles, ...config.agents.claude.extra_allowed_tools];
+  return [...base, ...workflow, ...stateFiles, ...config.agents.claude.extra_allowed_tools];
 }
 
 /** The AGT_* env of an agent session; CLAUDE_CONFIG_DIR is set only for claude-code. Without `session` it is a tab's env. */

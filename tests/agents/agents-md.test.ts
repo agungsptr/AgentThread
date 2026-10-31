@@ -700,7 +700,8 @@ describe("thread directory", () => {
   test("thread.dir.ensure makes the directory and writes the files; agent.spawn rewrites them there", async () => {
     const root = workspace();
     const dir = join(root, ".worktrees", "kyc-1");
-    const thread = { id: "001", title: "Fix login", slug: "fix-login", task: "kyc-1", dir, worktrees: {}, legacy: false } as unknown as Thread;
+    const tickets = [{ id: "T1", title: "API", scope: [], status: "ready", doc: ".docs/shared/issues/kyc-1/01-api.md" }];
+    const thread = { id: "001", title: "Fix login", slug: "fix-login", task: "kyc-1", dir, worktrees: {}, tickets, legacy: false } as unknown as Thread;
     const launched: string[] = [];
     const jobs: SpawnJob[] = [];
     const logs: string[] = [];
@@ -730,5 +731,14 @@ describe("thread directory", () => {
     const { pane: _p, ...split } = spawn;
     expect(await run({ ...split, session: "s-2", role: "worker", ticket: "T1", splitFrom: "p2", direction: "down" })).toEqual([]);
     expect(jobs.at(-1)?.split?.env).toMatchObject({ GIT_CEILING_DIRECTORIES: join(root, ".worktrees"), AGT_ROLE: "worker" });
+    // §13: the worker's bootstrap names its ticket file; asking, Claude may write that file only
+    const doc = join(root, ".docs/shared/issues/kyc-1/01-api.md");
+    expect(jobs.at(-1)?.bootstrap.split("\n")).toContain(`Your ticket file is ${doc}.`);
+    const asked: SpawnJob[] = [];
+    const nonAuto = { ...NO_SKILL, agents: { ...NO_SKILL.agents, autonomous: false } };
+    const runAsk = createEffectRunner({ root, config: nonAuto, layout: () => LAYOUT, thread: () => thread, launch: (job) => asked.push(job), log: () => {} });
+    expect(await runAsk({ ...split, session: "s-3", role: "worker", ticket: "T1", splitFrom: "p2", direction: "down" })).toEqual([]);
+    const tools = asked[0]!.args[asked[0]!.args.indexOf("--allowed-tools") + 1]!.split(",");
+    expect(tools.filter((x) => x.startsWith("Edit(") || x.startsWith("Write("))).toEqual([`Edit(/${doc})`, `Write(/${doc})`]);
   });
 });

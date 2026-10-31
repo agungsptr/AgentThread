@@ -14,6 +14,8 @@ export interface LaunchInput {
   gitCommonDir?: string;
   /** False for a task thread (a thread directory with repo worktrees), whose workers commit; absent or true: legacy. */
   legacy?: boolean;
+  /** A task-thread worker's ticket doc (workspace-root-relative): the one file outside its worktree it may write. */
+  ticketDoc?: string;
   /** The launching process's env (default process.env); only the release e2e's AGT_E2E_* overrides are read from it. */
   env?: Record<string, string | undefined>;
 }
@@ -45,14 +47,14 @@ const claudeAdapter: AgentAdapter = {
   bin: "claude",
   instructionFiles: ["CLAUDE.md"],
   prompt: "positional",
-  launch({ role, run, config, root, legacy }) {
+  launch({ role, run, config, root, legacy, ticketDoc }) {
     // Pushing is the user's call: denied by Claude Code's own rules, whatever the permission mode.
     const settings = { ...hookSettings(), permissions: { deny: ["Bash(git push:*)"] } };
     const args = config.agents.autonomous
       ? ["--permission-mode", "bypassPermissions", "--settings", JSON.stringify({ ...settings, skipDangerousModePermissionPrompt: true })]
       : [
           "--permission-mode", config.agents.claude.permission_mode,
-          "--allowed-tools", allowedTools(role, config, root, legacy === undefined ? {} : { legacy }).join(","),
+          "--allowed-tools", allowedTools(role, config, root, { ...(legacy === undefined ? {} : { legacy }), ...(ticketDoc === undefined ? {} : { doc: ticketDoc }) }).join(","),
           "--settings", JSON.stringify(settings),
         ];
     if (run.model) args.push("--model", run.model);
@@ -63,20 +65,28 @@ const claudeAdapter: AgentAdapter = {
   capabilities: { hooks: true, contextSize: true, preCompact: true },
 };
 
+/** The git commands a task-thread role runs without asking in OpenCode's ask mode (§13): workers commit, the coordinator squashes. */
+const OPENCODE_GIT: Record<SessionRole, Record<string, "allow">> = {
+  main: {},
+  worker: { "git add *": "allow", "git commit *": "allow" },
+  coordinator: { "git switch *": "allow", "git merge --squash *": "allow", "git commit *": "allow" },
+};
+
 const opencodeAdapter: AgentAdapter = {
   agent: "opencode",
   herdrKind: "opencode",
   bin: "opencode",
   instructionFiles: [],
   prompt: "flag",
-  launch({ role, run, config, env = process.env }) {
+  launch({ role, run, config, legacy, env = process.env }) {
     const model = run.model ? { model: run.effort ? `${run.model}#${run.effort}` : run.model } : {};
     // Not autonomous: OpenCode asks for every permission. Release e2e only (tests/release): AGT_E2E_OPENCODE_ASK=<role,...>
     // starts those roles asking too, so the blocked-worker scenario can see a real approval dialog.
     const ask = !config.agents.autonomous || (env.AGT_E2E_OPENCODE_ASK ?? "").split(",").includes(role);
-    // Pushing is the user's call: denied by OpenCode's own bash rules (the last matching rule wins, so "*" comes first).
+    // Pushing is the user's call: denied by OpenCode's own bash rules (the last matching rule wins, so "*" comes first
+    // and the push deny last). Asking, a task thread's roles may still run their own git work (§13) without approval.
     const permission = ask
-      ? { "*": "ask", bash: { "*": "ask", "git push*": "deny" } }
+      ? { "*": "ask", bash: { "*": "ask", ...(legacy === false ? OPENCODE_GIT[role] : {}), "git push*": "deny" } }
       : { "*": "allow", external_directory: "allow", doom_loop: "allow", bash: { "*": "allow", "git push*": "deny" } };
     // --standalone: a TUI attached to OpenCode's shared background service gets that service's config, and our
     // OPENCODE_CONFIG_CONTENT (model, permissions) would be ignored; a private server reads it.

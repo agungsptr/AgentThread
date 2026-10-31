@@ -162,3 +162,41 @@ test("push is denied by the vendor's own rules in both modes (Claude Code, OpenC
     expect(Object.keys(oc.permission.bash)).toEqual(["*", "git push*"]);
   }
 });
+
+test("§13: claude passes the worker's ticket doc into its allow rules (task threads, not autonomous)", () => {
+  const args = adapterFor("claude-code").launch({ ...base, config: nonAuto, legacy: false, ticketDoc: ".docs/a/02.md", run: { agent: "claude-code" } }).args;
+  const tools = args[args.indexOf("--allowed-tools") + 1]!.split(",");
+  expect(tools).toContain("Edit(//r/.docs/a/02.md)");
+  expect(tools).toContain("Write(//r/.docs/a/02.md)");
+  expect(JSON.parse(args[args.indexOf("--settings") + 1]!).permissions).toEqual({ deny: ["Bash(git push:*)"] });
+});
+
+test("§13: opencode ask mode lets a task-thread worker add and commit, the coordinator switch, squash and commit; push stays denied last", () => {
+  const perm = (role: "worker" | "coordinator", o: { legacy?: boolean; env?: Record<string, string> } = {}, config = nonAuto) =>
+    JSON.parse(adapterFor("opencode").launch({ ...base, role, config, ...o, run: { agent: "opencode" } }).env.OPENCODE_CONFIG_CONTENT!).permission;
+  expect(perm("worker", { legacy: false })).toEqual({ "*": "ask", bash: { "*": "ask", "git add *": "allow", "git commit *": "allow", "git push*": "deny" } });
+  expect(perm("coordinator", { legacy: false })).toEqual({
+    "*": "ask",
+    bash: { "*": "ask", "git switch *": "allow", "git merge --squash *": "allow", "git commit *": "allow", "git push*": "deny" },
+  });
+  for (const role of ["worker", "coordinator"] as const) {
+    expect(Object.keys(perm(role, { legacy: false }).bash).at(-1)).toBe("git push*");
+    // legacy threads keep asking for everything
+    expect(perm(role, { legacy: true })).toEqual({ "*": "ask", bash: { "*": "ask", "git push*": "deny" } });
+    expect(perm(role)).toEqual({ "*": "ask", bash: { "*": "ask", "git push*": "deny" } });
+  }
+  // the release-only ask mode follows the same rules; the autonomous default is unchanged
+  expect(perm("worker", { legacy: false, env: { AGT_E2E_OPENCODE_ASK: "worker" } }, DEFAULT_CONFIG).bash["git commit *"]).toBe("allow");
+  expect(perm("worker", { legacy: false }, DEFAULT_CONFIG)).toEqual({ "*": "allow", external_directory: "allow", doom_loop: "allow", bash: { "*": "allow", "git push*": "deny" } });
+});
+
+test("§13: codex and omp have no per-command allow list; their task-thread args equal the legacy ones", () => {
+  for (const agent of ["codex", "omp"] as const) {
+    for (const role of ["worker", "coordinator"] as const) {
+      for (const config of [DEFAULT_CONFIG, nonAuto]) {
+        const launch = (legacy: boolean) => adapterFor(agent).launch({ ...base, role, config, legacy, ticketDoc: "x.md", run: { agent } }).args;
+        expect(launch(false)).toEqual(launch(true));
+      }
+    }
+  }
+});

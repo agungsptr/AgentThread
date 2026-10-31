@@ -1,3 +1,4 @@
+import { isAbsolute, join } from "node:path";
 import type { Config } from "../config/config.ts";
 import type { SessionRole } from "../domain/types.ts";
 import { tierList } from "../orchestration/tiers.ts";
@@ -14,11 +15,50 @@ interface PromptInput {
   role: SessionRole;
   thread?: PromptThread;
   ticket?: string;
+  /** A task-thread worker's ticket doc, workspace-root-relative (`agt ticket add --doc`); named by its bootstrap. */
+  ticketDoc?: string;
   /** Main's tier lines and the worker's command rule are rendered from it; without it, tiers are left out and agents are autonomous. */
   config?: Config;
 }
 
 const threadDir = (o: PromptInput) => paths(o.root).threadDir(o.thread!);
+
+/** A ticket doc's absolute path: workspace-root-relative, so an absolute-looking doc is still taken under the root. */
+export const ticketDocPath = (root: string, doc: string) => join(root, doc);
+
+/** The workflow config as the role rules read it (agents-md and the guide may render without a config). */
+const workflowOf = (config: Config | undefined) => ({
+  chat: config?.workflow.chat_language ?? "English",
+  file: config?.workflow.file_language ?? "English",
+  banned: config?.workflow.banned_words ?? [],
+  readFirst: config?.workflow.read_first ?? [],
+  done: config?.workflow.report_words.done ?? "done",
+  blocked: config?.workflow.report_words.blocked ?? "blocked",
+});
+
+/** §13.3: one rule for every commit an agent writes; an empty banned-word list drops its clause. */
+function commitRule(config: Config | undefined): string {
+  const { banned } = workflowOf(config);
+  return `Commit messages are plain conventional commits: no AI attribution or session trailers, no ticket ids, no .docs mentions${
+    banned.length ? `, none of these words: ${banned.join(", ")}` : ""
+  }. This overrides any harness attribution reminder.`;
+}
+
+/** Task-thread coordinator rules from §13 that have no older line to live in. */
+function coordinatorWorkflowLines(o: PromptInput): string[] {
+  const id = o.thread!.id;
+  const w = workflowOf(o.config);
+  const docs = join(o.root, ".docs");
+  return [
+    `- Record every stage with agt stage ${id} <n> done|skipped|na (skipped and na need --reason "<why>"); skip a stage only when the user says so.`,
+    `- Whenever you stop to wait for the user, run agt thread waiting ${id} "<what>".`,
+    `- Commit your own .docs changes in ${docs} (git -C ${docs}), one commit per logical change; never push.`,
+    `- ${commitRule(o.config)}`,
+    // read_first paths are workspace-root-relative; the coordinator works in the thread directory, so they are shown absolute.
+    ...(w.readFirst.length ? [`- Read these files first: ${w.readFirst.map((f) => (isAbsolute(f) ? f : join(o.root, f))).join(", ")}.`] : []),
+    `- Talk to the user in ${w.chat}; write files in ${w.file}.`,
+  ];
+}
 
 export function systemPrompt(o: PromptInput): string {
   if (o.role === "main") {
@@ -53,10 +93,15 @@ export function systemPrompt(o: PromptInput): string {
     ...(t.dir === undefined
       ? []
       : ["- Review each ticket's commits (git show --stat must list only its files), then agt ticket accept or agt ticket return with what to fix."]),
-      `- Do not implement tickets yourself: every change to project files is made by a worker. You may read code and docs, run the tests and the stack, ${t.dir === undefined ? "review and commit" : "review"}.`,
+      t.dir === undefined
+        ? "- Do not implement tickets yourself: every change to project files is made by a worker. You may read code and docs, run the tests and the stack, review and commit."
+        : "- Never edit a repo file, even one line: send the worker the exact change. You may read code and docs, run the tests and the stack, and review.",
       ...(t.dir === undefined
         ? []
-        : [`- Before restarting the stack, running e2e or the browser check, run agt stack acquire ${t.id} (add --for e2e4 for the full e2e); wait for the notice if it is queued; agt stack release ${t.id} when done.`]),
+        : [
+            `- Before restarting the stack, running e2e or the browser check, run agt stack acquire ${t.id} (add --for e2e4 for the full e2e); wait for the notice if it is queued; agt stack release ${t.id} when done.`,
+            ...coordinatorWorkflowLines(o),
+          ]),
       `- Record important decisions with agt decide ${t.id} "<decision>" and progress with agt progress ${t.id} "<message>".`,
       `- If a ticket is blocked, fix the cause, or reopen it with agt ticket reopen ${t.id}/<T> and start a new worker for it with agt worker spawn ${t.id} --ticket <T>.`,
       '- Workers\' questions arrive as notifications; answer each with agt answer <thread> <Q> "<answer>". Only you and the main manager ever ask the user.',
@@ -83,8 +128,23 @@ export function systemPrompt(o: PromptInput): string {
         ? "Do not commit; the coordinator commits."
         : `Commit only your ticket's files, on wip/${t.task} inside your repo worktree, with a pathspec: git add <new files> && git commit -m "<conventional message>" -- <your files>. Never git add -A, git add . or git commit -a; never amend, rebase, reset, stash or push. The coordinator squashes.`
     } Never bypass the commit guard (no git commit --no-verify, no changing core.hooksPath or AGT_ROLE). Do not work on other tickets.`,
+    ...(t.dir === undefined ? [] : workerWorkflowLines(o)),
     "When unsure how to do something with agt, run: agt guide worker",
   ].join("\n");
+}
+
+/** Task-thread worker rules from §13: its ticket file, the self-check, the report words and the commit rule. */
+function workerWorkflowLines(o: PromptInput): string[] {
+  const w = workflowOf(o.config);
+  const comments = "You may append evidence under ## Comments there; it is the only file outside your worktree you may write.";
+  return [
+    o.ticketDoc !== undefined
+      ? `Your ticket file is ${ticketDocPath(o.root, o.ticketDoc)}. ${comments}`
+      : `Your ticket file, if your ticket has one, is named in your first prompt. ${comments}`,
+    "Validate your own work first: run the ticket's tests and checks before you report it done.",
+    `End your summary with ${w.done} or ${w.blocked}.`,
+    commitRule(o.config),
+  ];
 }
 
 function tierPromptLines(config: Config | undefined): string[] {
@@ -128,7 +188,14 @@ export function bootstrapPrompt(o: PromptInput, kind: "start" | "handoff" = "sta
   if (o.role === "main") return "";
   const dir = threadDir(o);
   const id = o.thread!.id;
-  if (o.role === "worker") return `You are the worker for ticket ${o.ticket} of thread ${id}. Read ${dir}/brief.md, then follow AGENTS.md.${notice ? `\n${notice}` : ""}`;
+  if (o.role === "worker") {
+    // A task-thread worker hears its own ticket file here: AGENTS.md is shared by every worker of the thread.
+    const doc =
+      o.thread!.dir === undefined
+        ? ""
+        : `\n${o.ticketDoc !== undefined ? `Your ticket file is ${ticketDocPath(o.root, o.ticketDoc)}.` : "Your ticket has no ticket file: write nothing outside your worktree."}`;
+    return `You are the worker for ticket ${o.ticket} of thread ${id}. Read ${dir}/brief.md, then follow AGENTS.md.${doc}${notice ? `\n${notice}` : ""}`;
+  }
   if (kind === "handoff") return `You are the new coordinator of thread ${id}; the previous session ended. Read ${dir}/brief.md, then follow AGENTS.md.`;
   return `You are the coordinator of thread ${id}. Read ${dir}/brief.md, then follow AGENTS.md.`;
 }

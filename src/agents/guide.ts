@@ -45,6 +45,14 @@ const COMMANDS: Record<SessionRole, string[]> = {
   worker: ["ticket claim|reopen", "ticket done", "ticket block", "note", "progress", "question"],
 };
 
+/**
+ * Task threads only: the stage and stack-lock commands their coordinator runs (§13). `thread waiting` joins them once
+ * it has a USAGE line.
+ */
+const COMMANDS_TASK: Partial<Record<SessionRole, string[]>> = {
+  coordinator: ["stage", "stack acquire", "stack release"],
+};
+
 /** Where a role's command line differs from the shared USAGE line, keyed by the prefix in COMMANDS. */
 const COMMAND_OVERRIDES: Partial<Record<SessionRole, Record<string, string>>> = {
   worker: { "ticket claim|reopen": "ticket claim <thread>/<ticket>" },
@@ -108,7 +116,7 @@ function roleGuide(role: SessionRole, o: GuideInput, level: "#" | "##"): string 
     `${h} Commands`,
     "",
     "```",
-    ...COMMANDS[role].flatMap((c) => (COMMAND_OVERRIDES[role]?.[c] ? [COMMAND_OVERRIDES[role][c]!] : usageLines(c)).map((l, i) => (i === 0 ? `agt ${l}` : `    ${l}`))),
+    ...[...COMMANDS[role], ...(t.dir !== undefined ? (COMMANDS_TASK[role] ?? []) : [])].flatMap((c) => (COMMAND_OVERRIDES[role]?.[c] ? [COMMAND_OVERRIDES[role][c]!] : usageLines(c)).map((l, i) => (i === 0 ? `agt ${l}` : `    ${l}`))),
     "```",
     "",
     `${h} When things go wrong`,

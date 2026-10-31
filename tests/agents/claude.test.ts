@@ -51,6 +51,33 @@ describe("claude adapter", () => {
     expect(allowedTools("worker", DEFAULT_CONFIG, "/repo")).toEqual(["Bash(agt *)", "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)", read]);
   });
 
+  test("§13: a task-thread worker may write its own ticket file only; a ticket without a doc gets no write rule", () => {
+    const tools = allowedTools("worker", DEFAULT_CONFIG, "/ws", { legacy: false, doc: ".docs/shared/issues/kyc/02-api.md" });
+    expect(tools).toContain("Edit(//ws/.docs/shared/issues/kyc/02-api.md)");
+    expect(tools).toContain("Write(//ws/.docs/shared/issues/kyc/02-api.md)");
+    expect(tools.filter((t) => t.startsWith("Edit(") || t.startsWith("Write("))).toHaveLength(2);
+    expect(tools.join(",")).not.toContain(".docs/**");
+    expect(tools.some((t) => t.includes("git switch") || t.includes("merge --squash") || t.includes("git -C"))).toBe(false);
+    const none = allowedTools("worker", DEFAULT_CONFIG, "/ws", { legacy: false });
+    expect(none.some((t) => t.startsWith("Edit(") || t.startsWith("Write("))).toBe(false);
+    // a legacy worker never gets one, even when handed a doc
+    expect(allowedTools("worker", DEFAULT_CONFIG, "/ws", { legacy: true, doc: "x.md" })).toEqual(allowedTools("worker", DEFAULT_CONFIG, "/ws", { legacy: true }));
+  });
+
+  test("§13: a task-thread coordinator may edit and commit .docs, switch branches and squash; never push", () => {
+    const tools = allowedTools("coordinator", DEFAULT_CONFIG, "/ws", { legacy: false });
+    expect(tools).toEqual([
+      "Bash(agt *)", "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)", "Bash(git add *)", "Bash(git commit *)",
+      "Edit(//ws/.docs/**)", "Write(//ws/.docs/**)", "Bash(git -C /ws/.docs *)", "Bash(git switch *)", "Bash(git merge --squash *)",
+      "Read(//ws/.agentthread/**)",
+    ]);
+    expect(tools.join(",")).not.toContain("push");
+    // legacy coordinators keep the old rules
+    expect(allowedTools("coordinator", DEFAULT_CONFIG, "/ws", { legacy: true })).toEqual([
+      "Bash(agt *)", "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)", "Bash(git add *)", "Bash(git commit *)", "Read(//ws/.agentthread/**)",
+    ]);
+  });
+
   test("agent env puts agt on PATH and identifies the session", () => {
     const env = agentEnv({ root: "/repo", role: "worker", agent: "claude-code", session: "s-1", thread: "002", ticket: "T3" });
     expect(env).toMatchObject({ AGT_ROOT: "/repo", AGT_ROLE: "worker", AGT_SESSION: "s-1", AGT_AGENT: "claude-code", AGT_THREAD: "002", AGT_TICKET: "T3" });
@@ -104,7 +131,7 @@ describe("prompts", () => {
     expect(legacyWorker).toContain("Do not commit; the coordinator commits. Never bypass the commit guard");
     expect(legacyWorker).not.toContain("Commit only your ticket's files");
     const coord = systemPrompt({ root: "/repo", role: "coordinator", thread: t });
-    expect(coord).toContain("- Do not implement tickets yourself: every change to project files is made by a worker. You may read code and docs, run the tests and the stack, review.");
+    expect(coord).toContain("- Never edit a repo file, even one line: send the worker the exact change. You may read code and docs, run the tests and the stack, and review.");
     expect(coord).not.toContain("review and commit");
     expect(systemPrompt({ root: "/repo", role: "coordinator", thread: T })).toContain("run the tests and the stack, review and commit.");
   });
