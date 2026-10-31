@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { agentsMd, writeAgentsFiles, writeThreadDirFiles } from "../../src/agents/agents-md.ts";
 import { SKILL_REL } from "../../src/agents/skill.ts";
 import { type Runner, spawnRunner } from "../../src/herdr/bridge.ts";
@@ -89,12 +89,30 @@ describe("writeAgentsFiles", () => {
     expect(readFileSync(join(wt, "AGENTS.md"), "utf8")).toBe(SECTION);
     expectSymlink(wt);
     expect(status(wt)).toBe("");
-    const excludes = readFileSync(join(root, ".agentthread", "worktree-excludes"), "utf8").split("\n");
+    const excludes = readFileSync(join(root, ".agentthread", "worktree-excludes", basename(root)), "utf8").split("\n");
     expect(excludes).toContain("/AGENTS.md");
     expect(excludes).toContain("/CLAUDE.md");
-    expect(git(wt, "config", "--worktree", "--get", "core.excludesFile").trim()).toBe(join(root, ".agentthread", "worktree-excludes"));
+    expect(git(wt, "config", "--worktree", "--get", "core.excludesFile").trim()).toBe(join(root, ".agentthread", "worktree-excludes", basename(root)));
     // the shared info/exclude stays untouched, so the main checkout is unaffected
     expect(readFileSync(join(root, ".git", "info", "exclude"), "utf8")).not.toContain("AGENTS.md");
+  });
+
+  test("the old shared excludes file moves to the repo's own file, with every worktree that used it", () => {
+    const { root, wt } = repoWith({});
+    const shared = join(root, ".agentthread", "worktree-excludes");
+    // an earlier version: one shared file, and a second worktree pointing at it
+    mkdirSync(join(root, ".agentthread"), { recursive: true });
+    writeFileSync(shared, "/AGENTS.md\n/CLAUDE.md\n");
+    const other = join(root, ".worktrees", "002-y");
+    addWorktree(root, "thread/002-y", other);
+    git(root, "config", "extensions.worktreeConfig", "true");
+    git(other, "config", "--worktree", "core.excludesFile", shared);
+    write({ root, worktree: wt, content: SECTION });
+    const file = join(shared, basename(root));
+    expect(lstatSync(shared).isDirectory()).toBe(true);
+    expect(readFileSync(file, "utf8")).toContain("/AGENTS.md");
+    expect(git(wt, "config", "--worktree", "--get", "core.excludesFile").trim()).toBe(file);
+    expect(git(other, "config", "--worktree", "--get", "core.excludesFile").trim()).toBe(file);
   });
 
   test("project tracking AGENTS.md: project content first, then the section; skip-worktree", () => {
@@ -150,7 +168,7 @@ describe("writeAgentsFiles", () => {
       expect(readFileSync(join(wt, "AGENTS.md"), "utf8")).toBe(first);
       expectSymlink(wt);
       expect(status(wt)).toBe("");
-      const exclude = readFileSync(join(root, ".agentthread", "worktree-excludes"), "utf8").split("\n");
+      const exclude = readFileSync(join(root, ".agentthread", "worktree-excludes", basename(root)), "utf8").split("\n");
       expect(exclude.filter((l) => l === "/AGENTS.md").length).toBe(1);
       expect(exclude.filter((l) => l === "/CLAUDE.md").length).toBe(1);
     }
@@ -248,7 +266,7 @@ describe("writeAgentsFiles: symlinks, excludes, git operations", () => {
     const { root, wt } = repoWith({});
     write({ root, worktree: wt, content: SECTION }, env);
     write({ root, worktree: wt, content: SECTION }, env);
-    expect(readFileSync(join(root, ".agentthread", "worktree-excludes"), "utf8")).toBe("*.log\n/AGENTS.md\n/CLAUDE.md\n");
+    expect(readFileSync(join(root, ".agentthread", "worktree-excludes", basename(root)), "utf8")).toBe("*.log\n/AGENTS.md\n/CLAUDE.md\n");
     writeFileSync(join(wt, "debug.log"), "x\n");
     expect(status(wt)).toBe("");
   });
@@ -263,7 +281,7 @@ describe("writeAgentsFiles: symlinks, excludes, git operations", () => {
     writeFileSync(join(home, "xdg", "git", "ignore"), "*.wrong\n");
     const { root, wt } = repoWith({});
     write({ root, worktree: wt, content: SECTION }, envFor(home));
-    expect(readFileSync(join(root, ".agentthread", "worktree-excludes"), "utf8")).toBe("*.log\n/AGENTS.md\n/CLAUDE.md\n");
+    expect(readFileSync(join(root, ".agentthread", "worktree-excludes", basename(root)), "utf8")).toBe("*.log\n/AGENTS.md\n/CLAUDE.md\n");
     writeFileSync(join(wt, "debug.log"), "x\n");
     expect(status(wt)).toBe("");
   });
@@ -278,7 +296,7 @@ describe("writeAgentsFiles: symlinks, excludes, git operations", () => {
     expect(status(wt)).toBe("");
     // running again never reads back our own per-worktree value
     write({ root, worktree: wt, content: SECTION });
-    expect(readFileSync(join(root, ".agentthread", "worktree-excludes"), "utf8")).toBe("*.tmp\n/AGENTS.md\n/CLAUDE.md\n");
+    expect(readFileSync(join(root, ".agentthread", "worktree-excludes", basename(root)), "utf8")).toBe("*.tmp\n/AGENTS.md\n/CLAUDE.md\n");
   });
 
   test("without per-worktree config: falls back to the shared info/exclude and reverts extensions.worktreeConfig", () => {

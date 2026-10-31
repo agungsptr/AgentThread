@@ -65,7 +65,17 @@ herdr:
   main_tab_label: main
   close_tab_on_done: true
   close_worker_pane_on_end: true
+workspace:                              # optional; without repos, the root's child git repos are used
+  repos:
+    api: { path: api, source_branch: main }   # path is relative to the root
+  worktree_setup: make wt-new TASK={task} SRC={src} REPOS={repo}
 ```
+
+`agt worktree add <thread> <repo> [--from <branch>]` creates `.worktrees/<task>/<repo>` on a new `wip/<task>` from the
+source branch, in the background; the coordinator gets a notice when it is ready or failed. With `worktree_setup`, that
+command runs instead (`sh -c` in the root, at most 5 minutes) and must leave `{path}` checked out on `wip/<task>`. Its
+placeholders `{root}`, `{task}`, `{repo}`, `{src}` and `{path}` are filled in already shell-quoted: use them unquoted
+(`TASK={task}`, not `TASK="{task}"`).
 
 An `effort` the agent does not accept is rejected when the config loads (`agents.<path>.effort: <agent> accepts <list>`).
 The older keys `main_manager`, `default_coordinator`, `default_worker` and `agents.claude.{permission_mode,

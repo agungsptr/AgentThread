@@ -74,6 +74,7 @@ const ALLOWED: Record<CommandName, readonly Role[]> = {
   "layout.reconcile": ["user"],
   "worker.spawn": ["coordinator"],
   "worktree.add": ["user", "coordinator"],
+  "worktree.report": ["user"],
   tell: ROLES,
   "session.signal": ROLES,
   "session.attached": ["user"],
@@ -280,6 +281,8 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
     }
     case "worktree.add":
       return addWorktree(t, cmd.repo, cmd.from, ctx);
+    case "worktree.report":
+      return reportWorktree(state, t, cmd.repo, cmd.ok ? undefined : (cmd.error ?? "unknown error"));
     case "log":
       return { events: [{ type: "log.appended", thread: t.id, payload: { message: cmd.message } }] };
     case "decide":
@@ -393,8 +396,8 @@ function newThread(state: State, cmd: Extract<Command, { cmd: "thread.new" }>, c
 
 /**
  * A task worktree for one repo of the workspace: `<dir>/<repo>` on a new `wip/<task>` from `--from`, else the repo's
- * source_branch. The effect creates it before anything commits and reports `worktree.added`; if it fails, the command
- * fails and nothing is written.
+ * source_branch. The command records the request and returns at once; the effect creates the worktree in the
+ * background (outside the command queue) and reports back with worktree.report.
  */
 function addWorktree(t: Thread, repo: string, from: string | undefined, ctx: HandlerContext): Decision {
   if (t.legacy || t.dir === undefined || t.task === undefined) reject(`thread ${t.id} uses the single-repo layout`);
@@ -402,14 +405,34 @@ function addWorktree(t: Thread, repo: string, from: string | undefined, ctx: Han
   const entry = Object.hasOwn(repos, repo) ? repos[repo] : undefined;
   if (!entry) reject(`unknown repo ${repo}; workspace repos: ${Object.keys(repos).join(", ") || "(none)"}`);
   if (t.worktrees[repo]) reject(`thread ${t.id} already has a worktree for ${repo}`);
+  if (t.worktreeRequests[repo]) reject(`a worktree for ${repo} is already being created`);
   const source = from ?? entry.source_branch ?? reject(`no source branch for ${repo}; pass --from <branch>`);
+  if (source.startsWith("-")) reject(`invalid source branch ${source}`);
   const path = join(t.dir, repo);
   const branch = `wip/${t.task}`;
   return {
-    events: [],
+    events: [{ type: "worktree.requested", thread: t.id, payload: { repo, path, branch, source } }],
     effects: [{ kind: "git.worktree.add", thread: t.id, repo, repoPath: resolve(ctx.root, entry.path), path, branch, source }],
-    result: { repo, path, branch, source },
+    result: { repo, path, branch, source, requested: true },
   };
+}
+
+/** The background job's outcome: the worktree is added or the request failed, and the coordinator gets a notice. */
+function reportWorktree(state: State, t: Thread, repo: string, failure: string | undefined): Decision {
+  const req = t.worktreeRequests[repo];
+  if (!req) return { events: [] }; // a stale or repeated report
+  const coordinator = liveSessions(state, t.id, "coordinator")[0];
+  const notice = (text: string): EventBody[] => (coordinator ? [{ type: "notice.queued", thread: t.id, payload: { session: coordinator.id, text } }] : []);
+  if (failure === undefined) {
+    return {
+      events: [
+        { type: "worktree.added", thread: t.id, payload: { repo, ...req } },
+        ...notice(`Worktree for ${repo} is ready at ${req.path} on ${req.branch}.`),
+      ],
+    };
+  }
+  const reason = failure.trim().replace(/\.$/, "") || "unknown error";
+  return { events: [{ type: "worktree.failed", thread: t.id, payload: { repo, reason } }, ...notice(`Worktree for ${repo} failed: ${reason}.`)] };
 }
 
 /** A proposed tier: the proposal, then either the choice (--now) or the timer, running unless main is working. */

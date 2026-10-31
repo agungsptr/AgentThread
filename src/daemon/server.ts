@@ -39,7 +39,10 @@ export async function runFollowUps(
   if (fresh.length > 0) log(`reactor stopped after ${MAX_FOLLOW_UP_ROUNDS} rounds`);
 }
 
-export async function startDaemon(root: string, opts: { log?: (message: string) => void; launch?: (job: SpawnJob) => void; sweepIntervalMs?: number; pollIntervalMs?: number } = {}): Promise<Daemon> {
+export async function startDaemon(
+  root: string,
+  opts: { log?: (message: string) => void; launch?: (job: SpawnJob) => void; sweepIntervalMs?: number; pollIntervalMs?: number; setupTimeoutMs?: number } = {},
+): Promise<Daemon> {
   const p = paths(root);
   // Taking the exclusive store lock first makes "one daemon per project" a property of state.db, not of the socket path.
   const trails = trailCache(root, 3000);
@@ -50,6 +53,7 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
     state = project(store.all());
     if (!state.project) throw new Error("project not initialized; run `agt init`");
     config = loadConfig(root);
+    failStaleWorktreeRequests(store, state, root, config);
     ensureSocketDir(p.socketDir);
     rmSync(p.socket, { force: true });
     await trails.refresh(state.threads.values());
@@ -78,6 +82,15 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
     thread: (id) => state.threads.get(id),
     log: opts.log,
     launch: opts.launch,
+    // The background worktree job's outcome re-enters through the queue, as the spawn job's reports do.
+    report: (command) => {
+      if (shuttingDown) return;
+      void enqueue(async () => {
+        const r = await runCommand({ command, actor: { role: "user" } });
+        if (!r.ok) (opts.log ?? console.error)(`worktree report for thread ${command.thread} failed: ${r.error}`);
+      }).catch((e) => (opts.log ?? console.error)(`worktree report for thread ${command.thread} failed: ${e instanceof Error ? e.message : String(e)}`));
+    },
+    ...(opts.setupTimeoutMs !== undefined ? { setupTimeoutMs: opts.setupTimeoutMs } : {}),
   });
 
   const log = opts.log ?? console.error;
@@ -247,4 +260,19 @@ export async function startDaemon(root: string, opts: { log?: (message: string) 
   };
 
   return { stop, closed };
+}
+
+/**
+ * A worktree request still pending at startup lost its background job with the previous daemon: it is marked failed
+ * (and the coordinator told), so the repo can be requested again.
+ */
+function failStaleWorktreeRequests(store: EventStore, state: ReturnType<typeof project>, root: string, config: Config): void {
+  for (const t of state.threads.values()) {
+    for (const [repo, req] of Object.entries(t.worktreeRequests)) {
+      const reason = `the daemon restarted before the worktree was ready; check ${req.path} and the branch ${req.branch}, then request it again`;
+      const decision = handle(state, { cmd: "worktree.report", thread: t.id, repo, ok: false, error: reason }, { role: "user" }, { root, config, newId: randomUUID });
+      if (!decision.ok || !decision.events.length) continue;
+      for (const ev of store.append(decision.events, decision.actor ?? { role: "user" })) applyEvent(state, ev);
+    }
+  }
 }

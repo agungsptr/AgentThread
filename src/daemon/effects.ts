@@ -1,12 +1,14 @@
-import { existsSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, realpathSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
-import { resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { agentEnv, claudeConfigDir } from "../agents/claude.ts";
 import { adapterFor } from "../agents/adapters.ts";
 import { bootstrapPrompt } from "../agents/prompts.ts";
 import { agentsMd, writeAgentsFilesAsync, writeThreadDirFiles } from "../agents/agents-md.ts";
 import { launchSpawnJob, type SpawnJob } from "../agents/spawn-job.ts";
 import type { Effect } from "../commands/handler.ts";
+import type { Command } from "../commands/schema.ts";
 import type { Config } from "../config/config.ts";
 import type { EventBody, Layout } from "../domain/types.ts";
 import { HerdrCli, spawnAsync } from "../herdr/bridge.ts";
@@ -47,6 +49,13 @@ export function createEffectRunner(opts: {
   launch?: (job: SpawnJob) => void;
   bridge?: (layout: Layout) => EffectBridge;
   log?: (message: string) => void;
+  /**
+   * Sends a command back through the daemon's queue: the background worktree job reports its outcome with it. Without
+   * one (tests), the outcome is only logged.
+   */
+  report?: (command: Extract<Command, { cmd: "worktree.report" }>) => void;
+  /** The worktree_setup command's time limit (default 5 minutes). */
+  setupTimeoutMs?: number;
 }): (effect: Effect) => Promise<EventBody[]> {
   const log = opts.log ?? ((m: string) => console.error(m));
   const launch = opts.launch ?? ((job: SpawnJob) => launchSpawnJob(job, { logFile: paths(opts.root).daemonLog }));
@@ -92,17 +101,32 @@ export function createEffectRunner(opts: {
           await writeAgents(effect.thread, effect.path);
           return [];
         }
+        // A task worktree can take minutes (a setup command): it is made in the background, never holding the
+        // command queue, and its outcome re-enters the queue as a worktree.report command.
         const e = effect;
-        await addRepoWorktree(e, opts.root, opts.config);
-        const t = opts.thread(e.thread);
-        if (t) {
+        void (async () => {
+          let error: string | undefined;
           try {
-            await writeAgentsFilesAsync({ root: opts.root, repo: e.repoPath, worktree: e.path, content: agentsMd({ root: opts.root, thread: t, config: opts.config }), config: opts.config, log });
+            await addRepoWorktree(e, opts.root, opts.config, opts.setupTimeoutMs ?? SETUP_TIMEOUT_MS);
+            const t = opts.thread(e.thread);
+            if (t) {
+              try {
+                await writeAgentsFilesAsync({ root: opts.root, repo: e.repoPath, repoName: e.repo, worktree: e.path, content: agentsMd({ root: opts.root, thread: t, config: opts.config }), config: opts.config, log });
+              } catch (err) {
+                log(`writing AGENTS.md for thread ${t.id} in ${e.path} failed: ${err instanceof Error ? err.message : String(err)}`);
+              }
+            }
           } catch (err) {
-            log(`writing AGENTS.md for thread ${t.id} in ${e.path} failed: ${err instanceof Error ? err.message : String(err)}`);
+            error = err instanceof Error ? err.message : String(err);
+            log(`worktree for ${e.repo} of thread ${e.thread} failed: ${error}`);
           }
-        }
-        return [{ type: "worktree.added", thread: e.thread, payload: { repo: e.repo, path: e.path, branch: e.branch, source: e.source } }];
+          try {
+            opts.report?.({ cmd: "worktree.report", thread: e.thread, repo: e.repo, ok: error === undefined, ...(error !== undefined ? { error } : {}) });
+          } catch (err) {
+            log(`reporting the worktree for ${e.repo} of thread ${e.thread} failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        })();
+        return [];
       }
       case "thread.dir.ensure":
         // Only from a command (thread.new): a failure to make the directory fails the command.
@@ -215,14 +239,73 @@ const SETUP_TIMEOUT_MS = 5 * 60_000;
 const shq = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
 
 /**
- * Creates a task worktree: the config's worktree_setup command (run with `sh -c` in the root, placeholders filled in
- * and shell-quoted, then checked), else git worktree add. On any failure it removes what it made (the worktree folder
- * and a wip/<task> branch that did not exist before) and throws.
+ * Runs `sh -c <script>` in its own process group without blocking. On a timeout the whole group is killed, and so is
+ * whatever it left running when it fails: nothing it started may act after the caller cleans up. Resolves once the
+ * group's main process has exited.
  */
-async function addRepoWorktree(e: RepoWorktreeEffect, root: string, config: Config): Promise<void> {
+export function runShellGroup(script: string, timeoutMs: number): Promise<{ exitCode: number; stderr: string; timedOut: boolean }> {
+  return new Promise((done) => {
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn("sh", ["-c", script], { detached: true, stdio: ["ignore", "pipe", "pipe"], env: process.env });
+    } catch (e) {
+      done({ exitCode: 127, stderr: e instanceof Error ? e.message : String(e), timedOut: false });
+      return;
+    }
+    let stderr = "";
+    child.stderr?.on("data", (b: Buffer) => {
+      if (stderr.length < 16_384) stderr += b.toString();
+    });
+    child.stdout?.on("data", () => {});
+    const killGroup = () => {
+      try {
+        if (child.pid) process.kill(-child.pid, "SIGKILL");
+      } catch {}
+    };
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killGroup();
+    }, timeoutMs);
+    const finish = (exitCode: number) => {
+      clearTimeout(timer);
+      if (timedOut || exitCode !== 0) killGroup();
+      // A grandchild may hold the pipes open: stop reading instead of waiting for them to close.
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      done({ exitCode, stderr, timedOut });
+    };
+    child.once("error", () => finish(127));
+    child.once("exit", (code, signal) => finish(code ?? (signal ? 128 + 9 : 1)));
+  });
+}
+
+/** `p` with its existing ancestors resolved (macOS /var is /private/var), so git's paths compare equal. */
+function canonical(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    const parent = dirname(p);
+    return parent === p ? p : join(canonical(parent), basename(p));
+  }
+}
+
+/**
+ * Creates a task worktree: the config's worktree_setup command (run with `sh -c` in the root in its own process group,
+ * placeholders filled in and shell-quoted, then checked), else git worktree add. On any failure it removes what this
+ * run made (a worktree registered at the path during the run, else a folder that was not there, and a wip/<task>
+ * branch that did not exist before) and throws.
+ */
+async function addRepoWorktree(e: RepoWorktreeEffect, root: string, config: Config, setupTimeoutMs: number): Promise<void> {
   const git = (args: string[], timeoutMs = 30_000) => spawnAsync("git", ["-C", e.repoPath, ...args], process.env, timeoutMs);
   const branchExists = async () => (await git(["rev-parse", "--verify", "--quiet", `refs/heads/${e.branch}`])).exitCode === 0;
+  const registered = async () => {
+    const r = await git(["worktree", "list", "--porcelain"]);
+    const want = canonical(e.path);
+    return r.stdout.split("\n").some((l) => l.startsWith("worktree ") && canonical(l.slice("worktree ".length)) === want);
+  };
   const hadBranch = await branchExists();
+  const wasRegistered = await registered();
   const hadPath = existsSync(e.path);
   try {
     const setup = config.workspace.worktree_setup;
@@ -232,9 +315,9 @@ async function addRepoWorktree(e: RepoWorktreeEffect, root: string, config: Conf
     }
     const values: Record<string, string> = { root, task: e.branch.replace(/^wip\//, ""), repo: e.repo, src: e.source, path: e.path };
     const command = setup.replace(/\{(root|task|repo|src|path)\}/g, (_, k: string) => shq(values[k]!));
-    const r = await spawnAsync("sh", ["-c", `cd ${shq(root)} || exit 1\n${command}`], process.env, SETUP_TIMEOUT_MS);
+    const r = await runShellGroup(`cd ${shq(root)} || exit 1\n${command}`, setupTimeoutMs);
     if (r.exitCode !== 0 || r.timedOut) {
-      const why = r.timedOut ? "timed out" : `exit ${r.exitCode}${r.stderr.trim() ? `: ${r.stderr.trim()}` : ""}`;
+      const why = r.timedOut ? `timed out after ${Math.round(setupTimeoutMs / 1000)}s` : `exit ${r.exitCode}${r.stderr.trim() ? `: ${r.stderr.trim()}` : ""}`;
       throw new Error(`worktree setup for ${e.repo} failed (${why})`);
     }
     const head = existsSync(e.path) ? await spawnAsync("git", ["-C", e.path, "rev-parse", "--abbrev-ref", "HEAD"], process.env, 10_000) : undefined;
@@ -242,12 +325,14 @@ async function addRepoWorktree(e: RepoWorktreeEffect, root: string, config: Conf
       throw new Error(`worktree setup for ${e.repo} did not produce ${e.path} on ${e.branch}`);
     }
   } catch (err) {
-    if (!hadPath && existsSync(e.path)) {
+    if (!wasRegistered && (await registered())) {
       const removed = await git(["worktree", "remove", "--force", e.path]);
       if (removed.exitCode !== 0) {
         await rm(e.path, { recursive: true, force: true });
         await git(["worktree", "prune"]);
       }
+    } else if (!hadPath && existsSync(e.path)) {
+      await rm(e.path, { recursive: true, force: true });
     }
     if (!hadBranch && (await branchExists())) await git(["branch", "-D", e.branch]);
     throw err;

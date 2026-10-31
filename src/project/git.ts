@@ -26,8 +26,9 @@ export async function addWorktreeFromAsync(repoDir: string, branch: string, path
     const remote = source.slice(0, slash);
     const remotes = await git(["remote"]);
     if (remotes.exitCode === 0 && remotes.stdout.split("\n").map((l) => l.trim()).includes(remote)) {
-      const f = await git(["fetch", "--quiet", remote, source.slice(slash + 1)], 120_000);
-      if (f.exitCode !== 0 || f.timedOut) throw new Error(`git fetch ${remote} ${source.slice(slash + 1)} failed: ${f.timedOut ? "timed out" : f.stderr.trim()}`);
+      const b = source.slice(slash + 1);
+      const f = await git(["fetch", "--quiet", remote, `+refs/heads/${b}:refs/remotes/${remote}/${b}`], 120_000);
+      if (f.exitCode !== 0 || f.timedOut) throw new Error(`git fetch ${remote} ${b} failed: ${f.timedOut ? "timed out" : f.stderr.trim()}`);
     }
   }
   const r = await git(["worktree", "add", "-b", branch, path, source]);

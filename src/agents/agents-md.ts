@@ -1,5 +1,5 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { type AsyncRunner, type RunResult, type Runner, spawnAsync, spawnRunner } from "../herdr/bridge.ts";
 import type { Config } from "../config/config.ts";
 import { paths } from "../project/paths.ts";
@@ -158,11 +158,11 @@ function removeIfPresent(p: string): void {
  * default). A per-worktree core.excludesFile replaces it, so its patterns are copied in. Read from the main checkout,
  * never from a thread worktree, so our own per-worktree value is never read back.
  */
-function* effectiveExcludes(c: Ctx, root: string, ours: string): Steps<string> {
+function* effectiveExcludes(c: Ctx, root: string, ours: string[]): Steps<string> {
   const configured = (yield* git(c, root, ["config", "--path", "--get", "core.excludesFile"]));
   let file = configured.ok ? configured.stdout.trim() : "";
   if (file) file = resolve(root, file);
-  if (file === ours) file = "";
+  if (ours.includes(file)) file = "";
   if (!file) {
     const home = c.env.HOME ?? "";
     file = c.env.XDG_CONFIG_HOME ? join(c.env.XDG_CONFIG_HOME, "git", "ignore") : join(home, ".config", "git", "ignore");
@@ -193,12 +193,39 @@ function* excludeInCommon(c: Ctx, wt: string, skill: boolean, root: string): Ste
 }
 
 /**
- * Hides untracked AGENTS.md/CLAUDE.md in thread worktrees only: a per-worktree core.excludesFile, so the main
- * checkout can still add its own. Also removes the lines that earlier versions put in the shared info/exclude.
+ * Earlier versions kept one shared excludes file at `<root>/.agentthread/worktree-excludes`, where the per-repo
+ * folder now goes: the worktrees of `repo` that still point at it are moved over to `file`, then it is removed.
  */
-function* excludeInWorktree(c: Ctx, root: string, repo: string, wt: string, skill: boolean, log: (m: string) => void): Steps<boolean> {
-  const file = join(root, ".agentthread", "worktree-excludes");
-  const kept = lines((yield* effectiveExcludes(c, repo, file))).filter((l) => !EXCLUDE_LINES.includes(l) && l !== SKILL_EXCLUDE);
+function* migrateSharedExcludes(c: Ctx, repo: string, shared: string, file: string): Steps<void> {
+  let isFile = false;
+  try {
+    isFile = lstatSync(shared).isFile();
+  } catch {}
+  if (!isFile) return;
+  const users: string[] = [];
+  const list = (yield* git(c, repo, ["worktree", "list", "--porcelain"]));
+  for (const line of list.ok ? lines(list.stdout) : []) {
+    if (!line.startsWith("worktree ")) continue;
+    const wt = line.slice("worktree ".length);
+    if (existsSync(wt) && (yield* git(c, wt, ["config", "--worktree", "--get", "core.excludesFile"])).stdout.trim() === shared) users.push(wt);
+  }
+  const text = readFileSync(shared, "utf8");
+  rmSync(shared, { force: true });
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, text);
+  for (const wt of users) yield* git(c, wt, ["config", "--worktree", "core.excludesFile", file]);
+}
+
+/**
+ * Hides untracked AGENTS.md/CLAUDE.md in thread worktrees only: a per-worktree core.excludesFile (one file per repo,
+ * `<root>/.agentthread/worktree-excludes/<repo>`), so the main checkout can still add its own. Also removes the lines
+ * that earlier versions put in the shared info/exclude.
+ */
+function* excludeInWorktree(c: Ctx, root: string, repo: string, repoName: string, wt: string, skill: boolean, log: (m: string) => void): Steps<boolean> {
+  const shared = join(root, ".agentthread", "worktree-excludes");
+  const file = join(shared, repoName);
+  yield* migrateSharedExcludes(c, repo, shared, file);
+  const kept = lines((yield* effectiveExcludes(c, repo, [file, shared]))).filter((l) => !EXCLUDE_LINES.includes(l) && l !== SKILL_EXCLUDE);
   while (kept.length && kept[kept.length - 1] === "") kept.pop();
   const text = [...kept, ...excludeLines(skill)].join("\n") + "\n";
   mkdirSync(dirname(file), { recursive: true });
@@ -313,6 +340,8 @@ type WriteOptions = {
   root: string;
   /** The main checkout of the worktree's repository, where repo-wide git config is read and set (default: root). */
   repo?: string;
+  /** The repo's name: its excludes file is `<root>/.agentthread/worktree-excludes/<repoName>` (default: the repo folder's name). */
+  repoName?: string;
   worktree: string;
   content: string;
   /** With agents.skill not false, the generated agt skill is written too. */
@@ -336,7 +365,7 @@ function* writeSteps(o: WriteOptions): Steps<void> {
   const log = o.log ?? ((m) => console.error(m));
   const skill = o.config.agents.skill !== false;
   const repo = o.repo ?? o.root;
-  const perWorktree = yield* excludeInWorktree(c, o.root, repo, wt, skill, log);
+  const perWorktree = yield* excludeInWorktree(c, o.root, repo, o.repoName ?? basename(repo), wt, skill, log);
   if (perWorktree) yield* guardInWorktree(c, o.root, repo, wt, log);
   else log("worker commit guard unavailable: git without worktree config");
   const project = yield* projectInstructions(c, wt);

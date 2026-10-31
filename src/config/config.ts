@@ -129,6 +129,10 @@ export const ConfigSchema = z
     workspace: z
       .object({
         repos: z.record(z.string().min(1), z.object({ path: z.string().min(1), source_branch: z.string().trim().min(1).optional() }).strict()).optional(),
+        /**
+         * Run by `agt worktree add` instead of git worktree add. The placeholders {root} {task} {repo} {src} {path} are
+         * filled in already shell-quoted, so they must be used unquoted.
+         */
         worktree_setup: z.string().min(1).optional(),
       })
       .strict()

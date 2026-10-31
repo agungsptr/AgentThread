@@ -119,6 +119,8 @@ export interface Thread {
   dir?: string;
   /** The repo worktrees inside `dir`, by repo name. */
   worktrees: Record<string, { path: string; branch: string; source: string }>;
+  /** Repo worktrees being created in the background (worktree.requested, not yet added or failed), by repo name. */
+  worktreeRequests: Record<string, { path: string; branch: string; source: string }>;
   /** True for a thread created before thread directories (its thread.created has a worktree and no dir). */
   legacy: boolean;
   maxWorkers?: number;
@@ -241,6 +243,7 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       ...(p.task !== undefined ? { task: p.task } : {}),
       ...(p.dir !== undefined ? { dir: p.dir } : {}),
       worktrees: {},
+      worktreeRequests: {},
       legacy: p.dir === undefined && p.worktree !== undefined,
       maxWorkers: p.maxWorkers,
       workerQueue: [],
@@ -271,9 +274,18 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       t.rootPane = ev.payload.rootPane;
       note(t, ev, `herdr tab ${ev.payload.tab} opened`);
       break;
+    case "worktree.requested":
+      t.worktreeRequests[ev.payload.repo] = { path: ev.payload.path, branch: ev.payload.branch, source: ev.payload.source };
+      note(t, ev, `worktree for ${ev.payload.repo} requested at ${ev.payload.path} on ${ev.payload.branch} from ${ev.payload.source}`);
+      break;
     case "worktree.added":
+      delete t.worktreeRequests[ev.payload.repo];
       t.worktrees[ev.payload.repo] = { path: ev.payload.path, branch: ev.payload.branch, source: ev.payload.source };
       note(t, ev, `worktree for ${ev.payload.repo} added at ${ev.payload.path} on ${ev.payload.branch} from ${ev.payload.source}`);
+      break;
+    case "worktree.failed":
+      delete t.worktreeRequests[ev.payload.repo];
+      note(t, ev, `worktree for ${ev.payload.repo} failed: ${ev.payload.reason}`);
       break;
     case "thread.tab_closed":
       delete t.tab;

@@ -64,7 +64,8 @@ export type EventBody =
         maxWorkers?: number;
       };
     }
-  | { type: "worktree.added"; thread: string; payload: { repo: string; path: string; branch: string; source: string } }
+  | { type: "worktree.requested" | "worktree.added"; thread: string; payload: { repo: string; path: string; branch: string; source: string } }
+  | { type: "worktree.failed"; thread: string; payload: { repo: string; reason: string } }
   | { type: "thread.status_changed"; thread: string; payload: { from: ThreadStatus; to: ThreadStatus; reason?: string } }
   | { type: "thread.tier_proposed"; thread: string; payload: { tier: string; reason: string } }
   | { type: "thread.tier_timer"; thread: string; payload: { state: "paused" | "running" } }
