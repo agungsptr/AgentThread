@@ -35,6 +35,7 @@ const agentsSchema = z
       .strict()
       .default({}),
     autonomous: z.boolean().default(true),
+    skill: z.boolean().default(true),
     claude: z
       .object({
         permission_mode: z.enum(PERMISSION_MODES).default("acceptEdits"),
@@ -78,6 +79,7 @@ const agentsSchema = z
       roles,
       complexity: a.complexity,
       autonomous: a.autonomous,
+      skill: a.skill,
       claude: a.claude,
     };
   });

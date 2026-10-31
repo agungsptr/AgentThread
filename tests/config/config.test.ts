@@ -34,6 +34,7 @@ test("defaults match the spec", () => {
       roles: { main: { agent: "claude-code" }, coordinator: { agent: "claude-code" }, worker: { agent: "claude-code" } },
       complexity: { timeout: "10s", tiers: {} },
       autonomous: true,
+      skill: true,
       claude: { permission_mode: "acceptEdits", extra_allowed_tools: [] },
     },
     workers: { max_workers: 3 },

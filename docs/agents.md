@@ -19,6 +19,14 @@ OpenCode needs `--standalone`: by default its TUI attaches to the shared backgro
 
 Codex's coordinator needs `--add-dir <git common dir>` because commits from a worktree write to the main repository's `.git`, which lies outside the workspace-write sandbox. Only the coordinator gets it: workers never commit, and write access to the git dir would let a worker rewrite its worktree's `config.worktree` and unhook the commit guard. There is no `--add-dir <root>/.agentthread`: agents only read the thread files there (reads are not sandboxed), and `agt` reaches the daemon through its socket in `/tmp/agt-<uid>/` (`src/project/paths.ts`, `ensureSocketDir`), not under `.agentthread`, over the sandbox's network access (`sandbox_workspace_write.network_access=true`); `/tmp` is a writable root of workspace-write by default. Not yet seen in a release run.
 
+## Skill discovery (`.claude/skills/agt/SKILL.md`)
+
+Checked 2026-10-31 against the installed binaries (`--help` and strings only, no agent run):
+- Claude Code: reads `.claude/skills`.
+- omp 18.13.3: has a "Load skills from .claude/skills/*/SKILL.md" provider (also `.codex/skills`, `.opencode/skills`, `.agents/skills`).
+- OpenCode: its config has a Claude compatibility directory next to an `agents` one; its documented skill search includes `.claude/skills`. The binary was not exercised, so this rests on the docs and that string.
+- Codex 0.164.0: skill sources are `.agents/skills` and `$CODEX_HOME/skills` (`~/.codex/skills`); no `.claude/skills` string found. Codex agents therefore get no generated skill and rely on the `agt guide <role>` line in their prompt.
+
 ## Adding an agent
 
 1. Add the kind to `AGENT_KINDS` (`src/domain/types.ts`) and an adapter entry in `src/agents/adapters.ts`: `herdrKind`, `bin`, `prompt`, `launch` (model, effort and the autonomous flags), `promptArgs` and `capabilities`, plus its `AGT_<AGENT>_BIN` name.

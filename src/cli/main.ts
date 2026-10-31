@@ -15,6 +15,7 @@ import { startDaemon } from "../daemon/server.ts";
 import { configHash, DEFAULT_CONFIG, loadConfig } from "../config/config.ts";
 import { AGENT_KINDS, ROLES, SESSION_SIGNALS, type Actor, type SessionRole, type AgentKind, type Layout, type StoredEvent } from "../domain/types.ts";
 import { HerdrCli, shellQuote } from "../herdr/bridge.ts";
+import { refreshRootSkill } from "../agents/skill.ts";
 import { initCommand, setupIfNeeded, setupOnTty } from "../project/setup.ts";
 import { paths } from "../project/paths.ts";
 import { findRoot } from "../project/root.ts";
@@ -88,6 +89,7 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
       if (!process.stdin.isTTY) throw new UsageError("agt setup needs a terminal; edit .agentthread/config.yaml instead");
       const setupRoot = findRoot(cwd, env);
       await setupOnTty(setupRoot, env);
+      refreshRootSkill(setupRoot, env);
       console.log("saved .agentthread/config.yaml");
       if (await isAlive(paths(setupRoot).socket)) console.log("run agt start to apply the new config");
       return 0;
@@ -301,6 +303,7 @@ async function start(root: string, env: Env, argv: string[]): Promise<number> {
     throw new Error("agt start must run from the main tab, not a subthread pane");
   }
   await setupIfNeeded(root, env);
+  refreshRootSkill(root, env);
   const config = loadConfig(root, env);
   const warnings = [
     ...configWarnings(config),

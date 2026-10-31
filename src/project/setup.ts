@@ -4,6 +4,7 @@ import { createInterface } from "node:readline/promises";
 import { isMap, parse, parseDocument } from "yaml";
 import { adapterFor, agentBin } from "../agents/adapters.ts";
 import { EFFORTS } from "../agents/roles.ts";
+import { refreshRootSkill } from "../agents/skill.ts";
 import { initProject } from "./init.ts";
 import { configPaths, deepMerge, durationMs } from "../config/config.ts";
 import { AGENT_KINDS, type AgentKind } from "../domain/types.ts";
@@ -151,5 +152,6 @@ export async function initCommand(root: string, env: Env, name: string | undefin
   initProject(root, name);
   console.log("initialized");
   await setupIfNeeded(root, env, isTTY);
+  refreshRootSkill(root, env);
   return 0;
 }

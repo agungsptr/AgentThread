@@ -6,6 +6,7 @@ import { paths } from "../project/paths.ts";
 import { AGENT_KINDS } from "../domain/types.ts";
 import { adapterFor } from "./adapters.ts";
 import { systemPrompt } from "./prompts.ts";
+import { SKILL_EXCLUDE, SKILL_REL, writeSkill } from "./skill.ts";
 
 type ThreadRef = { id: string; title: string; slug: string; worktree: string };
 
@@ -91,6 +92,8 @@ async function driveAsync<T>(steps: Steps<T>, runner: AsyncRunner, env: Env): Pr
 const LINKS = [...new Set(["CLAUDE.md", ...AGENT_KINDS.flatMap((k) => adapterFor(k).instructionFiles)])];
 const FILES = ["AGENTS.md", ...LINKS];
 const EXCLUDE_LINES = FILES.map((f) => `/${f}`);
+/** The lines the worktree excludes carry: the instruction files, and the generated skill when it is on. */
+const excludeLines = (skill: boolean) => (skill ? [...EXCLUDE_LINES, SKILL_EXCLUDE] : EXCLUDE_LINES);
 const lines = (text: string) => text.split("\n").map((l) => l.replace(/\r$/, ""));
 
 const isInside = (wt: string, p: string) => {
@@ -171,11 +174,11 @@ function* commonInfoExclude(c: Ctx, wt: string): Steps<string> {
 }
 
 /** Old git without per-worktree config: the shared info/exclude, which also hides the main checkout's files. */
-function* excludeInCommon(c: Ctx, wt: string): Steps<void> {
+function* excludeInCommon(c: Ctx, wt: string, skill: boolean): Steps<void> {
   const info = (yield* commonInfoExclude(c, wt));
   let current = existsSync(info) ? readFileSync(info, "utf8") : "";
   const have = lines(current);
-  for (const line of EXCLUDE_LINES) {
+  for (const line of excludeLines(skill)) {
     if (have.includes(line)) continue;
     current = `${current}${current && !current.endsWith("\n") ? "\n" : ""}${line}\n`;
   }
@@ -187,11 +190,11 @@ function* excludeInCommon(c: Ctx, wt: string): Steps<void> {
  * Hides untracked AGENTS.md/CLAUDE.md in thread worktrees only: a per-worktree core.excludesFile, so the main
  * checkout can still add its own. Also removes the lines that earlier versions put in the shared info/exclude.
  */
-function* excludeInWorktree(c: Ctx, root: string, wt: string, log: (m: string) => void): Steps<boolean> {
+function* excludeInWorktree(c: Ctx, root: string, wt: string, skill: boolean, log: (m: string) => void): Steps<boolean> {
   const file = join(root, ".agentthread", "worktree-excludes");
-  const kept = lines((yield* effectiveExcludes(c, root, file))).filter((l) => !EXCLUDE_LINES.includes(l));
+  const kept = lines((yield* effectiveExcludes(c, root, file))).filter((l) => !EXCLUDE_LINES.includes(l) && l !== SKILL_EXCLUDE);
   while (kept.length && kept[kept.length - 1] === "") kept.pop();
-  const text = [...kept, ...EXCLUDE_LINES].join("\n") + "\n";
+  const text = [...kept, ...excludeLines(skill)].join("\n") + "\n";
   mkdirSync(dirname(file), { recursive: true });
   if (!existsSync(file) || readFileSync(file, "utf8") !== text) writeFileSync(file, text);
 
@@ -204,7 +207,7 @@ function* excludeInWorktree(c: Ctx, root: string, wt: string, log: (m: string) =
   } catch (e) {
     if (!wasEnabled) (yield* git(c, root, ["config", "--unset", "extensions.worktreeConfig"]));
     log(`per-worktree excludes unavailable, using the shared info/exclude: ${e instanceof Error ? e.message : String(e)}`);
-    (yield* excludeInCommon(c, wt));
+    (yield* excludeInCommon(c, wt, skill));
     return false;
   }
 
@@ -304,6 +307,8 @@ type WriteOptions = {
   root: string;
   worktree: string;
   content: string;
+  /** With a config whose agents.skill is not false, the generated agt skill is written too. */
+  config?: Config;
   env?: Env;
   log?: (message: string) => void;
 };
@@ -321,7 +326,8 @@ function* writeSteps(o: WriteOptions): Steps<void> {
   const wt = o.worktree;
   const c: Ctx = { env: o.env ?? (process.env as Env) };
   const log = o.log ?? ((m) => console.error(m));
-  const perWorktree = yield* excludeInWorktree(c, o.root, wt, log);
+  const skill = !!o.config && o.config.agents.skill !== false;
+  const perWorktree = yield* excludeInWorktree(c, o.root, wt, skill, log);
   if (perWorktree) yield* guardInWorktree(c, o.root, wt, log);
   else log("worker commit guard unavailable: git without worktree config");
   const project = yield* projectInstructions(c, wt);
@@ -338,5 +344,9 @@ function* writeSteps(o: WriteOptions): Steps<void> {
   }
   for (const file of FILES) {
     if ((yield* git(c, wt, ["ls-files", "--error-unmatch", "--", file])).ok) yield* mustGit(c, wt, ["update-index", "--skip-worktree", "--", file]);
+  }
+  if (o.config && skill) {
+    const tracked = (yield* git(c, wt, ["ls-files", "--error-unmatch", "--", SKILL_REL])).ok;
+    writeSkill(wt, { root: o.root, config: o.config, tracked, log });
   }
 }
