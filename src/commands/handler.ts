@@ -10,6 +10,7 @@ import type { Command, CommandName } from "./schema.ts";
 
 export type Effect =
   | { kind: "git.worktree.add"; branch: string; path: string; thread: { id: string; title: string; slug: string } }
+  | { kind: "thread.dir.ensure"; thread: { id: string; title: string; slug: string; task: string; dir: string } }
   | { kind: "herdr.tab.ensure"; thread: string; label: string; cwd: string; env: Record<string, string>; tab?: string }
   | { kind: "herdr.tab.close"; thread: string; tab: string }
   | {
@@ -323,6 +324,12 @@ function recoverCoordinators(state: State, open: Thread[], ctx: HandlerContext):
   return { events, effects };
 }
 
+export const TASK_NAME = /^[a-z0-9][a-z0-9._-]*$/;
+
+/**
+ * A new thread gets a task name (--task, else the title's slug) and a thread directory, <root>/.worktrees/<task>, that
+ * is not a git repo: the coordinator works there, and the repo worktrees are added inside it later.
+ */
 function newThread(state: State, cmd: Extract<Command, { cmd: "thread.new" }>, ctx: HandlerContext): Decision {
   for (const dep of cmd.dependsOn) if (!state.threads.has(dep)) reject(`unknown dependency ${dep}`);
   if (cmd.tier !== undefined) checkTier(cmd.tier, ctx);
@@ -330,9 +337,12 @@ function newThread(state: State, cmd: Extract<Command, { cmd: "thread.new" }>, c
   const next = Math.max(0, ...[...state.threads.keys()].map(Number)) + 1;
   const id = String(next).padStart(3, "0");
   const slug = slugify(cmd.title);
-  const name = `${id}-${slug}`;
-  const branch = `thread/${name}`;
-  const worktree = join(ctx.root, ".worktrees", name);
+  const task = cmd.task ?? slug;
+  if (!TASK_NAME.test(task)) reject(`task name must match ${TASK_NAME.source}`);
+  const dir = join(ctx.root, ".worktrees", task);
+  // A legacy thread's worktree sits at the same level, so its name is taken too.
+  const owner = [...state.threads.values()].find((t) => t.task === task || t.dir === dir || t.worktree === dir);
+  if (owner) reject(`task ${task} is already used by thread ${owner.id}`);
   const status: ThreadStatus = depsDone(state, cmd.dependsOn) ? "open" : "blocked";
   return {
     events: [
@@ -347,19 +357,19 @@ function newThread(state: State, cmd: Extract<Command, { cmd: "thread.new" }>, c
           criteria: cmd.criteria,
           dependsOn: cmd.dependsOn,
           maxWorkers: cmd.maxWorkers,
-          branch,
-          worktree,
+          task,
+          dir,
           status,
         },
       },
       ...tierEvents(state, id, cmd),
     ],
     effects: [
-      { kind: "git.worktree.add", branch, path: worktree, thread: { id, title: cmd.title, slug } },
+      { kind: "thread.dir.ensure", thread: { id, title: cmd.title, slug, task, dir } },
       // A proposed thread's tab opens once its tier is chosen (the reactor, on thread.tier_chosen).
-      ...(state.layout && cmd.tier === undefined ? [tabEnsure({ id, slug, worktree }, ctx)] : []),
+      ...(state.layout && cmd.tier === undefined ? [tabEnsure({ id, slug, dir }, ctx)] : []),
     ],
-    result: { thread: id, worktree, ...(cmd.tier !== undefined ? { tier: cmd.tier, proposed: !cmd.now } : {}) },
+    result: { thread: id, task, dir, ...(cmd.tier !== undefined ? { tier: cmd.tier, proposed: !cmd.now } : {}) },
   };
 }
 
@@ -431,6 +441,6 @@ function spawnContext(ctx: HandlerContext) {
   return { root: ctx.root, config: ctx.config ?? DEFAULT_CONFIG, newId: ctx.newId ?? randomUUID };
 }
 
-function tabEnsure(t: { id: string; slug: string; worktree: string; tab?: string; tier?: string }, ctx: HandlerContext): Effect {
+function tabEnsure(t: { id: string; slug: string; dir?: string; worktree?: string; tab?: string; tier?: string }, ctx: HandlerContext): Effect {
   return tabEnsureFor(t, { root: ctx.root, config: ctx.config ?? DEFAULT_CONFIG });
 }

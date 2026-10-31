@@ -5,7 +5,7 @@ import { roleAgent, tierAgent, type RoleAgent } from "../agents/roles.ts";
 import type { Effect } from "../commands/handler.ts";
 import type { Config } from "../config/config.ts";
 import type { AgentKind, EventBody, SessionRole } from "../domain/types.ts";
-import { isLive, type Session, type State, type Thread } from "../state/projection.ts";
+import { isLive, threadCwd, type Session, type State, type Thread } from "../state/projection.ts";
 
 export interface SpawnContext {
   root: string;
@@ -26,9 +26,9 @@ export function tabEnv(t: { id: string; tier?: string }, ctx: { root: string; co
   return { ...base, ...adapterFor(run.agent).launch({ role: "coordinator", run, config: ctx.config, root: ctx.root }).env };
 }
 
-/** Opens (or re-finds) a thread's Herdr tab, with the env its first coordinator inherits. */
-export function tabEnsure(t: { id: string; slug: string; worktree: string; tab?: string; tier?: string }, ctx: { root: string; config: Config }): Effect {
-  return { kind: "herdr.tab.ensure", thread: t.id, label: `${t.id}-${t.slug}`, cwd: t.worktree, env: tabEnv(t, ctx), ...(t.tab ? { tab: t.tab } : {}) };
+/** Opens (or re-finds) a thread's Herdr tab in its thread directory (a legacy thread's worktree), with the env its first coordinator inherits. */
+export function tabEnsure(t: { id: string; slug: string; dir?: string; worktree?: string; tab?: string; tier?: string }, ctx: { root: string; config: Config }): Effect {
+  return { kind: "herdr.tab.ensure", thread: t.id, label: `${t.id}-${t.slug}`, cwd: threadCwd(t), env: tabEnv(t, ctx), ...(t.tab ? { tab: t.tab } : {}) };
 }
 
 export function liveSessions(state: State, thread?: string, role?: SessionRole): Session[] {
@@ -83,7 +83,7 @@ export function spawnCoordinator(
         run,
         name,
         thread: t.id,
-        cwd: t.worktree,
+        cwd: threadCwd(t),
         ...(how.splitFrom ? { splitFrom: how.splitFrom, direction: "right" as const } : { pane: t.rootPane! }),
         ...(how.bootstrap ? { bootstrap: how.bootstrap } : {}),
       },
@@ -91,7 +91,10 @@ export function spawnCoordinator(
   };
 }
 
-/** `agent` (agt worker spawn --agent) replaces the worker role with that adapter's defaults: no model or effort is carried across vendors. */
+/**
+ * A worker runs in the thread directory for now (Plan 11 points it at its ticket's repo worktree); a legacy
+ * thread's worker runs in the thread's worktree.
+ * `agent` (agt worker spawn --agent) replaces the worker role with that adapter's defaults: no model or effort is carried across vendors. */
 export function spawnWorker(state: State, t: Thread, ticket: string, ctx: SpawnContext, agent?: AgentKind): { events: EventBody[]; effects: Effect[] } {
   const session = ctx.newId();
   const name = agentName(ctx.root, "worker", t.id, ticket, session);
@@ -110,7 +113,7 @@ export function spawnWorker(state: State, t: Thread, ticket: string, ctx: SpawnC
         name,
         thread: t.id,
         ticket,
-        cwd: t.worktree,
+        cwd: threadCwd(t),
         splitFrom: last?.pane ?? t.rootPane!,
         direction: last ? "down" : "right",
       },
@@ -150,7 +153,7 @@ export function spawnReplacement(
         run,
         name,
         thread: t.id,
-        cwd: t.worktree,
+        cwd: threadCwd(t),
         // The pane-target form starts the agent in `how.pane` itself (a fresh tab's empty root pane) instead of a split.
         ...(how.pane
           ? { pane: how.pane }

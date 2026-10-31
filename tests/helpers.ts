@@ -38,6 +38,12 @@ export function threadCreated(id: string, overrides: Partial<ThreadPayload> = {}
   };
 }
 
+/** A thread.created of the thread-directory layout: a task and its directory, no single worktree or branch. */
+export function taskThreadCreated(id: string, task: string, overrides: Partial<ThreadPayload> = {}): EventBody {
+  const { branch: _b, worktree: _w, ...payload } = (threadCreated(id) as Extract<EventBody, { type: "thread.created" }>).payload;
+  return { type: "thread.created", thread: id, payload: { ...payload, task, dir: `/repo/.worktrees/${task}`, ...overrides } };
+}
+
 export function stored(bodies: EventBody[], actor: Actor = USER): StoredEvent[] {
   return bodies.map(
     (body, i) => ({ ...body, seq: i + 1, ts: `2026-10-09T10:00:${String(i % 60).padStart(2, "0")}.000Z`, actor }) as StoredEvent,

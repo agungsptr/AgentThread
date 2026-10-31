@@ -3,10 +3,16 @@ import type { SessionRole } from "../domain/types.ts";
 import { tierList } from "../orchestration/tiers.ts";
 import { paths } from "../project/paths.ts";
 
+/** A thread as the prompts see it: a thread directory (`dir`), or a legacy thread's single git worktree. */
+export type PromptThread = { id: string; title: string; slug: string; worktree?: string; dir?: string };
+
+/** Where the thread's agents work: its thread directory, else its (legacy) worktree. */
+export const workDir = (t: PromptThread) => t.dir ?? t.worktree ?? "";
+
 interface PromptInput {
   root: string;
   role: SessionRole;
-  thread?: { id: string; title: string; slug: string; worktree: string };
+  thread?: PromptThread;
   ticket?: string;
   /** Main's tier lines and the worker's command rule are rendered from it; without it, tiers are left out and agents are autonomous. */
   config?: Config;
@@ -32,7 +38,7 @@ export function systemPrompt(o: PromptInput): string {
   const dir = threadDir(o);
   if (o.role === "coordinator") {
     return [
-      `You are the coordinator of AgentThread thread ${t.id} ("${t.title}"). Your working directory is the thread's git worktree ${t.worktree}.`,
+      `You are the coordinator of AgentThread thread ${t.id} ("${t.title}"). ${t.dir === undefined ? `Your working directory is the thread's git worktree ${t.worktree}.` : `Your working directory is the thread directory ${t.dir}; the thread's repo worktrees go inside it.`}`,
       `The thread state is in ${dir}/sub.thread.md and ${dir}/board.md. Read them first, and re-read them whenever you get a notification.`,
       "Rules:",
       `- When you start, run: agt thread status ${t.id} in_progress. When every acceptance criterion is met, run: agt thread status ${t.id} review.`,
@@ -50,7 +56,7 @@ export function systemPrompt(o: PromptInput): string {
   }
   return [
     `You are an AgentThread worker for ticket ${o.ticket} of thread ${t.id} ("${t.title}").`,
-    `Work only inside ${t.worktree}, and only on the files in your ticket's scope (see ${dir}/board.md).`,
+    `Work only inside ${workDir(t)}, and only on the files in your ticket's scope (see ${dir}/board.md).`,
     "Steps:",
     `1. agt ticket claim ${t.id}/${o.ticket}`,
     `2. Implement the ticket. ${
@@ -75,7 +81,7 @@ function tierPromptLines(config: Config | undefined): string[] {
 
 export const HANDOFF_REQUEST_PREFIX = "HANDOFF REQUEST:";
 
-export function handoffRequestPrompt(o: { root: string; thread: { id: string; title: string; slug: string; worktree: string }; reason: string }): string {
+export function handoffRequestPrompt(o: { root: string; thread: PromptThread; reason: string }): string {
   const id = o.thread.id;
   return [
     `${HANDOFF_REQUEST_PREFIX} your coordinator session for thread ${id} is being rotated (${o.reason}).`,

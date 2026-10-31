@@ -75,7 +75,8 @@ export async function gitTrailAsync(o: { root: string; worktree: string; branch:
   return next.value;
 }
 
-type TrailThread = { id: string; status: string; worktree: string; branch: string };
+/** Only a legacy thread has a single worktree and branch to trail; a thread directory has none (yet). */
+type TrailThread = { id: string; status: string; worktree?: string; branch?: string };
 
 /**
  * Each thread's trail, cached for `ttlMs` so frequent re-renders do not run git every time. `refresh` recomputes the
@@ -85,7 +86,8 @@ export function trailCache(
   root: string,
   ttlMs: number,
   now: () => number = Date.now,
-  compute: (t: TrailThread) => Promise<GitTrail | undefined> = (t) => gitTrailAsync({ root, worktree: t.worktree, branch: t.branch }),
+  compute: (t: TrailThread) => Promise<GitTrail | undefined> = (t) =>
+    t.worktree !== undefined && t.branch !== undefined ? gitTrailAsync({ root, worktree: t.worktree, branch: t.branch }) : Promise.resolve(undefined),
 ): { get(t: TrailThread): GitTrail | undefined; refresh(threads: Iterable<TrailThread>): Promise<void>; invalidate(thread: string): void } {
   const cache = new Map<string, { at: number; value: GitTrail | undefined }>();
   return {

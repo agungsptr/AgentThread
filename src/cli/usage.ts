@@ -5,7 +5,7 @@ export const USAGE = `usage: agt <command>
   start [--no-manager]       set up the Herdr layout and run the main manager (inside a Herdr pane)
   daemon start|stop|status
   config
-  thread new <title...> --type feature|bug|chore [--goal <text>] [--criteria <text>]... [--depends <id>]... [--max-workers <n>]
+  thread new <title...> --type feature|bug|chore [--goal <text>] [--criteria <text>]... [--depends <id>]... [--max-workers <n>] [--task <name>]
              [--tier <name> --reason <why> [--now]]
   thread choose <id> --tier <name>
   thread cancel <id>

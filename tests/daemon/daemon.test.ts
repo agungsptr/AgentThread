@@ -45,10 +45,13 @@ test("ping returns the pid and the hash of the loaded config", async () => {
   expect(configHash(loadConfig(root))).toMatch(/^[0-9a-f]{64}$/);
 });
 
-test("thread.new creates the worktree and renders markdown", async () => {
+test("thread.new creates the thread directory (not a git worktree) and renders markdown", async () => {
   const r = await cmd({ cmd: "thread.new", title: "Fix race", type: "bug" });
-  expect(r).toEqual({ ok: true, result: { thread: "001", worktree: join(root, ".worktrees", "001-fix-race") } });
-  expect(existsSync(join(root, ".worktrees", "001-fix-race", ".git"))).toBe(true);
+  const dir = join(root, ".worktrees", "fix-race");
+  expect(r).toEqual({ ok: true, result: { thread: "001", task: "fix-race", dir } });
+  expect(existsSync(join(dir, "AGENTS.md"))).toBe(true);
+  expect(existsSync(join(dir, ".git"))).toBe(false);
+  expect(readFileSync(join(root, ".agentthread/threads/001-fix-race/sub.thread.md"), "utf8")).toContain(`dir: ${dir}`);
   expect(readFileSync(join(root, ".agentthread/threads/001-fix-race/sub.thread.md"), "utf8")).toContain("title: Fix race");
   expect(readFileSync(paths(root).mainThread, "utf8")).toContain("| 001 | Fix race | bug | open |");
 });
@@ -100,7 +103,8 @@ test("large payloads round-trip", async () => {
 
 test("a failing effect rejects the command and writes no event", async () => {
   await cmd({ cmd: "thread.new", title: "X", type: "bug" });
-  Bun.spawnSync(["git", "-C", root, "branch", "thread/002-y"]);
+  // a file where the thread directory goes: mkdir -p fails
+  writeFileSync(join(root, ".worktrees", "y"), "");
   const r = await cmd({ cmd: "thread.new", title: "Y", type: "bug" });
   expect(r.ok).toBe(false);
   const events = await request(sock(), { op: "events.since", seq: 0 });

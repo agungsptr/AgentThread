@@ -1,8 +1,9 @@
+import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { agentEnv, claudeConfigDir } from "../agents/claude.ts";
 import { adapterFor } from "../agents/adapters.ts";
 import { bootstrapPrompt } from "../agents/prompts.ts";
-import { agentsMd, writeAgentsFilesAsync } from "../agents/agents-md.ts";
+import { agentsMd, writeAgentsFilesAsync, writeThreadDirFiles } from "../agents/agents-md.ts";
 import { launchSpawnJob, type SpawnJob } from "../agents/spawn-job.ts";
 import type { Effect } from "../commands/handler.ts";
 import type { Config } from "../config/config.ts";
@@ -70,6 +71,14 @@ export function createEffectRunner(opts: {
       log(`writing AGENTS.md for thread ${thread.id} failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
+  // A thread directory is not in git: its files are written plainly, with the same failure handling.
+  const writeDirAgents = (thread: { id: string; title: string; slug: string }, dir: string) => {
+    try {
+      writeThreadDirFiles({ root: opts.root, dir, content: agentsMd({ root: opts.root, thread: { ...thread, dir }, config: opts.config }), config: opts.config, log });
+    } catch (e) {
+      log(`writing AGENTS.md for thread ${thread.id} failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
 
   return async (effect) => {
     switch (effect.kind) {
@@ -77,6 +86,11 @@ export function createEffectRunner(opts: {
         // Only from a command (thread.new): it runs before the command's events commit, so a failure fails the command.
         await addWorktreeAsync(opts.root, effect.branch, effect.path);
         await writeAgents(effect.thread, effect.path);
+        return [];
+      case "thread.dir.ensure":
+        // Only from a command (thread.new): a failure to make the directory fails the command.
+        await mkdir(effect.thread.dir, { recursive: true });
+        writeDirAgents(effect.thread, effect.thread.dir);
         return [];
       case "herdr.tab.ensure":
       case "herdr.tab.close": {
@@ -96,7 +110,8 @@ export function createEffectRunner(opts: {
         const failed = (reason: string): EventBody[] => [{ type: "session.failed", thread: effect.thread, payload: { session: effect.session, reason } }];
         if (!layout) return failed("no Herdr layout registered");
         if (!t) return failed(`unknown thread ${effect.thread}`);
-        await writeAgents(t, t.worktree);
+        if (t.legacy || t.dir === undefined) await writeAgents(t, t.worktree!);
+        else writeDirAgents(t, t.dir);
         const prompt = { root: opts.root, role: effect.role, thread: t, ticket: effect.ticket };
         const common = await gitCommonDir();
         try {

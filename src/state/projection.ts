@@ -111,8 +111,16 @@ export interface Thread {
   goal: string;
   criteria: string[];
   dependsOn: string[];
-  branch: string;
-  worktree: string;
+  /** Legacy threads: the thread's branch and its one git worktree, where every session runs. */
+  branch?: string;
+  worktree?: string;
+  /** Thread-directory threads: the task name and `<root>/.worktrees/<task>` (not a git repo), where the sessions run. */
+  task?: string;
+  dir?: string;
+  /** The repo worktrees inside `dir`, by repo name. */
+  worktrees: Record<string, { path: string; branch: string; source: string }>;
+  /** True for a thread created before thread directories (its thread.created has a worktree and no dir). */
+  legacy: boolean;
   maxWorkers?: number;
   /** The complexity tier the thread runs at (picks the coordinator's agent). */
   tier?: string;
@@ -134,6 +142,13 @@ export interface Thread {
   log: Entry[];
   /** `by` is "generated" for a daemon-written handoff, else the author's role. */
   handoff?: { content: string; generated: boolean; ts: string; by: string };
+}
+
+/** Where a thread's sessions run: its thread directory, or a legacy thread's worktree. */
+export function threadCwd(t: { dir?: string; worktree?: string }): string {
+  const cwd = t.dir ?? t.worktree;
+  if (cwd === undefined) throw new Error("thread has neither a directory nor a worktree");
+  return cwd;
 }
 
 export interface State {
@@ -221,8 +236,12 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       goal: p.goal,
       criteria: p.criteria,
       dependsOn: p.dependsOn,
-      branch: p.branch,
-      worktree: p.worktree,
+      ...(p.branch !== undefined ? { branch: p.branch } : {}),
+      ...(p.worktree !== undefined ? { worktree: p.worktree } : {}),
+      ...(p.task !== undefined ? { task: p.task } : {}),
+      ...(p.dir !== undefined ? { dir: p.dir } : {}),
+      worktrees: {},
+      legacy: p.dir === undefined && p.worktree !== undefined,
       maxWorkers: p.maxWorkers,
       workerQueue: [],
       workerAgents: {},

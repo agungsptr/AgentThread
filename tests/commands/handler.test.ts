@@ -38,14 +38,45 @@ describe("thread.new", () => {
     expect(errorOf(run(emptyState(), { cmd: "thread.new", title: "X", type: "bug" }))).toContain("not initialized");
   });
 
-  test("creates thread 001 with branch, worktree and a worktree effect", () => {
+  test("--task names the thread directory: no git worktree, a thread.dir.ensure effect", () => {
+    const r = run(stateOf(INIT), { cmd: "thread.new", title: "Fix login", type: "bug", task: "kyc-1" });
+    if (!r.ok) throw new Error(r.error);
+    expect(r.result).toEqual({ thread: "001", task: "kyc-1", dir: "/repo/.worktrees/kyc-1" });
+    expect(r.effects).toEqual([
+      { kind: "thread.dir.ensure", thread: { id: "001", title: "Fix login", slug: "fix-login", task: "kyc-1", dir: "/repo/.worktrees/kyc-1" } },
+    ]);
+    expect(r.effects.some((e) => e.kind === "git.worktree.add")).toBe(false);
+    const payload = (r.events[0] as { payload: Record<string, unknown> }).payload;
+    expect(payload).toMatchObject({ task: "kyc-1", dir: "/repo/.worktrees/kyc-1" });
+    expect(payload).not.toHaveProperty("worktree");
+    expect(payload).not.toHaveProperty("branch");
+  });
+
+  test("the default task is the title's slug", () => {
     const r = run(stateOf(INIT), { cmd: "thread.new", title: "Fix checkout race", type: "bug", goal: "no double charge" });
     if (!r.ok) throw new Error(r.error);
-    expect(r.result).toEqual({ thread: "001", worktree: "/repo/.worktrees/001-fix-checkout-race" });
-    expect(r.effects).toEqual([
-      { kind: "git.worktree.add", branch: "thread/001-fix-checkout-race", path: "/repo/.worktrees/001-fix-checkout-race", thread: { id: "001", title: "Fix checkout race", slug: "fix-checkout-race" } },
-    ]);
-    expect(r.events[0]).toMatchObject({ type: "thread.created", thread: "001", payload: { status: "open", goal: "no double charge" } });
+    expect(r.result).toEqual({ thread: "001", task: "fix-checkout-race", dir: "/repo/.worktrees/fix-checkout-race" });
+    expect(r.events[0]).toMatchObject({ type: "thread.created", thread: "001", payload: { status: "open", goal: "no double charge", task: "fix-checkout-race" } });
+  });
+
+  test("a task name in use is rejected", () => {
+    const s = stateOf(INIT);
+    exec(s, { cmd: "thread.new", title: "Fix login", type: "bug", task: "kyc-1" });
+    expect(errorOf(run(s, { cmd: "thread.new", title: "Other", type: "bug", task: "kyc-1" }))).toBe("task kyc-1 is already used by thread 001");
+    // the default (the slug) is checked too
+    exec(s, { cmd: "thread.new", title: "Same", type: "bug" });
+    expect(errorOf(run(s, { cmd: "thread.new", title: "Same", type: "bug" }))).toBe("task same is already used by thread 002");
+  });
+
+  test("a task name that would reuse a legacy thread's worktree is rejected", () => {
+    const s = stateOf(INIT, threadCreated("001"));
+    expect(errorOf(run(s, { cmd: "thread.new", title: "X", type: "bug", task: "001-thread-001" }))).toBe("task 001-thread-001 is already used by thread 001");
+  });
+
+  test("an invalid task name is rejected", () => {
+    for (const task of ["Kyc", "-x", "a/b", "", "x y"]) {
+      expect(errorOf(run(stateOf(INIT), { cmd: "thread.new", title: "X", type: "bug", task }))).toBe("task name must match ^[a-z0-9][a-z0-9._-]*$");
+    }
   });
 
   test("continues numbering after existing threads", () => {

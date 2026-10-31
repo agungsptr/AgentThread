@@ -115,7 +115,8 @@ export async function finishAndVerify(h: H, thread: string, o: { coordinator: st
 export async function verifyThread(h: H, thread: string, o: { coordinator: string; worker: string }): Promise<void> {
   const all = await h.events();
   const created = all.find((e): e is EventOf<"thread.created"> => e.type === "thread.created" && e.thread === thread)!;
-  const { branch, worktree, slug } = created.payload;
+  // Only legacy threads have one worktree and branch; Plan 10 threads get theirs from agt worktree add (Task 3).
+  const { branch = "", worktree = "", slug } = created.payload;
 
   const coords = sessionsOf(all, thread, "coordinator");
   h.check("coordinator runs the row's agent", coords.length > 0 && coords.every((c) => c.payload.agent === o.coordinator), coords.map((c) => c.payload.agent).join(","));

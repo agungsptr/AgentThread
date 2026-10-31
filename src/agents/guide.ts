@@ -3,9 +3,9 @@ import type { SessionRole } from "../domain/types.ts";
 import { usageLines } from "../cli/usage.ts";
 import { paths } from "../project/paths.ts";
 import { rulesOf } from "./agents-md.ts";
-import { systemPrompt } from "./prompts.ts";
+import { systemPrompt, type PromptThread } from "./prompts.ts";
 
-type ThreadRef = { id: string; title: string; slug: string; worktree: string };
+type ThreadRef = PromptThread;
 
 interface GuideInput {
   role: SessionRole | "all";
@@ -14,7 +14,7 @@ interface GuideInput {
   thread?: ThreadRef;
 }
 
-const PLACEHOLDER: ThreadRef = { id: "<thread>", title: "<title>", slug: "<slug>", worktree: "<worktree>" };
+const PLACEHOLDER: ThreadRef = { id: "<thread>", title: "<title>", slug: "<slug>", dir: "<root>/.worktrees/<task>" };
 
 /** The USAGE commands each role runs, by their leading words. */
 const COMMANDS: Record<SessionRole, string[]> = {

@@ -54,8 +54,12 @@ export type EventBody =
         goal: string;
         criteria: string[];
         dependsOn: string[];
-        branch: string;
-        worktree: string;
+        /** Legacy threads only: the thread's own branch and git worktree. */
+        branch?: string;
+        worktree?: string;
+        /** Thread-directory threads: the task name and `<root>/.worktrees/<task>`, which holds the repo worktrees. */
+        task?: string;
+        dir?: string;
         status: ThreadStatus;
         maxWorkers?: number;
       };

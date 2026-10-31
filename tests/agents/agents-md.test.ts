@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { agentsMd, writeAgentsFiles } from "../../src/agents/agents-md.ts";
+import { agentsMd, writeAgentsFiles, writeThreadDirFiles } from "../../src/agents/agents-md.ts";
+import { SKILL_REL } from "../../src/agents/skill.ts";
 import { type Runner, spawnRunner } from "../../src/herdr/bridge.ts";
 import { DEFAULT_CONFIG } from "../../src/config/config.ts";
 import { createEffectRunner } from "../../src/daemon/effects.ts";
@@ -442,4 +444,49 @@ test("a core.hooksPath of ~/x is expanded, so the project's own hook still runs"
   const r = commit(wt, { AGT_ROLE: "coordinator" });
   expect(r.exitCode).not.toBe(0);
   expect(r.stderr.toString()).toContain("home-hook-ran");
+});
+
+describe("thread directory", () => {
+  const LAYOUT = { workspace: "w", mainTab: "t", managerPane: "p0", loggerPane: "p1", herdrBin: "/nonexistent/herdr" };
+  const workspace = () => realpathSync(mkdtempSync(join(tmpdir(), "agt-ws-")));
+
+  test("writeThreadDirFiles writes AGENTS.md, the CLAUDE.md symlink and the skill plainly into a non-git dir", () => {
+    const root = workspace();
+    const dir = join(root, ".worktrees", "kyc-1");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "CLAUDE.md"), "stale");
+    writeThreadDirFiles({ root, dir, content: SECTION, config: DEFAULT_CONFIG });
+    expect(readFileSync(join(dir, "AGENTS.md"), "utf8")).toBe(SECTION);
+    expectSymlink(dir);
+    expect(readFileSync(join(dir, SKILL_REL), "utf8")).toContain("name: agt");
+    expect(existsSync(join(dir, ".git"))).toBe(false);
+    expect(existsSync(join(root, ".agentthread", "worktree-excludes"))).toBe(false);
+  });
+
+  test("thread.dir.ensure makes the directory and writes the files; agent.spawn rewrites them there", async () => {
+    const root = workspace();
+    const dir = join(root, ".worktrees", "kyc-1");
+    const thread = { id: "001", title: "Fix login", slug: "fix-login", task: "kyc-1", dir, worktrees: {}, legacy: false } as unknown as Thread;
+    const launched: string[] = [];
+    const logs: string[] = [];
+    const run = createEffectRunner({
+      root,
+      config: NO_SKILL,
+      layout: () => LAYOUT,
+      thread: (id) => (id === "001" ? thread : undefined),
+      launch: (job) => launched.push(job.session),
+      log: (m) => logs.push(m),
+    });
+    expect(await run({ kind: "thread.dir.ensure", thread: { id: "001", title: "Fix login", slug: "fix-login", task: "kyc-1", dir } })).toEqual([]);
+    expect(readFileSync(join(dir, "AGENTS.md"), "utf8")).toContain(`thread 001 ("Fix login")`);
+    expect(readFileSync(join(dir, "AGENTS.md"), "utf8")).toContain(dir);
+    expectSymlink(dir);
+
+    rmSync(join(dir, "AGENTS.md"));
+    const spawn = { kind: "agent.spawn", session: "s-1", role: "coordinator", run: { agent: "claude-code" }, name: "coord", thread: "001", cwd: dir, pane: "p2" } as const;
+    expect(await run(spawn)).toEqual([]);
+    expect(readFileSync(join(dir, "AGENTS.md"), "utf8")).toBe(agentsMd({ root, thread, config: NO_SKILL }));
+    expect(launched).toEqual(["s-1"]);
+    expect(logs).toEqual([]);
+  });
 });

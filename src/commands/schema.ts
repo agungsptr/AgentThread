@@ -17,6 +17,8 @@ export const CommandSchema = z.discriminatedUnion("cmd", [
     criteria: z.array(text).default([]),
     dependsOn: z.array(threadId).default([]),
     maxWorkers: z.number().int().min(1).max(16).optional(),
+    /** The task name (the thread directory's name); validated by the handler, defaults to the title's slug. */
+    task: z.string().optional(),
     tier: tierName.optional(),
     reason: z.string().trim().optional(),
     now: z.boolean().optional(),

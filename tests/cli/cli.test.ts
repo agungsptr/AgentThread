@@ -81,10 +81,10 @@ test("handoff reads the file", () => {
   expect(agt(["handoff", "001", "--file", file], { env: COORD }).out).toBe("ok");
 });
 
-test("finds the project from a worktree subdirectory without AGT_ROOT", () => {
+test("finds the project from a thread directory subdirectory without AGT_ROOT", () => {
   agt(["daemon", "start"]);
   agt(["thread", "new", "X", "--type", "bug"]);
-  const sub = join(root, ".worktrees", "001-x", "src");
+  const sub = join(root, ".worktrees", "x", "src");
   mkdirSync(sub, { recursive: true });
   expect(agt(["log", "001", "from worktree"], { cwd: sub, root: false, env: WORKER }).out).toBe("ok");
 });

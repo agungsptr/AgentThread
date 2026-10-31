@@ -5,15 +5,18 @@ import type { Config } from "../config/config.ts";
 import { paths } from "../project/paths.ts";
 import { AGENT_KINDS } from "../domain/types.ts";
 import { adapterFor } from "./adapters.ts";
-import { systemPrompt } from "./prompts.ts";
+import { systemPrompt, type PromptThread } from "./prompts.ts";
 import { handWrittenSkill, SKILL_EXCLUDE, SKILL_REL, writeSkill } from "./skill.ts";
 
-type ThreadRef = { id: string; title: string; slug: string; worktree: string };
+type ThreadRef = PromptThread;
 
 /** The role prompts without their first (identity) line: the role is stated by the bootstrap prompt instead. */
 export const rulesOf = (prompt: string) => prompt.split("\n").slice(1);
 
-/** The AgentThread section of a worktree's AGENTS.md. One file serves the coordinator and the workers. */
+/**
+ * The AgentThread section of the AGENTS.md in a thread directory (or a legacy thread's worktree). One file serves the
+ * coordinator and the workers.
+ */
 export function agentsMd(o: { root: string; thread: ThreadRef; config?: Config }): string {
   const t = o.thread;
   const dir = paths(o.root).threadDir(t);
@@ -22,7 +25,9 @@ export function agentsMd(o: { root: string; thread: ThreadRef; config?: Config }
   return [
     "# AgentThread",
     "",
-    `This worktree belongs to AgentThread thread ${t.id} ("${t.title}") of the project at ${o.root}. The worktree is ${t.worktree}.`,
+    t.dir === undefined
+      ? `This worktree belongs to AgentThread thread ${t.id} ("${t.title}") of the project at ${o.root}. The worktree is ${t.worktree}.`
+      : `This folder belongs to AgentThread thread ${t.id} ("${t.title}") of the project at ${o.root}. The thread directory is ${t.dir}; the thread's repo worktrees go inside it.`,
     `Thread state lives in ${dir}/brief.md (the context pack: read it first), ${dir}/sub.thread.md and ${dir}/board.md.`,
     "You are either the thread's coordinator or one of its workers: your role is in your first prompt and in $AGT_ROLE. Follow the section for your role below.",
     "",
@@ -350,4 +355,25 @@ function* writeSteps(o: WriteOptions): Steps<void> {
     const tracked = (yield* git(c, wt, ["ls-files", "--error-unmatch", "--", SKILL_REL])).ok;
     writeSkill(wt, { root: o.root, config: o.config, tracked, log });
   }
+}
+
+/**
+ * A thread directory is not in git: AGENTS.md (`content` only), the instruction-file symlinks and the skill are written
+ * plainly, with no git call, no exclude and no guard. Never writes through a symlink. Synchronous plain fs, so the
+ * daemon may call it.
+ */
+export function writeThreadDirFiles(o: { root: string; dir: string; content: string; config: Config; log?: (message: string) => void }): void {
+  const log = o.log ?? ((m) => console.error(m));
+  const agents = join(o.dir, "AGENTS.md");
+  let regular = false;
+  try {
+    regular = lstatSync(agents).isFile();
+  } catch {}
+  if (!regular) removeIfPresent(agents);
+  writeFileSync(agents, o.content);
+  for (const link of LINKS) {
+    removeIfPresent(join(o.dir, link));
+    symlinkSync("AGENTS.md", join(o.dir, link));
+  }
+  if (o.config.agents.skill !== false) writeSkill(o.dir, { root: o.root, config: o.config, tracked: false, log });
 }

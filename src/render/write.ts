@@ -13,7 +13,10 @@ export function writeAll(
   config: Config = DEFAULT_CONFIG,
   trail?: (t: Thread) => GitTrail | undefined,
 ): void {
-  const trailOf = trail ?? ((t: Thread) => (t.status === "done" ? undefined : gitTrail({ root, worktree: t.worktree, branch: t.branch })));
+  const trailOf =
+    trail ??
+    ((t: Thread) =>
+      t.status === "done" || t.worktree === undefined || t.branch === undefined ? undefined : gitTrail({ root, worktree: t.worktree, branch: t.branch }));
   const p = paths(root);
   mkdirSync(p.threadsDir, { recursive: true });
   writeAtomic(p.mainThread, renderMain(state, config));

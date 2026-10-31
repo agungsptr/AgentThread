@@ -27,16 +27,16 @@ describe("layout.register", () => {
 });
 
 describe("thread.new with and without a layout", () => {
-  test("no layout: only the worktree effect", () => {
+  test("no layout: only the thread directory effect", () => {
     const r = run([INIT], { cmd: "thread.new", title: "Fix race", type: "bug" });
-    expect(r.ok && r.effects.map((e) => e.kind)).toEqual(["git.worktree.add"]);
+    expect(r.ok && r.effects.map((e) => e.kind)).toEqual(["thread.dir.ensure"]);
   });
 
-  test("with a layout: worktree, then tab ensure labelled <id>-<slug> in the worktree", () => {
+  test("with a layout: the thread directory, then tab ensure labelled <id>-<slug> in it", () => {
     const r = run([INIT, REGISTERED], { cmd: "thread.new", title: "Fix race", type: "bug" });
     expect(r.ok && r.effects).toEqual([
-      { kind: "git.worktree.add", branch: "thread/001-fix-race", path: "/repo/.worktrees/001-fix-race", thread: { id: "001", title: "Fix race", slug: "fix-race" } },
-      { kind: "herdr.tab.ensure", thread: "001", label: "001-fix-race", cwd: "/repo/.worktrees/001-fix-race", env: expect.objectContaining({ AGT_THREAD: "001", AGT_ROLE: "coordinator", AGT_AGENT: "claude-code" }) },
+      { kind: "thread.dir.ensure", thread: { id: "001", title: "Fix race", slug: "fix-race", task: "fix-race", dir: "/repo/.worktrees/fix-race" } },
+      { kind: "herdr.tab.ensure", thread: "001", label: "001-fix-race", cwd: "/repo/.worktrees/fix-race", env: expect.objectContaining({ AGT_THREAD: "001", AGT_ROLE: "coordinator", AGT_AGENT: "claude-code" }) },
     ]);
   });
 });

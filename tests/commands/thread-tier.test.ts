@@ -67,11 +67,11 @@ test("thread.new without a tier is unchanged: no proposal, a tab straight away",
   const s = base();
   const { r, effects } = run(s, NEW);
   expect(r.ok && types(r.events)).toEqual(["thread.created"]);
-  expect(effects).toEqual(["git.worktree.add", "herdr.tab.ensure"]);
+  expect(effects).toEqual(["thread.dir.ensure", "herdr.tab.ensure"]);
   expect(s.threads.get("001")!.tierProposal).toBeUndefined();
 });
 
-test("thread.new with a tier proposes it: worktree yes, tab no; the timer runs while main is idle", () => {
+test("thread.new with a tier proposes it: thread directory yes, tab no; the timer runs while main is idle", () => {
   const s = base();
   const { r, effects } = run(s, { ...NEW, tier: "big", reason: "touches auth" });
   expect(r.ok && r.events.map((e) => [e.type, e.payload])).toEqual([
@@ -79,7 +79,7 @@ test("thread.new with a tier proposes it: worktree yes, tab no; the timer runs w
     ["thread.tier_proposed", { tier: "big", reason: "touches auth" }],
     ["thread.tier_timer", { state: "running" }],
   ]);
-  expect(effects).toEqual(["git.worktree.add"]);
+  expect(effects).toEqual(["thread.dir.ensure"]);
   expect(s.threads.get("001")!.tierProposal).toMatchObject({ tier: "big", reason: "touches auth" });
 });
 
@@ -144,7 +144,7 @@ test("--now skips the wait", () => {
   const s = base();
   const { r, effects } = run(s, { ...NEW, tier: "big", reason: "user asked", now: true });
   expect(r.ok && types(r.events)).toEqual(["thread.created", "thread.tier_proposed", "thread.tier_chosen"]);
-  expect(effects).toEqual(["git.worktree.add", "herdr.tab.ensure"]);
+  expect(effects).toEqual(["thread.dir.ensure", "herdr.tab.ensure"]);
   const t = s.threads.get("001")!;
   expect(t.tier).toBe("big");
   expect(t.tierProposal).toBeUndefined();

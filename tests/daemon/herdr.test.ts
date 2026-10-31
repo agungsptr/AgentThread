@@ -56,12 +56,12 @@ test("layout.get returns null, then the registered layout", async () => {
   expect(await request(paths(root).socket, { op: "layout.get" })).toMatchObject({ ok: true, result: { workspace: "w1", mainTab: "w1:t0" } });
 });
 
-test("thread.new opens a tab in the worktree and records it", async () => {
+test("thread.new opens a tab in the thread directory and records it", async () => {
   await register();
   expect(await cmd({ cmd: "thread.new", title: "Fix race", type: "bug" })).toMatchObject({ ok: true });
   const create = fake.read().calls.find((c) => c[0] === "tab" && c[1] === "create")!;
   expect(create).toEqual([
-    "tab", "create", "--workspace", "w1", "--cwd", join(root, ".worktrees", "001-fix-race"), "--label", "001-fix-race", "--no-focus",
+    "tab", "create", "--workspace", "w1", "--cwd", join(root, ".worktrees", "fix-race"), "--label", "001-fix-race", "--no-focus",
     "--env", `AGT_ROOT=${root}`, "--env", "AGT_THREAD=001", "--env", "AGT_ROLE=coordinator",
     "--env", "AGT_AGENT=claude-code", "--env", "CLAUDE_CONFIG_DIR=/claude-config", "--env", `PATH=${dirname(AGT_BIN)}:${process.env.PATH ?? ""}`,
   ]);
@@ -92,7 +92,7 @@ test("herdr failure does not fail the command; reconcile opens the tab later", a
   await register("/nonexistent/herdr");
   const r = await cmd({ cmd: "thread.new", title: "X", type: "bug" });
   expect(r).toMatchObject({ ok: true, result: { thread: "001" } });
-  expect(existsSync(join(root, ".worktrees", "001-x"))).toBe(true);
+  expect(existsSync(join(root, ".worktrees", "x"))).toBe(true);
   expect(frontmatter("001-x")).toMatchObject({ tab: null });
   expect(logged.join("\n")).toMatch(/herdr herdr\.tab\.ensure for thread 001 failed/);
 
