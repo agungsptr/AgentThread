@@ -33,7 +33,7 @@ Notes: <path to the stage-1 discussion note with decisions D1…Dn>
 | File | Ticket |
 |---|---|
 
-## Manager decisions (correctable)
+## Coordinator decisions (correctable)
 
 - <small calls: field names, error codes, test shape>
 

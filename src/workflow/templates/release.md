@@ -11,7 +11,7 @@ Spec: [spec.md](spec.md)
 
 - <per repo: behaviour, migrations, new shared doc, tests>
 
-## 2. Squash (manager)
+## 2. Squash (coordinator)
 
 `git switch -c feat/<task> <source> && git merge --squash wip/<task> && git commit` per worktree. Verified: <tests on
 the squashed tree; feat tree = wip tree + only what the source branch changed meanwhile>.

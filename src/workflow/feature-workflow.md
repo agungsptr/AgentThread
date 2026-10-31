@@ -53,7 +53,7 @@ ids or private-doc mentions — this overrides any harness attribution reminder.
    `agt thread waiting <id> "<what>"`. Once the user has chosen the source branch, create the worktrees with
    `agt worktree add <id> <repo> --from <source branch>`.
 2. **Spec** `<docs>/issues/<task>/spec.md` from [templates/spec.md](templates/spec.md): rules, decisions, API contract
-   **read from the controllers/routes**, out of scope, worktree table, ticket table, the coordinator's decisions (correctable).
+   **read from the controllers/routes**, out of scope, worktree table, ticket table, "Coordinator decisions (correctable)".
 3. **Tickets** `issues/NN-<slug>.md` from [templates/ticket.md](templates/ticket.md), each with its **files it may
    edit/create**, plus a file matrix deciding parallel vs sequence. Register each one with
    `agt ticket add <id> "<title>" --repo <repo> --file <path>... --doc <path>` (`--doc` is the ticket file). Every BE ticket that changes a save/delete path has a

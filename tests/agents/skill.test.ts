@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_CONFIG, type Config } from "../../src/config/config.ts";
-import { featureWorkflowText, GENERATED_RELS, MARKER, refreshRootSkill, skillText, writeSkills } from "../../src/agents/skill.ts";
+import { featureWorkflowText, GENERATED_RELS, manageDocsText, MARKER, refreshRootSkill, skillText, writeSkills } from "../../src/agents/skill.ts";
 import { FEATURE_WORKFLOW, MANAGE_DOCS, TEMPLATES } from "../../src/workflow/index.ts";
 import { projectConfigSection } from "../../src/workflow/project-config.ts";
 import { parse } from "yaml";
@@ -120,7 +120,7 @@ describe("generated skills", () => {
       expect(readFileSync(join(dir, r, "agt-feature-workflow/SKILL.md"), "utf8")).toBe(
         `${withMarker(FEATURE_WORKFLOW)}\n\n${projectConfigSection(DEFAULT_CONFIG, [])}`,
       );
-      expect(readFileSync(join(dir, r, "manage-docs/SKILL.md"), "utf8")).toBe(withMarker(MANAGE_DOCS));
+      expect(readFileSync(join(dir, r, "manage-docs/SKILL.md"), "utf8")).toBe(manageDocsText({ root: "/repo", config: DEFAULT_CONFIG }));
       for (const t of ["spec", "ticket", "release"] as const) {
         expect(readFileSync(join(dir, r, `agt-feature-workflow/templates/${t}.md`), "utf8")).toBe(`${MARKER}\n${TEMPLATES[t]}`);
       }
@@ -185,6 +185,49 @@ describe("generated skills", () => {
       expect(lines).toContain(`/${rel}`);
     }
     expect(git(root, "status", "--porcelain", "-uall")).toBe("");
+  });
+
+  test("manage-docs: the placeholders are filled from the config", () => {
+    const config: Config = {
+      ...DEFAULT_CONFIG,
+      workspace: { ...DEFAULT_CONFIG.workspace, repos: { api: { path: "api" }, web: { path: "web" } } },
+      workflow: { ...DEFAULT_CONFIG.workflow, file_language: "Deutsch", report_words: { done: "FERTIG", blocked: "BLOCKIERT" } },
+    };
+    const text = manageDocsText({ root: "/repo", config });
+    expect(text.startsWith("---\nname: manage-docs\n")).toBe(true);
+    expect(text).toContain(`\n---\n${MARKER}\n`);
+    expect(text).toContain("Workspace repos: api, web.");
+    expect(text).toContain("| Language | Deutsch (chat stays in the user's language) | Deutsch |");
+    expect(text).toContain("one new Deutsch feature document");
+    expect(text).toContain('`## Report back` (the worker reports "FERTIG" when the ticket is done, or "BLOCKIERT" with the reason when it cannot go on);');
+    expect(text).toContain(
+      "commit by themselves — the coordinator commits its own .docs changes, one commit per logical change, and never pushes.",
+    );
+    expect(text).not.toContain("{{");
+    const single = manageDocsText({ root: "/repo", config: { ...DEFAULT_CONFIG, workspace: { ...DEFAULT_CONFIG.workspace, repos: { app: { path: "." } } } } });
+    expect(single).toContain("Workspace repos: app.");
+  });
+
+  test("no placeholder is left in any generated file", () => {
+    const dir = tempRepo();
+    writeSkills(dir, opts());
+    for (const rel of GENERATED_RELS) expect(readFileSync(join(dir, rel), "utf8")).not.toContain("{{");
+  });
+
+  test("the project root without a log: a kept skill is printed to stderr", () => {
+    const root = tempRepo();
+    const own = ".claude/skills/manage-docs/SKILL.md";
+    mkdirSync(join(root, ".claude/skills/manage-docs"), { recursive: true });
+    writeFileSync(join(root, own), "our own doc rules\n");
+    const printed: string[] = [];
+    const oe = console.error;
+    console.error = (m: unknown) => void printed.push(String(m));
+    try {
+      refreshRootSkill(root, ENV);
+    } finally {
+      console.error = oe;
+    }
+    expect(printed).toEqual([kept(root, "manage-docs", own)]);
   });
 
   test("the project root: a hand-written manage-docs is logged and stays visible", () => {

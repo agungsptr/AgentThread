@@ -39,6 +39,22 @@ export function featureWorkflowText(o: Opts): string {
   return `${withMarker(FEATURE_WORKFLOW)}\n\n${projectConfigSection(o.config, repos)}`;
 }
 
+const NOT_CONFIGURED = "not configured";
+const COMMIT_POLICY = " — the coordinator commits its own .docs changes, one commit per logical change, and never pushes";
+
+/** The doc-rules skill: the shipped template with its placeholders filled from agt config. */
+export function manageDocsText(o: Opts): string {
+  const names = Object.keys(workspaceReposNoSpawn(o.root, o.config));
+  const w = o.config.workflow;
+  const fill: Record<string, string> = {
+    REPOS: names.length ? names.join(", ") : NOT_CONFIGURED,
+    LANGUAGE: w.file_language,
+    REPORT_BACK: ` (the worker reports "${w.report_words.done}" when the ticket is done, or "${w.report_words.blocked}" with the reason when it cannot go on)`,
+    COMMIT_POLICY,
+  };
+  return withMarker(MANAGE_DOCS).replace(/\{\{([A-Z_]+)\}\}/g, (all, key: string) => fill[key] ?? all);
+}
+
 /** The generated skills: each a name and its files (relative to the skill's folder). */
 const SKILLS: { name: string; files: { rel: string; text: (o: Opts) => string }[] }[] = [
   { name: "agt", files: [{ rel: "SKILL.md", text: skillText }] },
@@ -49,7 +65,7 @@ const SKILLS: { name: string; files: { rel: string; text: (o: Opts) => string }[
       ...(["spec", "ticket", "release"] as const).map((t) => ({ rel: `templates/${t}.md`, text: () => `${MARKER}\n${TEMPLATES[t]}` })),
     ],
   },
-  { name: "manage-docs", files: [{ rel: "SKILL.md", text: () => withMarker(MANAGE_DOCS) }] },
+  { name: "manage-docs", files: [{ rel: "SKILL.md", text: manageDocsText }] },
 ];
 
 /** Every file of a skill, under both roots, relative to the project (or thread dir, or worktree). */
@@ -111,9 +127,9 @@ export function writeSkills(
 /**
  * agt init / setup / start: the skills in the project root, hidden through the main repository's info/exclude (the
  * common dir, which covers every worktree too). Synchronous: CLI paths only; the daemon writes worktree skills through
- * writeAgentsFilesAsync. `log` hears the skills kept as the project's own (default: nothing). Never throws.
+ * writeAgentsFilesAsync. `log` (default: stderr) hears the skills kept as the project's own. Never throws.
  */
-export function refreshRootSkill(root: string, env: Env = process.env, log?: (message: string) => void): void {
+export function refreshRootSkill(root: string, env: Env = process.env, log: (message: string) => void = (m) => console.error(m)): void {
   try {
     const config = loadConfig(root, env);
     if (config.agents.skill === false) return;
@@ -131,9 +147,9 @@ export function refreshRootSkill(root: string, env: Env = process.env, log?: (me
       if (ours.has(rel)) addExcludeLine(info, skillExclude(pre, rel));
       else removeExcludeLine(info, skillExclude(pre, rel));
     }
-    writeSkills(root, { root, config, tracked, log: log ?? (() => {}) });
+    writeSkills(root, { root, config, tracked, log });
   } catch (e) {
-    (log ?? ((m: string) => console.error(m)))(`agt: writing the generated skills failed: ${e instanceof Error ? e.message : String(e)}`);
+    log(`agt: writing the generated skills failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 

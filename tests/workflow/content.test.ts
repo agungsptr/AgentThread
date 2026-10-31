@@ -69,6 +69,12 @@ describe("manage-docs and templates", () => {
     expect(frontmatter(MANAGE_DOCS).name).toBe("manage-docs");
   });
 
+  test("no shipped file says manager", () => {
+    for (const text of [FEATURE_WORKFLOW, MANAGE_DOCS, ...Object.values(TEMPLATES)]) expect(text).not.toMatch(/manager/i);
+    expect(TEMPLATES.spec).toContain("## Coordinator decisions (correctable)");
+    expect(TEMPLATES.release).toContain("## 2. Squash (coordinator)");
+  });
+
   test("the text imports match the files", () => {
     expect(MANAGE_DOCS).toBe(readFileSync(join(SRC, "manage-docs.md"), "utf8"));
     for (const name of ["spec", "ticket", "release"] as const) {
