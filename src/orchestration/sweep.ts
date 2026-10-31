@@ -13,16 +13,20 @@ export function sweep(state: State, now: string, ctx: ReactorContext): { events:
   const { timeout, fallback_generate } = ctx.config.session.handoff;
   // A spawn report the daemon never received (it restarted at that moment) would leave the session `starting` forever.
   const spawnTimeout = ctx.config.session.spawn_timeout;
+  const failed = new Set<string>();
   for (const s of liveSessions(state)) {
     if (s.role === "main" || s.status !== "starting" || s.pane) continue;
     if (Date.parse(now) - Date.parse(s.resumingAt ?? s.createdAt) > durationMs(spawnTimeout)) {
       events.push({ type: "session.failed", ...(s.thread ? { thread: s.thread } : {}), payload: { session: s.id, reason: `spawn report lost after ${spawnTimeout}` } } as EventBody);
+      failed.add(s.id);
     }
   }
   // A worker whose ticket is done but that never goes idle would hold its slot forever: close it. The ended event makes
   // the reactor send the coordinator's done notice, so the hung-worker notice goes first.
   const grace = ctx.config.session.finished_worker_grace;
   for (const w of liveSessions(state, undefined, "worker")) {
+    // One failure per worker per tick: a lost spawn is already failing, and a pane-less one has nothing running to hang.
+    if (failed.has(w.id) || w.status === "starting" || !w.pane) continue;
     const t = w.thread ? state.threads.get(w.thread) : undefined;
     const k = t?.tickets.find((x) => x.id === w.ticket);
     if (!t || t.status === "done" || k?.status !== "done" || k.assignee !== w.id || !k.completedAt) continue;

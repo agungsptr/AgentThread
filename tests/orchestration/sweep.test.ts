@@ -86,3 +86,23 @@ test("finished_worker_grace is configurable and at least 30s", async () => {
   const bad = { ...DEFAULT_CONFIG, session: { ...DEFAULT_CONFIG.session, finished_worker_grace: "10s" } };
   expect(ConfigSchema.safeParse(bad).success).toBe(false);
 });
+
+test("a starting, pane-less worker with a done ticket past both timeouts gets only the lost-spawn failure", () => {
+  const s = stateOf(INIT, threadCreated("001", { status: "in_progress" }), { type: "thread.tab_opened", thread: "001", payload: { tab: "w1:t2", rootPane: "w1:p2" } });
+  apply(
+    s,
+    T0,
+    { type: "session.created", thread: "001", payload: { session: C, role: "coordinator", agent: "claude-code", name: "c" } },
+    { type: "session.attached", thread: "001", payload: { session: C, pane: "w1:p2" } },
+    { type: "session.started", thread: "001", payload: { session: C } },
+    { type: "ticket.created", thread: "001", payload: { ticket: "T1", title: "T1", scope: ["T1"] } },
+    { type: "session.created", thread: "001", payload: { session: W, role: "worker", agent: "claude-code", name: "w", ticket: "T1" } },
+    { type: "ticket.claimed", thread: "001", payload: { ticket: "T1", assignee: W } },
+    { type: "ticket.completed", thread: "001", payload: { ticket: "T1", summary: "ok" } },
+  );
+  expect(s.sessions.get(W)!.status).toBe("starting");
+  expect(s.sessions.get(W)!.pane).toBeUndefined();
+  const r = sweep(s, "2026-10-11T11:00:00.000Z", ctx());
+  expect(r.events).toEqual([{ type: "session.failed", thread: "001", payload: { session: W, reason: "spawn report lost after 3m" } }]);
+  expect(r.effects).toEqual([]);
+});

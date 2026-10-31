@@ -228,7 +228,9 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
           // A tab reopened after its coordinator failed or ended (a root pane gone, or agt start reopening it): the new
           // coordinator replaces that session in the fresh root pane, carrying its queued notices; the brake counts it.
           const latest = [...state.sessions.values()].filter((x) => x.thread === t.id && x.role === "coordinator").at(-1);
-          if (latest && (latest.status === "failed" || latest.status === "ended") && !rotatedTo.has(latest.id)) {
+          if (latest && (latest.status === "failed" || latest.status === "ended") && rotatedTo.has(latest.id)) {
+            // Already replaced in this batch: its replacement is the coordinator, a second one would be a duplicate.
+          } else if (latest && (latest.status === "failed" || latest.status === "ended")) {
             const r = spawnReplacement(t, latest, ctx, { pane: t.rootPane, bootstrap: t.handoff ? "handoff" : "start" });
             const created = r.events.find((e) => e.type === "session.created");
             if (created?.type === "session.created") redirect(latest.id, created.payload.session);
@@ -264,8 +266,10 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         const k = state.threads.get(ev.thread)?.tickets.find((x) => x.id === ev.payload.ticket);
         const w = k?.assignee ? state.sessions.get(k.assignee) : undefined;
         if (k?.status === "done" && w && isLive(w) && w.role === "worker") {
-          // Already idle: no further idle will come to end it, so end it now; session.ended sends the notice.
-          if (w.status === "idle") endFinishedWorker(w);
+          // Completed by someone else (the coordinator) while the worker sits idle: no further idle will come, so end it now;
+          // session.ended sends the notice. A worker's own `agt ticket done` is not ended here: its stored idle can be stale
+          // (a compaction start, a lagging poll), so its own idle, or the sweep's grace, ends it.
+          if (w.status === "idle" && ev.actor.session !== w.id) endFinishedWorker(w);
           break;
         }
         notify(coordinatorToNotify(ev.thread), doneNotice(ev.payload.ticket, ev.payload.summary));
@@ -315,11 +319,11 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
             } else {
               notify(main, text!);
             }
-          } else if (paneGone && s.replaces && t && t.status !== "done" && !coordinatorOf(t.id)) {
+          } else if (paneGone && t && t.status !== "done" && !coordinatorOf(t.id)) {
             // A replacement's split found no pane to split from (the root pane went with the old coordinator, and no
             // fallback was live): the tab is beyond repair, so a fresh tab replaces it, and its tab_opened spawns the
-            // coordinator. Only a replacement does this: the fresh coordinator it spawns has no `replaces`, so a tab
-            // that keeps failing is reopened at most once per replacement, and the brake still counts replacements.
+            // coordinator. The loop is bounded by the brake: the coordinator the fresh tab spawns sets `replaces`, so every
+            // reopen counts as a replacement and a tab that keeps failing stops after MAX_AUTO_REPLACEMENTS.
             if (recentReplacements(t.id, ev.ts) >= MAX_AUTO_REPLACEMENTS) {
               notify(main, `Coordinator for thread ${t.id} failed: ${ev.payload.reason}.`);
               if (!braked.has(t.id)) {

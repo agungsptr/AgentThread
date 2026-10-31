@@ -471,11 +471,6 @@ test("a coordinator failure for any other reason, or with a live coordinator, or
   const withLive = react(live.s, apply(live.s, { type: "session.failed", thread: "001", payload: { session: live.R, reason: "pane_not_found" } }), ctx());
   expect(withLive.effects).toEqual([]);
   expect(withLive.events).toEqual([{ type: "notice.queued", payload: { session: M, text: "Coordinator for thread 001 failed: pane_not_found." } }]);
-  // a coordinator that is not a replacement (such as the one a fresh tab spawns): no second tab, so no reopen loop
-  const fresh = withMain(base());
-  const first = react(fresh, apply(fresh, { type: "session.failed", thread: "001", payload: { session: C, reason: "pane_not_found" } }), ctx());
-  expect(first.effects).toEqual([]);
-  expect(first.events).toEqual([{ type: "notice.queued", payload: { session: M, text: "Coordinator for thread 001 failed: pane_not_found." } }]);
   // a done thread
   const done = replaced();
   done.s.threads.get("001")!.status = "done";
@@ -513,4 +508,48 @@ test("a reason that names something else not found (a cwd) does not reopen the t
   const r = react(s, apply(s, { type: "session.failed", thread: "001", payload: { session: R, reason: "herdr pane split: cwd /x not found" } }), ctx());
   expect(r.effects.filter((e) => e.kind.startsWith("herdr.tab"))).toEqual([]);
   expect(r.events).toEqual([{ type: "notice.queued", payload: { session: M, text: "Coordinator for thread 001 failed: herdr pane split: cwd /x not found." } }]);
+});
+
+test("a first coordinator (no replaces) whose root pane is gone reopens its tab too", () => {
+  const s = withMain(base());
+  const r = react(s, apply(s, { type: "session.failed", thread: "001", payload: { session: C, reason: "pane_not_found" } }), ctx());
+  expect(r.events).toEqual([{ type: "notice.queued", payload: { session: M, text: TAB_RECREATED } }]);
+  expect(r.effects.map((e) => e.kind)).toEqual(["herdr.tab.close", "herdr.tab.ensure"]);
+});
+
+test("the reopen loop for a first coordinator stops at the brake", () => {
+  const at = (s: State, ts: string, ...bodies: EventBody[]): StoredEvent[] =>
+    bodies.map((b) => {
+      const ev = { ...b, seq: s.lastSeq + 1, ts, actor: USER } as StoredEvent;
+      applyEvent(s, ev);
+      return ev;
+    });
+  const s = withMain(base());
+  let failing = C;
+  let reopens = 0;
+  for (let i = 0; i < 6; i++) {
+    const ts = `2026-10-11T10:0${i}:00.000Z`;
+    const r = react(s, at(s, ts, { type: "session.failed", thread: "001", payload: { session: failing, reason: "pane_not_found" } }), ctx());
+    if (!r.effects.some((e) => e.kind === "herdr.tab.ensure")) break;
+    reopens++;
+    at(s, ts, ...r.events);
+    // the fresh tab's tab_opened spawns a coordinator that replaces the failed one
+    const opened = react(s, at(s, ts, { type: "thread.tab_closed", thread: "001", payload: { tab: "w1:t2" } }, { type: "thread.tab_opened", thread: "001", payload: { tab: `w1:t${10 + i}`, rootPane: `w1:p${10 + i}` } }), ctx());
+    const created = opened.events.find((e) => e.type === "session.created");
+    expect(created).toEqual(expect.objectContaining({ payload: expect.objectContaining({ replaces: failing }) }));
+    at(s, ts, ...opened.events);
+    failing = created?.type === "session.created" ? created.payload.session : "";
+  }
+  expect(reopens).toBe(3);
+});
+
+test("tab_opened does not spawn a second coordinator for a failed one already replaced in the same batch", () => {
+  const s = withMain(base());
+  const evs = apply(
+    s,
+    { type: "session.ended", thread: "001", payload: { session: C } },
+    { type: "thread.tab_opened", thread: "001", payload: { tab: "w1:t5", rootPane: "w1:p5" } },
+  );
+  const r = react(s, evs, ctx());
+  expect(r.events.filter((e) => e.type === "session.created")).toHaveLength(1);
 });

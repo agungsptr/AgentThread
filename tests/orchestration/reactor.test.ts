@@ -194,8 +194,8 @@ test("idle worker with a blocked ticket ends, closes its pane, and the slot spaw
 
 test("a failed coordinator notifies the live main session", () => {
   const s = base();
-  const r = react(s, apply(s, { type: "session.failed", thread: "001", payload: { session: C, reason: "pane_not_found" } }), ctx());
-  expect(r.events).toEqual([{ type: "notice.queued", payload: { session: M, text: "Coordinator for thread 001 failed: pane_not_found." } }]);
+  const r = react(s, apply(s, { type: "session.failed", thread: "001", payload: { session: C, reason: "herdr agent start: timed out after 10000ms" } }), ctx());
+  expect(r.events).toEqual([{ type: "notice.queued", payload: { session: M, text: "Coordinator for thread 001 failed: herdr agent start: timed out after 10000ms." } }]);
 });
 
 test("a queued worker keeps its --agent override when its slot frees", () => {
@@ -277,12 +277,23 @@ test("a worker already idle at ticket.completed is ended at once and the coordin
   expect(s.sessions.get(W1)!.status).toBe("ended");
   expect(doneNotices(after)).toEqual(["Ticket T1 is done: ok."]);
   expect(s.sessions.get(C)!.notices.filter((x) => x.startsWith("Ticket T1 is done"))).toEqual(["Ticket T1 is done: ok."]);
-  // the pane is closed through the same teardown as the finished-worker idle path
   const r = react(s, apply(s, { type: "agent.idle", thread: "001", payload: { session: W1 } }), ctx());
   expect(doneNotices(r.events)).toEqual([]);
 });
 
+test("a worker that completes its own ticket while its stored status is idle is not ended at ticket.completed", () => {
+  const s = working();
+  apply(s, { type: "agent.idle", thread: "001", payload: { session: W1 } }); // stale: e.g. a lagging poll or a compaction start
+  const ev = { type: "ticket.completed", thread: "001", payload: { ticket: "T1", summary: "ok" }, seq: s.lastSeq + 1, ts: "t", actor: { role: "worker", session: W1 } } as StoredEvent;
+  applyEvent(s, ev);
+  const r = react(s, [ev], ctx());
+  expect(r.events.some((e) => e.type === "session.ended")).toBe(false);
+  expect(doneNotices(r.events)).toEqual([]);
+  expect(s.sessions.get(W1)!.status).toBe("idle");
+});
+
 test("an idle-at-completed worker's pane is closed like the finished-worker idle path", () => {
+  // the pane is closed through the same teardown as the finished-worker idle path
   const s = working();
   apply(s, { type: "agent.idle", thread: "001", payload: { session: W1 } });
   const cfg = { ...DEFAULT_CONFIG, herdr: { ...DEFAULT_CONFIG.herdr, close_worker_pane_on_end: true } };
