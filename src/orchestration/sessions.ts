@@ -5,6 +5,7 @@ import { HANDOFF_REQUEST_PREFIX } from "../agents/prompts.ts";
 import { roleAgent, tierAgent, type RoleAgent } from "../agents/roles.ts";
 import type { Effect } from "../commands/handler.ts";
 import type { Config } from "../config/config.ts";
+import { scopesOverlap } from "../domain/rules.ts";
 import type { AgentKind, EventBody, SessionRole } from "../domain/types.ts";
 import { isLive, threadCwd, type Session, type State, type Thread } from "../state/projection.ts";
 
@@ -45,6 +46,23 @@ export function liveSessions(state: State, thread?: string, role?: SessionRole):
   return [...state.sessions.values()].filter(
     (s) => isLive(s) && (thread === undefined || s.thread === thread) && (role === undefined || s.role === role),
   );
+}
+
+/** Ticket statuses whose files are taken: another ticket of the same repo sharing a file waits until they leave these. */
+const FILE_HOLDING: readonly string[] = ["in_progress"];
+
+/**
+ * The ticket that keeps `ticket` from starting on a task thread: one in the same repo with a file in common that is
+ * in a file-holding status or has a live worker already (spawned, not yet claimed). `also` names tickets spawned in the
+ * same reactor pass, which state does not show yet. Undefined on legacy threads and when nothing clashes.
+ */
+export function conflictingTicket(state: State, t: Thread, ticket: string, also: ReadonlySet<string> = new Set()): string | undefined {
+  const k = t.tickets.find((x) => x.id === ticket);
+  if (!k || k.repo === undefined) return undefined;
+  const live = new Set(liveSessions(state, t.id, "worker").map((s) => s.ticket));
+  return t.tickets.find(
+    (o) => o.id !== k.id && o.repo === k.repo && (FILE_HOLDING.includes(o.status) || (o.status === "open" && live.has(o.id)) || also.has(o.id)) && scopesOverlap(o.scope, k.scope),
+  )?.id;
 }
 
 export function workerLimit(t: Thread, config: Config): number {

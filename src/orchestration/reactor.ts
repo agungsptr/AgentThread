@@ -4,7 +4,7 @@ import { type Config, durationMs } from "../config/config.ts";
 import type { EventBody, StoredEvent } from "../domain/types.ts";
 import { isLive, type Session, type State, type Thread } from "../state/projection.ts";
 import { generateHandoff } from "./handoff.ts";
-import { liveSessions, rotateCoordinator, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure, workerCwd, workerLimit } from "./sessions.ts";
+import { conflictingTicket, liveSessions, rotateCoordinator, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure, workerCwd, workerLimit } from "./sessions.ts";
 import { tierRun } from "./tiers.ts";
 
 const CHECKPOINT_NOTICE = (thread: string | undefined) =>
@@ -96,6 +96,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
       if (spawnedTickets.has(`${t.id}/${ticket}`)) continue; // already spawned earlier in this call; state isn't updated yet
       if (t.tickets.find((k) => k.id === ticket)?.status !== "open") continue;
       if (workerCwd(t, ticket) === undefined) continue; // its repo has no worktree (yet)
+      if (conflictingTicket(state, t, ticket, new Set([...spawnedTickets].filter((x) => x.startsWith(`${t.id}/`)).map((x) => x.slice(t.id.length + 1))))) continue; // shares a file with a running ticket
       spawnedTickets.add(`${t.id}/${ticket}`);
       take(spawnWorker(state, t, ticket, ctx, t.workerAgents[ticket]));
       spawnedPerThread.set(t.id, (spawnedPerThread.get(t.id) ?? 0) + 1);
@@ -262,6 +263,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         break;
       }
       case "ticket.completed": {
+        fillWorkers(ev.thread); // a queued ticket that shared its files can start
         // While its worker still runs, the notice waits for the worker's turn to end (see doneWorkerEnded): a coordinator
         // that reviews and commits at once would miss edits made after `agt ticket done`.
         const k = state.threads.get(ev.thread)?.tickets.find((x) => x.id === ev.payload.ticket);
@@ -276,7 +278,11 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         notify(coordinatorToNotify(ev.thread), doneNotice(ev.payload.ticket, ev.payload.summary));
         break;
       }
+      case "ticket.reopened":
+        fillWorkers(ev.thread);
+        break;
       case "ticket.blocked":
+        fillWorkers(ev.thread);
         notify(coordinatorToNotify(ev.thread), `Ticket ${ev.payload.ticket} is blocked: ${ev.payload.reason}.`);
         break;
       case "thread.status_changed": {

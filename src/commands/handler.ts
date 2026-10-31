@@ -5,7 +5,7 @@ import { DEFAULT_CONFIG, type Config } from "../config/config.ts";
 import { canTransitionThread, canTransitionTicket, scopesOverlap, slugify, validateHandoff } from "../domain/rules.ts";
 import { ROLES, type Actor, type EventBody, type Role, type ThreadStatus, type TicketStatus } from "../domain/types.ts";
 import { roleAgent, type RoleAgent } from "../agents/roles.ts";
-import { agentName, liveSessions, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure as tabEnsureFor, workerLimit } from "../orchestration/sessions.ts";
+import { agentName, conflictingTicket, liveSessions, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure as tabEnsureFor, workerLimit } from "../orchestration/sessions.ts";
 import { workspaceReposNoSpawn } from "../project/workspace.ts";
 import { actorSession, isLive, type State, type Thread, type Ticket } from "../state/projection.ts";
 import type { Command, CommandName } from "./schema.ts";
@@ -295,6 +295,11 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
       if (k.status !== "open") reject(`ticket ${k.id} is ${k.status}`);
       const workers = liveSessions(state, t.id, "worker");
       if (t.workerQueue.includes(k.id) || workers.some((s) => s.ticket === k.id)) reject(`ticket ${k.id} already has a worker`);
+      // Tickets that share a file in one repo run one after the other: fillWorkers starts this one once the other is done, blocked or open again.
+      const waitingFor = conflictingTicket(state, t, k.id);
+      if (waitingFor) {
+        return { events: [{ type: "worker.queued", thread: t.id, payload: { ticket: k.id, ...(cmd.agent ? { agent: cmd.agent } : {}) } }], result: { queued: true, waitingFor } };
+      }
       if (workers.length >= workerLimit(t, ctx.config ?? DEFAULT_CONFIG)) {
         return { events: [{ type: "worker.queued", thread: t.id, payload: { ticket: k.id, ...(cmd.agent ? { agent: cmd.agent } : {}) } }], result: { queued: true } };
       }
