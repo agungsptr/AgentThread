@@ -1,11 +1,12 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { isMap, parse, parseDocument } from "yaml";
 import { adapterFor, agentBin } from "../agents/adapters.ts";
 import { EFFORTS } from "../agents/roles.ts";
 import { refreshRootSkill } from "../agents/skill.ts";
 import { initProject } from "./init.ts";
+import { prefill, stackPrefill } from "./prefill.ts";
 import { discoverRepos, isWorkspaceProject } from "./workspace.ts";
 import { configPaths, deepMerge, durationMs } from "../config/config.ts";
 import { AGENT_KINDS, type AgentKind } from "../domain/types.ts";
@@ -124,6 +125,87 @@ export async function runSetup(o: {
       if (branch) doc.setIn(["workspace", "repos", name, "source_branch"], branch);
     }
   }
+
+  // Workflow values: each is asked once, defaulting to the current value, else a prefill read from the repos' files.
+  // Blank keeps the default; a value cannot be cleared here (edit the file for that).
+  const inPath = (path: string[]): void => {
+    for (let i = 1; i <= path.length; i++) {
+      const p = path.slice(0, i);
+      if (!isMap(doc.getIn(p))) doc.setIn(p, doc.createNode({}));
+    }
+  };
+  const put = (path: string[], v: unknown): void => {
+    inPath(path.slice(0, -1));
+    doc.setIn(path, v);
+  };
+  const text = async (label: string, path: string[], fallback?: string): Promise<void> => {
+    const cur = doc.getIn(path);
+    const def = typeof cur === "string" && cur ? cur : fallback;
+    const a = (await ask(label, def)).trim();
+    if (a) put(path, a);
+  };
+  const list = async (label: string, path: string[]): Promise<void> => {
+    const cur = doc.getIn(path, true);
+    const items = cur && typeof cur === "object" && "toJSON" in cur ? (cur as { toJSON(): unknown }).toJSON() : [];
+    const def = Array.isArray(items) && items.length ? items.join(", ") : undefined;
+    const got = (await ask(label, def)).split(",").map((x) => x.trim()).filter((x) => x !== "");
+    if (got.length) put(path, doc.createNode(got));
+  };
+  const flag = async (label: string, path: string[]): Promise<void> => {
+    const cur = doc.getIn(path);
+    const def = typeof cur === "boolean" ? (cur ? "yes" : "no") : undefined;
+    for (;;) {
+      const a = (await ask(label, def)).trim().toLowerCase();
+      if (a === "") return;
+      if (["y", "yes", "true"].includes(a)) return put(path, true);
+      if (["n", "no", "false"].includes(a)) return put(path, false);
+      console.error("answer yes or no");
+    }
+  };
+  const order = async (label: string, path: string[]): Promise<void> => {
+    const cur = doc.getIn(path);
+    const def = typeof cur === "number" ? String(cur) : undefined;
+    for (;;) {
+      const a = (await ask(label, def)).trim();
+      if (a === "") return;
+      if (/^\d+$/.test(a)) return put(path, Number(a));
+      console.error("PR order must be a whole number");
+    }
+  };
+
+  // Per repo (a single-repo project has one: the root itself).
+  for (const [name, r] of Object.entries(discoverRepos(o.root))) {
+    const base = ["workspace", "repos", name];
+    const p = prefill(join(o.root, r.path));
+    await text(`${name} prod branch`, [...base, "prod_branch"]);
+    await text(`${name} staging branch`, [...base, "staging_branch"]);
+    await order(`${name} PR order`, [...base, "pr_order"]);
+    await text(`${name} unit command`, [...base, "unit"], p.unit);
+    await text(`${name} typecheck command`, [...base, "typecheck"], p.typecheck);
+    if (isMap(doc.getIn(base)) && typeof doc.getIn([...base, "path"]) !== "string") doc.setIn([...base, "path"], r.path);
+  }
+
+  const rootPrefill = prefill(o.root);
+  const stack = stackPrefill(rootPrefill.makeTargets);
+  await text("chat language", ["workflow", "chat_language"]);
+  await text("file language", ["workflow", "file_language"]);
+  await text("stack restart command ({task} = the task id)", ["workflow", "stack", "restart"], stack.restart);
+  await text("stack status command", ["workflow", "stack", "status"], stack.status);
+  await text("e2e stage 2 command", ["workflow", "e2e", "stage2"], rootPrefill.e2e);
+  await text("e2e stage 3 command", ["workflow", "e2e", "stage3"]);
+  await text("e2e stage 4 command", ["workflow", "e2e", "stage4"]);
+  await text("e2e baseline path", ["workflow", "e2e", "baseline"]);
+  await text("migration tool", ["workflow", "migration", "tool"]);
+  await text("migration table", ["workflow", "migration", "table"]);
+  await flag("production migrates on start (yes/no)", ["workflow", "migration", "prod_migrates_on_start"]);
+  await text("production read command", ["workflow", "prod_read"]);
+  await list("browser URLs (comma-separated)", ["workflow", "browser", "urls"]);
+  await text("browser login note path", ["workflow", "browser", "login_note"]);
+  await list("banned words (comma-separated)", ["workflow", "banned_words"]);
+  await list("never-commit paths (comma-separated)", ["workflow", "never_commit"]);
+  await list("read-first paths (comma-separated)", ["workflow", "read_first"]);
+  await text("report word for done", ["workflow", "report_words", "done"]);
+  await text("report word for blocked", ["workflow", "report_words", "blocked"]);
 
   if (!isMap(doc.get("agents"))) doc.set("agents", doc.createNode({}));
   doc.setIn(["agents", "roles"], doc.createNode(roles));

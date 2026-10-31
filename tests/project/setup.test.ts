@@ -4,13 +4,14 @@ import { join } from "node:path";
 import { loadConfig } from "../../src/config/config.ts";
 import { SETUP_HINT, detectAgents, needsSetup, initCommand, runSetup, setupIfNeeded } from "../../src/project/setup.ts";
 import { isolatedConfigHome, tempRepo, twoRepoFolder } from "../helpers.ts";
+import { repoName } from "../helpers.ts";
 
 const script = (answers: string[]) => {
   const asked: string[] = [];
   const ask = async (q: string, def?: string) => {
     asked.push(q);
-    const a = answers.shift();
-    if (a === undefined) throw new Error(`script exhausted at: ${q}`);
+    // Past the scripted answers the user presses enter (the workflow questions come last).
+    const a = answers.shift() ?? "";
     return a === "" && def !== undefined ? def : a;
   };
   return { ask, asked };
@@ -245,4 +246,114 @@ test("I4: a re-run with blank answers keeps a hand-added repo and an existing so
     extra: { path: "vendor/extra", source_branch: "release" },
     b: { path: "b" },
   });
+});
+
+// Answers by question text; every other question gets enter (its default).
+const byLabel = (answers: Record<string, string>) => {
+  const asked: Record<string, string | undefined> = {};
+  const ask = async (q: string, def?: string) => {
+    asked[q] = def;
+    const a = answers[q];
+    return a === undefined || a === "" ? (def ?? "") : a;
+  };
+  return { ask, asked };
+};
+const run = (root: string, answers: Record<string, string>) => {
+  const s = byLabel(answers);
+  return runSetup({ root, ask: s.ask, detected: ["claude-code"] }).then(() => s);
+};
+
+test("workflow: blank everywhere on a fresh workspace writes the prefilled values", async () => {
+  const root = twoRepoFolder();
+  writeFileSync(join(root, "a", "package.json"), JSON.stringify({ scripts: { test: "t", typecheck: "c" } }));
+  writeFileSync(join(root, "a", "bun.lock"), "");
+  writeFileSync(join(root, "Makefile"), ".PHONY: restart\nrestart:\n\techo\nstatus:\n\techo\n");
+  const s = await run(root, {});
+  expect(s.asked["a unit command"]).toBe("bun run test");
+  const c = loadConfig(root, env());
+  expect(c.workspace.repos).toEqual({ a: { path: "a", unit: "bun run test", typecheck: "bun run typecheck" }, b: { path: "b" } });
+  expect(c.workflow.stack).toEqual({ restart: "make restart TASK={task}", status: "make status" });
+  expect(c.workflow.chat_language).toBe("English");
+});
+
+test("workflow: a single-repo project reads its own root and records the repo", async () => {
+  const root = tempRepo();
+  writeFileSync(join(root, "package.json"), JSON.stringify({ scripts: { test: "t" } }));
+  await run(root, {});
+  expect(loadConfig(root, env()).workspace.repos).toEqual({ [repoName(root)]: { path: ".", unit: "npm run test" } });
+});
+
+test("workflow: a second run with blank answers keeps every earlier value", async () => {
+  const root = twoRepoFolder();
+  await run(root, {
+    "a prod branch": "main",
+    "a staging branch": "staging",
+    "a PR order": "2",
+    "a unit command": "make unit",
+    "a typecheck command": "make tc",
+    "chat language": "Indonesian",
+    "file language": "English",
+    "stack restart command ({task} = the task id)": "make up TASK={task}",
+    "stack status command": "make ps",
+    "e2e stage 2 command": "make e2e2",
+    "e2e stage 3 command": "make e2e3",
+    "e2e stage 4 command": "make e2e4",
+    "e2e baseline path": ".docs/baseline.md",
+    "migration tool": "flyway",
+    "migration table": "schema_history",
+    "production migrates on start (yes/no)": "yes",
+    "production read command": "make prod-read",
+    "browser URLs (comma-separated)": " http://a.test , ,http://b.test ",
+    "browser login note path": ".docs/login.md",
+    "banned words (comma-separated)": "claude, ai ,",
+    "never-commit paths (comma-separated)": ".docs, *.env",
+    "read-first paths (comma-separated)": "README.md",
+    "report word for done": "selesai",
+    "report word for blocked": "macet",
+  });
+  const first = loadConfig(root, env());
+  expect(first.workspace.repos?.a).toEqual({ path: "a", prod_branch: "main", staging_branch: "staging", pr_order: 2, unit: "make unit", typecheck: "make tc" });
+  expect(first.workflow.browser).toEqual({ urls: ["http://a.test", "http://b.test"], login_note: ".docs/login.md" });
+  expect(first.workflow.banned_words).toEqual(["claude", "ai"]);
+  expect(first.workflow.never_commit).toEqual([".docs", "*.env"]);
+  expect(first.workflow.migration).toEqual({ tool: "flyway", table: "schema_history", prod_migrates_on_start: true });
+  expect(first.workflow.report_words).toEqual({ done: "selesai", blocked: "macet" });
+  const s = await run(root, {});
+  expect(s.asked["a unit command"]).toBe("make unit");
+  expect(s.asked["browser URLs (comma-separated)"]).toBe("http://a.test, http://b.test");
+  expect(s.asked["production migrates on start (yes/no)"]).toBe("yes");
+  expect(loadConfig(root, env())).toEqual(first);
+});
+
+test("workflow: a typed value replaces the old one; prod_migrates_on_start takes no/false; bad answers re-ask", async () => {
+  const root = twoRepoFolder();
+  await run(root, { "a unit command": "old", "production migrates on start (yes/no)": "yes", "a PR order": "1" });
+  const errs: string[] = [];
+  const orig = console.error;
+  console.error = (m: string) => void errs.push(String(m));
+  try {
+    const answers: Record<string, string[]> = { "a PR order": ["x", "3"], "production migrates on start (yes/no)": ["maybe", "no"], "a unit command": ["new"] };
+    await runSetup({
+      root,
+      ask: async (q, def) => {
+        const a = answers[q]?.shift();
+        return a === undefined || a === "" ? (def ?? "") : a;
+      },
+      detected: ["claude-code"],
+    });
+  } finally {
+    console.error = orig;
+  }
+  expect(errs.length).toBe(2);
+  const c = loadConfig(root, env());
+  expect(c.workspace.repos?.a).toEqual({ path: "a", unit: "new", pr_order: 3 });
+  expect(c.workflow.migration).toEqual({ prod_migrates_on_start: false });
+});
+
+test("workflow: a hand-added repo and its new fields survive a re-run", async () => {
+  const root = twoRepoFolder();
+  mkdirSync(join(root, ".agentthread"), { recursive: true });
+  writeFileSync(cfg(root), ["workspace:", "  repos:", "    extra:", "      path: vendor/extra", "      unit: make x", "      pr_order: 4", ""].join("\n"));
+  await run(root, {});
+  expect(loadConfig(root, env()).workspace.repos?.extra).toEqual({ path: "vendor/extra", unit: "make x", pr_order: 4 });
 });
