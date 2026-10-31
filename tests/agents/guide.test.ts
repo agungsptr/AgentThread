@@ -28,6 +28,13 @@ describe("guide", () => {
     expect(guide({ role: "main", ...base })).toContain("[--tier <name> --reason <why> [--now]]");
   });
 
+  test("the placeholder thread is a thread directory, or a worktree with legacy", () => {
+    expect(guide({ role: "worker", ...base })).toContain("Work only inside <root>/.worktrees/<task>,");
+    const legacy = guide({ role: "worker", ...base, legacy: true });
+    expect(legacy).toContain("Work only inside <worktree>,");
+    expect(legacy).not.toContain("<root>/.worktrees/<task>");
+  });
+
   test("each role's rules are included, without the identity line", () => {
     for (const role of ["main", "coordinator", "worker"] as const) {
       const g = guide({ role, ...base, thread: T });

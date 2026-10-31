@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { parse } from "yaml";
 import type { Config } from "../config/config.ts";
 import type { SessionRole } from "../domain/types.ts";
 import { usageLines } from "../cli/usage.ts";
@@ -12,9 +15,28 @@ interface GuideInput {
   root: string;
   config: Config;
   thread?: ThreadRef;
+  /** The current thread ($AGT_THREAD) is a legacy one: the rules name its worktree, not a thread directory. */
+  legacy?: boolean;
 }
 
 const PLACEHOLDER: ThreadRef = { id: "<thread>", title: "<title>", slug: "<slug>", dir: "<root>/.worktrees/<task>" };
+const LEGACY_PLACEHOLDER: ThreadRef = { id: "<thread>", title: "<title>", slug: "<slug>", worktree: "<worktree>" };
+
+/**
+ * True when thread `id` of the project at `root` is a legacy thread (its sub.thread.md names a worktree and no
+ * thread directory). Synchronous: CLI paths only. False when it cannot tell.
+ */
+export function isLegacyThread(root: string, id: string): boolean {
+  try {
+    const name = readdirSync(paths(root).threadsDir).find((n) => n.startsWith(`${id}-`));
+    if (!name) return false;
+    const fm = readFileSync(join(paths(root).threadsDir, name, "sub.thread.md"), "utf8").split("---\n")[1] ?? "";
+    const data = (parse(fm) ?? {}) as Record<string, unknown>;
+    return data.worktree !== undefined && data.dir === undefined;
+  } catch {
+    return false;
+  }
+}
 
 /** The USAGE commands each role runs, by their leading words. */
 const COMMANDS: Record<SessionRole, string[]> = {
@@ -52,7 +74,7 @@ const WRONG: Record<SessionRole, string[]> = {
 const TITLES: Record<SessionRole, string> = { main: "Main", coordinator: "Coordinator", worker: "Worker" };
 
 function roleGuide(role: SessionRole, o: GuideInput, level: "#" | "##"): string {
-  const t = o.thread ?? PLACEHOLDER;
+  const t = o.thread ?? (o.legacy ? LEGACY_PLACEHOLDER : PLACEHOLDER);
   const rules = rulesOf(systemPrompt({ root: o.root, role, thread: t, ticket: "<ticket>", config: o.config })).filter(
     (l) => l !== "" && !l.includes("When unsure how to do something with agt, run: agt guide"),
   );

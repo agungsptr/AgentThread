@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { ConfigSchema } from "../../src/config/config.ts";
 import type { EventBody } from "../../src/domain/types.ts";
-import { rotateCoordinator, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure } from "../../src/orchestration/sessions.ts";
-import { INIT, stateOf, taskThreadCreated, threadCreated } from "../helpers.ts";
+import { rotateCoordinator, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure, threadGitEnv } from "../../src/orchestration/sessions.ts";
+import { INIT, stateOf, taskThreadCreated, tempRepo, threadCreated } from "../helpers.ts";
 
 const C = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const NEW = "00000000-0000-4000-8000-000000000001";
@@ -88,4 +90,30 @@ test("an old log's thread (branch and worktree) replays as legacy and still runs
   expect(tabEnsure(t, ctx())).toMatchObject({ cwd: "/repo/.worktrees/001-thread-001" });
   expect(spawnCoordinator(t, ctx()).effects[0]).toMatchObject({ cwd: "/repo/.worktrees/001-thread-001" });
   expect(spawnWorker(s, t, "T1", ctx()).effects[0]).toMatchObject({ cwd: "/repo/.worktrees/001-thread-001" });
+});
+
+test("a thread-directory thread's tab env stops git at .worktrees; a legacy thread's does not", () => {
+  const t = taskBase().threads.get("001")!;
+  expect(tabEnsure(t, ctx())).toMatchObject({ env: expect.objectContaining({ GIT_CEILING_DIRECTORIES: "/repo/.worktrees" }) });
+  const legacy = base().threads.get("001")!;
+  const env = (tabEnsure(legacy, ctx()) as { env: Record<string, string> }).env;
+  expect(env).not.toHaveProperty("GIT_CEILING_DIRECTORIES");
+  expect(threadGitEnv(legacy, "/repo")).toEqual({});
+});
+
+test("single-repo project: with the ceiling env, git fails in the thread directory but works in a repo worktree inside it", () => {
+  const root = tempRepo();
+  const dir = join(root, ".worktrees", "kyc-1");
+  mkdirSync(dir, { recursive: true });
+  const env = { ...process.env, ...threadGitEnv({ dir }, root) };
+  const git = (cwd: string, e: Record<string, string | undefined>, ...a: string[]) => Bun.spawnSync(["git", "-C", cwd, ...a], { env: e, stdout: "pipe", stderr: "pipe" });
+  // without it, git in the thread directory would reach the user's checkout
+  expect(git(dir, process.env, "rev-parse", "--show-toplevel").stdout.toString().trim()).toBe(root);
+  const r = git(dir, env, "rev-parse", "--show-toplevel");
+  expect(r.exitCode).not.toBe(0);
+  expect(r.stderr.toString()).toContain("not a git repository");
+  expect(git(dir, env, "status").exitCode).not.toBe(0);
+  const wt = join(dir, "app");
+  expect(git(root, process.env, "worktree", "add", "-q", "-b", "wip/kyc-1", wt).exitCode).toBe(0);
+  expect(git(wt, env, "rev-parse", "--show-toplevel").stdout.toString().trim()).toBe(wt);
 });

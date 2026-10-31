@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { adapterFor } from "../agents/adapters.ts";
 import { agentEnv, claudeConfigDir } from "../agents/claude.ts";
 import { HANDOFF_REQUEST_PREFIX } from "../agents/prompts.ts";
@@ -20,10 +21,19 @@ const runFields = (run: RoleAgent) => ({ agent: run.agent, ...(run.model ? { mod
  * The env of a thread's tab, which its first coordinator inherits in the root pane: the AGT_* env with the
  * coordinator adapter's env merged over it.
  */
-export function tabEnv(t: { id: string; tier?: string }, ctx: { root: string; config: Config }): Record<string, string> {
+export function tabEnv(t: { id: string; tier?: string; dir?: string }, ctx: { root: string; config: Config }): Record<string, string> {
   const run = tierAgent(ctx.config, t.tier);
   const base = agentEnv({ root: ctx.root, role: "coordinator", agent: run.agent, thread: t.id, configDir: claudeConfigDir(ctx.config) });
-  return { ...base, ...adapterFor(run.agent).launch({ role: "coordinator", run, config: ctx.config, root: ctx.root }).env };
+  return { ...base, ...adapterFor(run.agent).launch({ role: "coordinator", run, config: ctx.config, root: ctx.root }).env, ...threadGitEnv(t, ctx.root) };
+}
+
+/**
+ * A thread directory is not a git repo, but in a single-repo project it sits inside the user's checkout: git run there
+ * would act on that unguarded checkout. GIT_CEILING_DIRECTORIES=<root>/.worktrees stops git's search at .worktrees, so
+ * git fails in the thread directory while a repo worktree inside it still finds its own .git. Legacy threads: none.
+ */
+export function threadGitEnv(t: { dir?: string }, root: string): Record<string, string> {
+  return t.dir !== undefined ? { GIT_CEILING_DIRECTORIES: join(root, ".worktrees") } : {};
 }
 
 /** Opens (or re-finds) a thread's Herdr tab in its thread directory (a legacy thread's worktree), with the env its first coordinator inherits. */

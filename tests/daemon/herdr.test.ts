@@ -64,6 +64,7 @@ test("thread.new opens a tab in the thread directory and records it", async () =
     "tab", "create", "--workspace", "w1", "--cwd", join(root, ".worktrees", "fix-race"), "--label", "001-fix-race", "--no-focus",
     "--env", `AGT_ROOT=${root}`, "--env", "AGT_THREAD=001", "--env", "AGT_ROLE=coordinator",
     "--env", "AGT_AGENT=claude-code", "--env", "CLAUDE_CONFIG_DIR=/claude-config", "--env", `PATH=${dirname(AGT_BIN)}:${process.env.PATH ?? ""}`,
+    "--env", `GIT_CEILING_DIRECTORIES=${join(root, ".worktrees")}`,
   ]);
   expect(frontmatter("001-fix-race")).toMatchObject({ tab: "w1:t1" });
   expect(await events()).toEqual(["project.initialized", "layout.registered", "thread.created", "thread.tab_opened", "session.created"]);

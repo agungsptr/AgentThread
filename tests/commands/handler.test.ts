@@ -59,18 +59,29 @@ describe("thread.new", () => {
     expect(r.events[0]).toMatchObject({ type: "thread.created", thread: "001", payload: { status: "open", goal: "no double charge", task: "fix-checkout-race" } });
   });
 
-  test("a task name in use is rejected", () => {
+  test("an explicit task name in use is rejected", () => {
     const s = stateOf(INIT);
     exec(s, { cmd: "thread.new", title: "Fix login", type: "bug", task: "kyc-1" });
     expect(errorOf(run(s, { cmd: "thread.new", title: "Other", type: "bug", task: "kyc-1" }))).toBe("task kyc-1 is already used by thread 001");
-    // the default (the slug) is checked too
+  });
+
+  test("a derived task name that is taken gets the first free numeric suffix", () => {
+    const s = stateOf(INIT);
     exec(s, { cmd: "thread.new", title: "Same", type: "bug" });
-    expect(errorOf(run(s, { cmd: "thread.new", title: "Same", type: "bug" }))).toBe("task same is already used by thread 002");
+    expect(run(s, { cmd: "thread.new", title: "Same", type: "bug" })).toMatchObject({ ok: true, result: { task: "same-2", dir: "/repo/.worktrees/same-2" } });
+    exec(s, { cmd: "thread.new", title: "Same", type: "bug" });
+    exec(s, { cmd: "thread.new", title: "Other", type: "bug", task: "same-3" });
+    expect(run(s, { cmd: "thread.new", title: "Same", type: "bug" })).toMatchObject({ ok: true, result: { task: "same-4" } });
   });
 
   test("a task name that would reuse a legacy thread's worktree is rejected", () => {
     const s = stateOf(INIT, threadCreated("001"));
     expect(errorOf(run(s, { cmd: "thread.new", title: "X", type: "bug", task: "001-thread-001" }))).toBe("task 001-thread-001 is already used by thread 001");
+  });
+
+  test("a derived task name that collides with a legacy worktree gets a suffix", () => {
+    const s = stateOf(INIT, threadCreated("001", { slug: "fix-race", worktree: "/repo/.worktrees/fix-race" }));
+    expect(run(s, { cmd: "thread.new", title: "Fix race", type: "bug" })).toMatchObject({ ok: true, result: { task: "fix-race-2", dir: "/repo/.worktrees/fix-race-2" } });
   });
 
   test("an invalid task name is rejected", () => {

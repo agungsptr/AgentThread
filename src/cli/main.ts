@@ -20,7 +20,7 @@ import { initCommand, setupIfNeeded, setupOnTty } from "../project/setup.ts";
 import { paths } from "../project/paths.ts";
 import { findRoot } from "../project/root.ts";
 import { USAGE } from "./usage.ts";
-import { guide } from "../agents/guide.ts";
+import { guide, isLegacyThread } from "../agents/guide.ts";
 
 type Env = Record<string, string | undefined>;
 
@@ -151,7 +151,8 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
           console.error(`agt: warning: ${e instanceof Error ? e.message : String(e)}; showing the default guide`);
         }
       }
-      console.log(guide({ role: role as SessionRole | "all", root, config }));
+      const legacy = inProject && env.AGT_THREAD ? isLegacyThread(root, env.AGT_THREAD) : false;
+      console.log(guide({ role: role as SessionRole | "all", root, config, ...(legacy ? { legacy } : {}) }));
       return 0;
     }
     case "tell": {

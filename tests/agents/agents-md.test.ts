@@ -7,6 +7,7 @@ import { SKILL_REL } from "../../src/agents/skill.ts";
 import { type Runner, spawnRunner } from "../../src/herdr/bridge.ts";
 import { DEFAULT_CONFIG } from "../../src/config/config.ts";
 import { createEffectRunner } from "../../src/daemon/effects.ts";
+import type { SpawnJob } from "../../src/agents/spawn-job.ts";
 import { addWorktree } from "../../src/project/git.ts";
 import type { Thread } from "../../src/state/projection.ts";
 import { isolatedConfigHome, tempRepo } from "../helpers.ts";
@@ -468,13 +469,17 @@ describe("thread directory", () => {
     const dir = join(root, ".worktrees", "kyc-1");
     const thread = { id: "001", title: "Fix login", slug: "fix-login", task: "kyc-1", dir, worktrees: {}, legacy: false } as unknown as Thread;
     const launched: string[] = [];
+    const jobs: SpawnJob[] = [];
     const logs: string[] = [];
     const run = createEffectRunner({
       root,
       config: NO_SKILL,
       layout: () => LAYOUT,
       thread: (id) => (id === "001" ? thread : undefined),
-      launch: (job) => launched.push(job.session),
+      launch: (job) => {
+        launched.push(job.session);
+        jobs.push(job);
+      },
       log: (m) => logs.push(m),
     });
     expect(await run({ kind: "thread.dir.ensure", thread: { id: "001", title: "Fix login", slug: "fix-login", task: "kyc-1", dir } })).toEqual([]);
@@ -488,5 +493,9 @@ describe("thread directory", () => {
     expect(readFileSync(join(dir, "AGENTS.md"), "utf8")).toBe(agentsMd({ root, thread, config: NO_SKILL }));
     expect(launched).toEqual(["s-1"]);
     expect(logs).toEqual([]);
+    // a worker split from the coordinator: its pane env stops git at .worktrees
+    const { pane: _p, ...split } = spawn;
+    expect(await run({ ...split, session: "s-2", role: "worker", ticket: "T1", splitFrom: "p2", direction: "down" })).toEqual([]);
+    expect(jobs.at(-1)?.split?.env).toMatchObject({ GIT_CEILING_DIRECTORIES: join(root, ".worktrees"), AGT_ROLE: "worker" });
   });
 });

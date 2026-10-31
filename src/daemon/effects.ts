@@ -11,6 +11,7 @@ import type { EventBody, Layout } from "../domain/types.ts";
 import { HerdrCli, spawnAsync } from "../herdr/bridge.ts";
 import { addWorktreeAsync } from "../project/git.ts";
 import { paths } from "../project/paths.ts";
+import { threadGitEnv } from "../orchestration/sessions.ts";
 import type { Thread } from "../state/projection.ts";
 
 type HerdrEffect = Extract<Effect, { kind: "herdr.tab.ensure" | "herdr.tab.close" }>;
@@ -142,6 +143,7 @@ export function createEffectRunner(opts: {
                     env: {
                       ...agentEnv({ root: opts.root, role: effect.role, agent: effect.run.agent, session: effect.session, thread: effect.thread, ticket: effect.ticket, configDir }),
                       ...launched.env,
+                      ...threadGitEnv(t, opts.root),
                     },
                   },
                 }

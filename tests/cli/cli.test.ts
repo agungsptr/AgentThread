@@ -110,6 +110,22 @@ test("agt guide prints the role guide without a daemon", () => {
   for (const h of ["## Main", "## Coordinator", "## Worker"]) expect(all).toContain(h);
 });
 
+test("agt guide uses the legacy wording only when $AGT_THREAD is a legacy thread", () => {
+  const threads = join(root, ".agentthread", "threads");
+  mkdirSync(join(threads, "009-old"), { recursive: true });
+  writeFileSync(join(threads, "009-old", "sub.thread.md"), "---\nid: \"009\"\nbranch: thread/009-old\nworktree: /repo/.worktrees/009-old\n---\n");
+  mkdirSync(join(threads, "010-new"), { recursive: true });
+  writeFileSync(join(threads, "010-new", "sub.thread.md"), "---\nid: \"010\"\ntask: new\ndir: /repo/.worktrees/new\n---\n");
+  const NEW = "Work only inside <root>/.worktrees/<task>,";
+  const OLD = "Work only inside <worktree>,";
+  expect(agt(["guide", "worker"]).out).toContain(NEW);
+  const legacy = agt(["guide", "worker"], { env: { AGT_THREAD: "009" } }).out;
+  expect(legacy).toContain(OLD);
+  expect(legacy).not.toContain(NEW);
+  expect(agt(["guide", "worker"], { env: { AGT_THREAD: "010" } }).out).toContain(NEW);
+  expect(agt(["guide", "worker"], { env: { AGT_THREAD: "042" } }).out).toContain(NEW);
+});
+
 test("agt guide with an unknown role is a usage error", () => {
   const r = agt(["guide", "nope"]);
   expect(r.code).toBe(2);

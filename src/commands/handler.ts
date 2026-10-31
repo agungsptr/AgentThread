@@ -337,12 +337,23 @@ function newThread(state: State, cmd: Extract<Command, { cmd: "thread.new" }>, c
   const next = Math.max(0, ...[...state.threads.keys()].map(Number)) + 1;
   const id = String(next).padStart(3, "0");
   const slug = slugify(cmd.title);
-  const task = cmd.task ?? slug;
-  if (!TASK_NAME.test(task)) reject(`task name must match ${TASK_NAME.source}`);
-  const dir = join(ctx.root, ".worktrees", task);
   // A legacy thread's worktree sits at the same level, so its name is taken too.
-  const owner = [...state.threads.values()].find((t) => t.task === task || t.dir === dir || t.worktree === dir);
-  if (owner) reject(`task ${task} is already used by thread ${owner.id}`);
+  const ownerOf = (name: string) => {
+    const at = join(ctx.root, ".worktrees", name);
+    return [...state.threads.values()].find((t) => t.task === name || t.dir === at || t.worktree === at);
+  };
+  let task: string;
+  if (cmd.task !== undefined) {
+    task = cmd.task;
+    if (!TASK_NAME.test(task)) reject(`task name must match ${TASK_NAME.source}`);
+    const owner = ownerOf(task);
+    if (owner) reject(`task ${task} is already used by thread ${owner.id}`);
+  } else {
+    // A derived name (the slug always matches TASK_NAME) that is taken gets the first free numeric suffix.
+    task = slug;
+    for (let n = 2; ownerOf(task); n++) task = `${slug}-${n}`;
+  }
+  const dir = join(ctx.root, ".worktrees", task);
   const status: ThreadStatus = depsDone(state, cmd.dependsOn) ? "open" : "blocked";
   return {
     events: [
