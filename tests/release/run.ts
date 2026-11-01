@@ -169,7 +169,7 @@ async function runRow(sc: Scenario): Promise<{ status: "PASS" | "FAIL"; reason?:
     note(`isolated Herdr session ${server.session}, ${socketLine} (live: ${process.env.HERDR_SOCKET_PATH ?? "none inherited"})`);
     if (sc.workspace) {
       // Two repos (api, web) under a root that is no repo; the builder already ran agt init there.
-      root = await scratchWorkspace(sc.wsHints);
+      root = await scratchWorkspace(sc.wsHints, undefined, xdg);
       writeWorkspaceConfig(root, sc.agents, sc.config);
       note(`scratch workspace ${root}`);
     } else {

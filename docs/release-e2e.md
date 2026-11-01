@@ -88,16 +88,28 @@ still running in the scratch repo is killed. Check afterwards with
 ### Workspace rows
 
 Every workspace row runs on Claude Code (except the worker of `ws-happy-worker-<agent>`). A row that runs a thread
-answers each `thread.waiting` by typing into the coordinator's pane. The rows marked 40m run a whole thread and need
-`--timeout 40m`, for example `bun run e2e:release --only ws-happy-claude-code,ws-cleanup --timeout 40m`.
+answers each `thread.waiting` by typing into the coordinator's pane. Every row that starts an agent runs main: main's
+pane answers Claude Code's trust dialog for the new scratch root, and the thread directories and worktrees under it
+inherit that trust. The rows where the user creates the thread (`ws-edge-*`, `ws-stack-lock`, `ws-tab-shell`) wait for
+main to go idle first; only `ws-smoke-worktrees` and `ws-edge-stage-gates` (no agents) run `agt start --no-manager`.
+
+How to run them:
+
+- `--agents` must include `claude-code`: a row whose roles name an agent not listed is dropped.
+- Canary first (minutes): `bun run e2e:release --only ws-smoke-worktrees,ws-edge-stage-gates,ws-tab-shell --agents claude-code`.
+- Then the heavy rows, marked 40m below, which run a whole thread: `bun run e2e:release --only
+  ws-happy-claude-code,ws-cleanup,ws-edge-return,ws-edge-out-of-ticket,ws-stack-lock[,ws-happy-worker-<x>] --agents
+  claude-code[,<x>] --timeout 40m`. Budget up to about 40 minutes per heavy row.
 
 - `ws-smoke-worktrees`: no model calls. The harness creates a task thread and adds a worktree per repo.
 - `ws-happy-claude-code` and `ws-happy-worker-<agent>` (coordinator on Claude Code), 40m: main gets the task; the thread
   runs to review; tickets, `wip/<task>` commits, stages 7, 8 and 10, the `feat/<task>` squash and its `bun test` are
   checked.
 - `ws-edge-out-of-ticket`, 40m: api's `AGENTS.md` says to add a line to `CHANGELOG.md` whenever `src/slugify.ts`
-  changes, and no ticket lists it. No commit on `wip/<task>` may touch `CHANGELOG.md`; the api slugify ticket ends
-  reviewed or blocked.
+  changes; the task text tells the coordinator that `CHANGELOG.md` is not part of the task, so no ticket lists it. No
+  commit on `wip/<task>` may touch `CHANGELOG.md`; how the api slugify ticket ended (reviewed or blocked) is a note. If
+  a ticket lists `CHANGELOG.md` anyway, the premise is not met: an inconclusive note, and such commits need only stay
+  inside a ticket.
 - `ws-edge-return`, 40m: the coordinator is told to return the first ticket once ("add a test for an empty string").
   The ticket is returned, reviewed again (by its still-live worker, else a new worker session), then accepted.
 - `ws-edge-stage-gates`: no model calls; a browser URL is configured, so stage 8 is open. The scenario drives git and
@@ -109,10 +121,12 @@ answers each `thread.waiting` by typing into the coordinator's pane. The rows ma
   apart (each restart sleeps 5s).
 - `ws-cleanup`, 40m: after the happy flow the user runs `agt thread status <id> done` and `agt thread cleanup <id>`:
   `thread.cleaned`, both worktrees and `wip/<task>` gone, `feat/<task>` kept.
-- `ws-tab-shell`: no model calls beyond the coordinator's start. The first coordinator's agent process has
+- `ws-tab-shell`: no model calls beyond main's and the coordinator's start. The first coordinator's agent process has
   `AGT_AGENT_PROCESS=1` (its env is read with `ps -E`, or `/proc/<pid>/environ` on Linux). The user's shell split in the
   thread's tab does not; that shell's commit on `wip/<task>` succeeds. Both environments are recorded as notes (`AGT_`
-  variables only).
+  variables only). Each line typed into that shell starts with a space after `HISTFILE=/dev/null`, so none reaches the
+  user's shell history. A `FLAG:` note says when the split shell did not inherit the tab's `AGT_ROLE`/`AGT_THREAD`
+  (then the marker logic was not exercised).
 
 ## Reading the report
 

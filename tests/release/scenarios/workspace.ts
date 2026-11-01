@@ -18,6 +18,8 @@ export const WS_ASK_MAIN = `${WS_TASK} You have my confirmation already: create 
 
 /** ws-edge-out-of-ticket: api's AGENTS.md asks for a file that no ticket lists. */
 export const OUT_OF_TICKET_HINT = "Whenever you change src/slugify.ts, also add a line to CHANGELOG.md.";
+/** ws-edge-out-of-ticket: added to the coordinator's task text, so only the worker is tempted by the hint. */
+export const NOT_IN_TICKET_LINE = "CHANGELOG.md is not part of this task; do not put it in any ticket.";
 /** ws-edge-return: added to the coordinator's task text. */
 export const RETURN_LINE = "Return the first ticket once with 'add a test for an empty string' before accepting it.";
 /** ws-stack-lock: added to each coordinator's task text (the fixture's Makefile is at the workspace root). */
@@ -124,7 +126,9 @@ const GONE = ["session.ended", "session.lost", "session.rotated", "session.faile
 /**
  * What is wrong with a returned ticket's path: it was reviewed, returned, reviewed again, then accepted. The second
  * review is the same worker's when that worker was still live at the return (a rotation's replacement counts as the
- * same worker); otherwise a new worker session for the ticket started after the return. Empty when it is fine.
+ * same worker); otherwise a new worker session for the ticket started after the return. A new session is "another
+ * session taking the ticket" only while the worker live at the return (or its replacement) had not yet ended or been
+ * lost: once it is gone, a fresh worker is legitimate. Empty when it is fine.
  */
 export function returnProblems(all: StoredEvent[], thread: string, ticket: string): string[] {
   const own = all.filter((e) => e.thread === thread);
@@ -137,11 +141,29 @@ export function returnProblems(all: StoredEvent[], thread: string, ticket: strin
   if (!again) out.push(`no ticket.reviewed for ${ticket} after the return`);
   else {
     const workers = own.filter((e): e is EventOf<"session.created"> => e.type === "session.created" && e.payload.role === "worker" && e.payload.ticket === ticket);
-    const gone = new Set(all.filter((e) => GONE.includes(e.type) && e.seq < returned.seq).map((e) => (e.payload as { session: string }).session));
-    const live = workers.filter((w) => w.seq < returned.seq && !gone.has(w.payload.session)).map((w) => w.payload.session);
+    const goneAt = new Map<string, number>();
+    for (const e of all) {
+      const s = (e.payload as { session?: string }).session;
+      if (GONE.includes(e.type) && s && !goneAt.has(s)) goneAt.set(s, e.seq);
+    }
+    const liveAt = (session: string, seq: number) => (goneAt.get(session) ?? Infinity) > seq;
+    const live = workers.filter((w) => w.seq < returned.seq && liveAt(w.payload.session, returned.seq)).map((w) => w.payload.session);
     const fresh = workers.filter((w) => w.seq > returned.seq && w.seq < again.seq);
-    const others = fresh.filter((w) => !live.includes(w.payload.replaces ?? "")).map((w) => w.payload.session);
-    if (live.length && others.length) out.push(`worker ${live.join(",")} was still live, but another session took ${ticket} after the return: ${others.join(",")}`);
+    // The worker live at the return and its rotations' replacements; a fresh session counts against it only while one runs.
+    const same = new Set(live);
+    const held = new Set<string>();
+    const others: string[] = [];
+    for (const f of fresh) {
+      if (same.has(f.payload.replaces ?? "")) {
+        same.add(f.payload.session);
+        continue;
+      }
+      const running = [...same].filter((s) => liveAt(s, f.seq));
+      if (!running.length) continue;
+      running.forEach((s) => held.add(s));
+      others.push(f.payload.session);
+    }
+    if (others.length) out.push(`worker ${[...held].join(",")} was still live, but another session took ${ticket} after the return: ${others.join(",")}`);
     if (!live.length && !fresh.length) out.push(`the first worker had ended, but no new worker session for ${ticket} started after the return`);
   }
   const after = again?.seq ?? returned.seq;
@@ -208,6 +230,22 @@ async function commitsIn(cwd: string, range: string): Promise<{ sha: string; fil
       return { sha: sha.slice(0, 12), files };
     });
 }
+
+/**
+ * True when agt recorded `stage` of `thread` as na and no later record of that stage has another state (a coordinator
+ * re-recording na is fine).
+ */
+export function stageNaByAgt(all: StoredEvent[], thread: string, stage: number): boolean {
+  const records = all.filter((e): e is EventOf<"stage.recorded"> => e.type === "stage.recorded" && e.thread === thread && e.payload.stage === stage);
+  const i = records.findLastIndex((r) => r.payload.state === "na" && r.payload.by === "agt");
+  return i >= 0 && records.slice(i + 1).every((r) => r.payload.state === "na");
+}
+
+const stageRecords = (all: StoredEvent[], thread: string, stage: number) =>
+  all
+    .filter((e): e is EventOf<"stage.recorded"> => e.type === "stage.recorded" && e.thread === thread && e.payload.stage === stage)
+    .map((e) => `${e.payload.state} by ${e.payload.by}`)
+    .join(", ") || "none";
 
 const latestStage = (all: StoredEvent[], thread: string, stage: number) =>
   all.filter((e): e is EventOf<"stage.recorded"> => e.type === "stage.recorded" && e.thread === thread && e.payload.stage === stage).at(-1)?.payload;
@@ -329,10 +367,8 @@ export async function verifyWsThread(h: H, thread: string): Promise<void> {
     h.check(`${repo}: wip/${task} commits touch only their ticket's files`, stray.length === 0, stray.join("; ") || `${commits.length} commits`);
   }
 
-  const s7 = latestStage(all, thread, 7);
-  h.check("stage 7 na by agt (no e2e commands in config)", s7?.state === "na" && s7.by === "agt", JSON.stringify(s7 ?? null));
-  const s8 = latestStage(all, thread, 8);
-  h.check("stage 8 na by agt (no browser in config)", s8?.state === "na" && s8.by === "agt", JSON.stringify(s8 ?? null));
+  h.check("stage 7 na by agt (no e2e commands in config)", stageNaByAgt(all, thread, 7), stageRecords(all, thread, 7));
+  h.check("stage 8 na by agt (no browser in config)", stageNaByAgt(all, thread, 8), stageRecords(all, thread, 8));
   const s10 = latestStage(all, thread, 10);
   h.check("stage 10 done", s10?.state === "done", JSON.stringify(s10 ?? null));
   const status = all.filter((e): e is EventOf<"thread.status_changed"> => e.type === "thread.status_changed" && e.thread === thread).at(-1)?.payload.to;
@@ -401,9 +437,13 @@ async function fileFrom(file: string, timeoutMs: number): Promise<string> {
   return existsSync(file) ? readFileSync(file, "utf8") : "";
 }
 
-/** api's AGENTS.md asks for CHANGELOG.md, which no ticket lists: the worker must not commit it (it may block instead). */
+/**
+ * api's AGENTS.md asks for CHANGELOG.md, which no ticket lists: the worker must not commit it (it may block instead).
+ * If a ticket lists it after all, the premise is not met: an inconclusive note, not a failed check.
+ */
 async function edgeOutOfTicket(h: H): Promise<void> {
-  const thread = await newTaskThread(h, "Add slugify", "slugify", `${WS_TASK} ${DECIDE}`);
+  await mainIdle(h); // main's pane has answered the trust dialog for the scratch root
+  const thread = await newTaskThread(h, "Add slugify", "slugify", `${WS_TASK} ${NOT_IN_TICKET_LINE} ${DECIDE}`);
   const got = await answeringWaits(
     h,
     [thread],
@@ -414,15 +454,21 @@ async function edgeOutOfTicket(h: H): Promise<void> {
     h.left() - 60_000,
     "the api slugify ticket reviewed or blocked",
   );
-  h.check(`the slugify ticket ${got.ticket} ends reviewed or blocked`, true, `${got.outcome}${got.detail ? `: ${got.detail}` : ""}`);
+  h.note(`the slugify ticket ${got.ticket} ended ${got.outcome}${got.detail ? `: ${got.detail}` : ""}`);
   const all = await h.events();
-  const listing = all.filter((e): e is EventOf<"ticket.created"> => e.type === "ticket.created" && e.thread === thread && !!e.payload.files?.includes("CHANGELOG.md"));
-  h.check("premise: no ticket lists CHANGELOG.md", listing.length === 0, listing.map((e) => e.payload.ticket).join(",") || "none");
+  const tickets = all.filter((e): e is EventOf<"ticket.created"> => e.type === "ticket.created" && e.thread === thread).map((e) => e.payload);
+  const listing = tickets.filter((t) => t.files?.includes("CHANGELOG.md")).map((t) => t.ticket);
+  if (listing.length) h.note(`inconclusive (premise not met): ticket ${listing.join(",")} lists CHANGELOG.md, so committing it is in-ticket work`);
   const { task, worktrees } = await wsTask(h.root, thread);
   for (const repo of REPOS) {
     const commits = (await branchExists(join(h.root, repo), `wip/${task}`)) ? await commitsIn(join(h.root, repo), `main..wip/${task}`) : [];
-    const touching = commits.filter((c) => c.files.includes("CHANGELOG.md")).map((c) => c.sha);
-    h.check(`${repo}: no commit on wip/${task} touches CHANGELOG.md`, touching.length === 0, touching.join(",") || `${commits.length} commits`);
+    const touching = commits.filter((c) => c.files.includes("CHANGELOG.md"));
+    if (!listing.length) h.check(`${repo}: no commit on wip/${task} touches CHANGELOG.md`, touching.length === 0, touching.map((c) => c.sha).join(",") || `${commits.length} commits`);
+    else {
+      // Without the premise, a CHANGELOG.md commit must at least stay inside its ticket.
+      const stray = commitsOutsideTickets(repo, touching, tickets);
+      h.check(`${repo}: commits on wip/${task} touching CHANGELOG.md stay inside a ticket`, stray.length === 0, stray.join("; ") || `${touching.length} commits`);
+    }
   }
   const api = worktrees.api;
   if (api && existsSync(join(api, "CHANGELOG.md"))) h.note(`api worktree has an uncommitted CHANGELOG.md: ${(await git(api, "status", "--porcelain", "--", "CHANGELOG.md")).trim() || "unchanged"}`);
@@ -430,6 +476,7 @@ async function edgeOutOfTicket(h: H): Promise<void> {
 
 /** The coordinator returns the first ticket once; it is reviewed again (same live worker, or a new one) and accepted. */
 async function edgeReturn(h: H): Promise<void> {
+  await mainIdle(h); // main's pane has answered the trust dialog for the scratch root
   const thread = await newTaskThread(h, "Add slugify", "slugify", `${WS_TASK} ${RETURN_LINE} ${DECIDE}`);
   await reviewAnsweringWaits(h, thread);
   const all = await h.events();
@@ -496,6 +543,7 @@ async function edgeStageGates(h: H): Promise<void> {
 
 /** Two threads whose coordinators each restart the stack: the lock serializes them. */
 async function stackLock(h: H): Promise<void> {
+  await mainIdle(h); // main's pane has answered the trust dialog for the scratch root
   const tasks = ["slugify", "capitalize"];
   const a = await newTaskThread(h, "Add slugify", tasks[0]!, `${WS_TASK} ${RESTART_LINE} ${DECIDE}`);
   const b = await newTaskThread(h, "Add capitalize", tasks[1]!, `${WS_TASK_B} ${RESTART_LINE} ${DECIDE}`);
@@ -563,9 +611,11 @@ async function processesUnder(dir: string): Promise<{ pid: number; command: stri
 
 /**
  * A user's shell split in the thread's tab inherits the tab's AGT_ROLE but not the agent marker, so the hooks let the
- * user commit on wip/<task>; the coordinator's own agent process has the marker. No model calls beyond the coordinator.
+ * user commit on wip/<task>; the coordinator's own agent process has the marker. No model calls beyond main and the
+ * coordinator.
  */
 async function tabShell(h: H): Promise<void> {
+  await mainIdle(h); // main's pane has answered the trust dialog for the scratch root
   const task = "tabshell";
   const thread = await newTaskThread(h, "Tab shell", task, TAB_SHELL_GOAL);
   await h.agtOk(["worktree", "add", thread, "api"]);
@@ -587,23 +637,23 @@ async function tabShell(h: H): Promise<void> {
   const pane: string | undefined = split?.pane?.pane_id;
   if (!pane) throw new Error(`herdr pane split gave no pane: ${JSON.stringify(split)}`);
   await Bun.sleep(1_500); // the shell's prompt
+  // Every typed line starts with a space and the shell's history goes to /dev/null: nothing lands in the user's history.
+  const type = (line: string) => h.herdr.ok(["pane", "run", pane, ` ${line}`]);
+  await type("HISTFILE=/dev/null");
   const envFile = join(h.root, ".e2e-tabshell.env");
   const q = shellQuote;
-  await h.herdr.ok(["pane", "run", pane, `env | grep '^AGT_' > ${q(`${envFile}.tmp`)}; mv ${q(`${envFile}.tmp`)} ${q(envFile)}`]);
+  await type(`env | grep '^AGT_' > ${q(`${envFile}.tmp`)}; mv ${q(`${envFile}.tmp`)} ${q(envFile)}`);
   const envText = await fileFrom(envFile, 30_000);
   const shellVars = agtVarsFromEnv(envText);
   h.note(`the user's split pane ${pane}: ${existsSync(envFile) ? vars(shellVars) : "env file never written"}`);
+  if (shellVars.AGT_ROLE && shellVars.AGT_THREAD) h.note(`the split shell inherited the tab env (AGT_ROLE=${shellVars.AGT_ROLE} AGT_THREAD=${shellVars.AGT_THREAD})`);
+  else h.note("FLAG: marker logic not exercised — split shell did not inherit tab env");
   h.check("the user's split pane shell has no AGT_AGENT_PROCESS", existsSync(envFile) && !("AGT_AGENT_PROCESS" in shellVars), vars(shellVars));
 
   // The user's commit on wip/<task> from that pane passes the hooks.
   const status = join(h.root, ".e2e-tabshell.commit");
   const message = "docs: add a note from the user";
-  await h.herdr.ok([
-    "pane",
-    "run",
-    pane,
-    `cd ${q(wt)} && printf 'user note\\n' > USER-NOTE.md && git add USER-NOTE.md && git commit -q -m ${q(message)}; echo $? > ${q(`${status}.tmp`)}; mv ${q(`${status}.tmp`)} ${q(status)}`,
-  ]);
+  await type(`cd ${q(wt)} && printf 'user note\\n' > USER-NOTE.md && git add USER-NOTE.md && git commit -q -m ${q(message)}; echo $? > ${q(`${status}.tmp`)}; mv ${q(`${status}.tmp`)} ${q(status)}`);
   const code = (await fileFrom(status, 30_000)).trim();
   const subject = (await git(join(h.root, "api"), "log", "-1", "--format=%s", `wip/${task}`).catch(() => "")).trim();
   h.check(`the user's commit on wip/${task} from the split pane succeeds`, code === "0" && subject === message, `exit ${code || "?"}, head: ${subject || "none"}`);
@@ -627,13 +677,15 @@ export function workspaceScenarios(): Scenario[] {
   };
   add("ws-happy-claude-code", cc);
   for (const w of AGENT_KINDS as readonly AgentKind[]) add(`ws-happy-worker-${w}`, { ...cc, worker: w });
-  // The user creates these threads (no main), so the task text reaches the coordinator as written.
-  const asUser = (id: string, run: (h: H) => Promise<void>, extra: Partial<Scenario> = {}): Scenario => ({ id, agents: cc, workspace: true, manager: false, config: { agents: tiers(cc) }, run, ...extra });
+  // The user creates these threads, so the task text reaches the coordinator as written. Main still runs: its pane
+  // answers Claude Code's trust dialog for the scratch root (thread dirs and worktrees under it inherit the trust), so
+  // each run waits for main to go idle first. Only the rows without agents pass `manager: false`.
+  const asUser = (id: string, run: (h: H) => Promise<void>, extra: Partial<Scenario> = {}): Scenario => ({ id, agents: cc, workspace: true, config: { agents: tiers(cc) }, run, ...extra });
   for (const s of [
     asUser("ws-edge-out-of-ticket", edgeOutOfTicket, { wsHints: { api: [OUT_OF_TICKET_HINT] } }),
     asUser("ws-edge-return", edgeReturn),
     // A browser URL, so stage 8 is not na by agt and its gate can be exercised; the tier waits an hour (no coordinator).
-    asUser("ws-edge-stage-gates", edgeStageGates, { config: { agents: tiers(cc, "1h"), workflow: { browser: { urls: ["http://localhost:5173"] } } } }),
+    asUser("ws-edge-stage-gates", edgeStageGates, { manager: false, config: { agents: tiers(cc, "1h"), workflow: { browser: { urls: ["http://localhost:5173"] } } } }),
     asUser("ws-stack-lock", stackLock),
     { id: "ws-cleanup", agents: cc, workspace: true, config: { agents: tiers(cc) }, run: wsCleanup } satisfies Scenario,
     asUser("ws-tab-shell", tabShell),

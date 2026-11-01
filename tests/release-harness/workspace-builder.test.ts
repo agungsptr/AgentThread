@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "yaml";
@@ -89,4 +89,28 @@ test("writeWorkspaceConfig keeps the workspace and stack, sets the row's agents 
   expect(raw.agents.autonomous).toBe(true);
   expect(raw.agents.complexity.timeout).toBe("1h");
   expect(loadConfig(root).agents.roles.worker.agent).toBe("opencode");
+});
+
+test("the builder's agt init reads the given XDG_CONFIG_HOME, not the user's", async () => {
+  // A user config whose banned word agt init renders into .agentthread/banned-words: it shows which config init read.
+  const xdg = realpathSync(mkdtempSync(join(tmpdir(), "agt-e2e-repo-xdg-test-")));
+  roots.push(xdg);
+  mkdirSync(join(xdg, "agentthread"), { recursive: true });
+  writeFileSync(join(xdg, "agentthread", "config.yaml"), "workflow:\n  banned_words: [xdg-probe-word]\n");
+  const banned = (root: string) => (existsSync(join(root, ".agentthread", "banned-words")) ? readFileSync(join(root, ".agentthread", "banned-words"), "utf8") : "");
+  const given = await scratchWorkspace({}, undefined, xdg);
+  roots.push(given);
+  expect(banned(given)).toContain("xdg-probe-word");
+  // Without one, the builder's own config home leaves the agentthread config out, even the parent's XDG one.
+  const before = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = xdg;
+  try {
+    const own = await scratchWorkspace();
+    roots.push(own);
+    expect(existsSync(paths(own).db)).toBe(true);
+    expect(banned(own)).not.toContain("xdg-probe-word");
+  } finally {
+    if (before === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = before;
+  }
 });

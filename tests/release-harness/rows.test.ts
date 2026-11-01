@@ -8,12 +8,14 @@ import {
   commitsOutsideTickets,
   featDiffProblems,
   maxHolders,
+  NOT_IN_TICKET_LINE,
   OUT_OF_TICKET_HINT,
   outOfTicketOutcome,
   RESTART_LINE,
   RETURN_LINE,
   returnProblems,
   stackLogProblems,
+  stageNaByAgt,
   WS_ASK_MAIN,
   WS_TASK,
 } from "../release/scenarios/workspace.ts";
@@ -128,15 +130,20 @@ test("the ask to main carries the task, the confirmation and the decide-yourself
 
 const row = (id: string) => allScenarios().find((s) => s.id === id)!;
 
-test("the edge, lock, cleanup and tab-shell rows: Claude Code everywhere, the CLI-driven ones without a manager", () => {
+test("the edge, lock, cleanup and tab-shell rows: Claude Code everywhere; only the no-agent rows run without a manager", () => {
   const cc = { main: "claude-code", coordinator: "claude-code", worker: "claude-code" } as const;
   for (const id of ["ws-edge-out-of-ticket", "ws-edge-return", "ws-edge-stage-gates", "ws-stack-lock", "ws-cleanup", "ws-tab-shell"]) {
     expect(row(id).agents).toEqual(cc);
     expect(row(id).workspace).toBe(true);
   }
-  for (const id of ["ws-edge-out-of-ticket", "ws-edge-return", "ws-edge-stage-gates", "ws-stack-lock", "ws-tab-shell"]) expect(row(id).manager).toBe(false);
-  // The cleanup row runs the happy flow through main.
-  expect(row("ws-cleanup").manager).toBeUndefined();
+  // Main answers Claude Code's trust dialog for the scratch root before any coordinator starts there.
+  for (const id of ["ws-edge-out-of-ticket", "ws-edge-return", "ws-stack-lock", "ws-cleanup", "ws-tab-shell"]) expect(row(id).manager).toBeUndefined();
+  // No agent runs in these two.
+  expect(allScenarios().filter((s) => s.id.startsWith("ws-") && s.manager === false).map((s) => s.id).sort()).toEqual(["ws-edge-stage-gates", "ws-smoke-worktrees"]);
+});
+
+test("ws-edge-out-of-ticket keeps CHANGELOG.md out of the tickets in its task text", () => {
+  expect(NOT_IN_TICKET_LINE).toBe("CHANGELOG.md is not part of this task; do not put it in any ticket.");
 });
 
 test("ws-edge-out-of-ticket puts the CHANGELOG hint in api's AGENTS.md only", () => {
@@ -208,6 +215,21 @@ test("returnProblems: returned once, reviewed again, by the live worker or a new
   // A rotation of the live worker is the same worker, not another session.
   const rotated = ev("session.created", T, { session: "w1b", role: "worker", agent: "claude-code", name: "w1b", ticket: "T1", replaces: "w1" });
   expect(returnProblems([worker("w1"), reviewed(), returned(), rotated, reviewed(), accepted()], T, "T1")).toEqual([]);
+  // The live worker ended after the return, then a new one took the ticket: legitimate.
+  expect(returnProblems([worker("w1"), reviewed(), returned(), ev("session.lost", T, { session: "w1" }), worker("w2"), reviewed(), accepted()], T, "T1")).toEqual([]);
+  expect(returnProblems([worker("w1"), reviewed(), returned(), ev("session.ended", T, { session: "w1" }), worker("w2"), reviewed(), accepted()], T, "T1")).toEqual([]);
+  // A new session while the live worker still runs (it ends only later) is another session taking the ticket.
+  expect(returnProblems([worker("w1"), reviewed(), returned(), worker("w2"), ev("session.ended", T, { session: "w1" }), reviewed(), accepted()], T, "T1")).toEqual([
+    "worker w1 was still live, but another session took T1 after the return: w2",
+  ]);
+  // After a rotation, the replacement is the worker: a new session while it runs counts, after it ended does not.
+  const w1b = () => ev("session.created", T, { session: "w1b", role: "worker", agent: "claude-code", name: "w1b", ticket: "T1", replaces: "w1" });
+  expect(returnProblems([worker("w1"), reviewed(), returned(), ev("session.rotated", T, { session: "w1" }), w1b(), worker("w2"), reviewed(), accepted()], T, "T1")).toEqual([
+    "worker w1b was still live, but another session took T1 after the return: w2",
+  ]);
+  expect(
+    returnProblems([worker("w1"), reviewed(), returned(), ev("session.rotated", T, { session: "w1" }), w1b(), ev("session.ended", T, { session: "w1b" }), worker("w2"), reviewed(), accepted()], T, "T1"),
+  ).toEqual([]);
   expect(returnProblems([worker("w1"), reviewed(), accepted()], T, "T1")).toEqual(["T1 was never returned"]);
   expect(returnProblems([worker("w1"), reviewed(), returned()], T, "T1")).toEqual(["no ticket.reviewed for T1 after the return", "T1 is not accepted after the return"]);
   expect(returnProblems([worker("w1"), returned(), reviewed(), accepted()], T, "T1")).toEqual(["T1 was returned before any review"]);
@@ -236,4 +258,21 @@ test("agtVarsFromPs and agtVarsFromEnv keep only AGT_ variables", () => {
   // /proc/<pid>/environ is NUL-separated.
   expect(agtVarsFromEnv("AGT_AGENT_PROCESS=1\0TOKEN=x\0AGT_THREAD=2\0")).toEqual({ AGT_AGENT_PROCESS: "1", AGT_THREAD: "2" });
   expect(agtVarsFromEnv("")).toEqual({});
+});
+
+test("stageNaByAgt: an agt na record with no later non-na record of that stage", () => {
+  const T = "5";
+  const st = (stage: number, state: string, by: string, thread = T) => ev("stage.recorded", thread, { stage, state, by });
+  expect(stageNaByAgt([st(7, "na", "agt")], T, 7)).toBe(true);
+  // A coordinator re-recording na is fine.
+  expect(stageNaByAgt([st(7, "na", "agt"), st(7, "na", "coordinator")], T, 7)).toBe(true);
+  // Another stage's or thread's records do not count.
+  expect(stageNaByAgt([st(7, "na", "agt"), st(8, "done", "coordinator"), st(7, "done", "coordinator", "9")], T, 7)).toBe(true);
+  // A later non-na state overrides it.
+  expect(stageNaByAgt([st(7, "na", "agt"), st(7, "done", "coordinator")], T, 7)).toBe(false);
+  // na only by someone else, or no record at all.
+  expect(stageNaByAgt([st(7, "na", "coordinator")], T, 7)).toBe(false);
+  expect(stageNaByAgt([], T, 7)).toBe(false);
+  // A non-na before agt's na does not matter.
+  expect(stageNaByAgt([st(7, "pending", "coordinator"), st(7, "na", "agt")], T, 7)).toBe(true);
 });

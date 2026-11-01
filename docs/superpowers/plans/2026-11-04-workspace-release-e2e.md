@@ -152,5 +152,5 @@ Before a release, the user runs it once with consent.
 Not dispatched to an implementer.
 
 - [ ] **Step 1: Ask the user.** The question: "Run the workspace release rows now (real Herdr in isolated sessions, real Claude Code and the agents you pick, about N minutes)?" Name the agents found by `detectAgents`.
-- [ ] **Step 2: Run, on yes only.** `bun run e2e:release --only ws-smoke-worktrees,ws-edge-stage-gates,ws-tab-shell,ws-happy-claude-code,… --agents <the user's pick>`.
+- [ ] **Step 2: Run, on yes only.** `--agents` must include `claude-code` (a row whose roles name an unlisted agent is dropped). Canary first: `bun run e2e:release --only ws-smoke-worktrees,ws-edge-stage-gates,ws-tab-shell --agents claude-code`. Then the heavy rows: `bun run e2e:release --only ws-happy-claude-code,ws-cleanup,ws-edge-return,ws-edge-out-of-ticket,ws-stack-lock[,ws-happy-worker-<x>] --agents claude-code[,<x>] --timeout 40m`, where `<x>` is each other agent the user picked. Budget up to about 40 minutes per heavy row.
 - [ ] **Step 3: Record the results.** Write the report path and the result of each row into the followups doc. A failing row becomes a fix task, or a ruling with the user.

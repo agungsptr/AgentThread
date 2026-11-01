@@ -309,9 +309,11 @@ const GIT_IDENTITY = [
 /**
  * A two-repo workspace made from fixture-workspace/ in a new temp dir (or, for tests, the existing `into` dir): `api`
  * and `web` are git repos with one commit on `main`, `hints` are appended to each AGENTS.md before that commit, then
- * `agt init` creates `.docs` and the config lists both repos and the stack commands. Returns the root.
+ * `agt init` creates `.docs` and the config lists both repos and the stack commands. Returns the root. The agt calls
+ * read `xdg` as XDG_CONFIG_HOME (the row's config home); without it, a temporary one made like a row's, so the user's
+ * own agentthread config never reaches the build.
  */
-export async function scratchWorkspace(hints: { api?: string[]; web?: string[] } = {}, into?: string): Promise<string> {
+export async function scratchWorkspace(hints: { api?: string[]; web?: string[] } = {}, into?: string, xdg?: string): Promise<string> {
   if (into !== undefined) assertInScratchBase(into);
   const dir = into !== undefined ? realpathSync(into) : realpathSync(mkdtempSync(join(tmpdir(), TEMP_PREFIX)));
   assertInScratchBase(dir); // before any git
@@ -337,8 +339,13 @@ export async function scratchWorkspace(hints: { api?: string[]; web?: string[] }
       workflow: { stack: { restart: "make restart TASK={task}", status: "make status" } },
     },
   );
-  const init = await agt(dir, ["init"]);
-  if (init.exitCode !== 0) throw new Error(`agt init failed in ${dir}: ${init.stderr.trim() || init.stdout.trim()}`);
+  const home = xdg ?? rowConfigHome();
+  try {
+    const init = await agt(dir, ["init"], { XDG_CONFIG_HOME: home });
+    if (init.exitCode !== 0) throw new Error(`agt init failed in ${dir}: ${init.stderr.trim() || init.stdout.trim()}`);
+  } finally {
+    if (xdg === undefined) removeConfigHome(home);
+  }
   return dir;
 }
 
