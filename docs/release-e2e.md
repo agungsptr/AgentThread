@@ -82,6 +82,11 @@ still running in the scratch repo is killed. Check afterwards with
   (`max_turns: 3`), `edge-rotate-age` (`max_age: 2m`), `edge-daemon-restart`, `edge-herdr-restart`, `edge-tab-closed`,
   `edge-missing-binary`, `edge-bad-model` (a coordinator on a model that does not exist: the stall watchdog's
   `session.stalled` notice reaches main after its first turn).
+- Workspace (`tests/release/fixture-workspace/`: repos `api` and `web` under a root that is no repo):
+  `ws-smoke-worktrees` (no model calls: the harness creates a task thread and adds a worktree per repo),
+  `ws-happy-claude-code` and `ws-happy-worker-<agent>` (coordinator on Claude Code). A happy row answers each
+  `thread.waiting` by typing into the coordinator's pane. The happy rows need `--timeout 40m`:
+  `bun run e2e:release --only ws-happy-claude-code --timeout 40m`.
 
 ## Reading the report
 

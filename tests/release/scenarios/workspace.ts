@@ -3,23 +3,32 @@ import { join } from "node:path";
 import { AGENT_KINDS, type AgentKind, type StoredEvent } from "../../../src/domain/types.ts";
 import { spawnAsync } from "../../../src/herdr/bridge.ts";
 import { paths } from "../../../src/project/paths.ts";
-import { assertInScratchBase, cleanEnv, git, isSymlinkTo, type EventOf, type RoleAgents } from "../harness.ts";
-import { askForThread, closeThread, mainIdle, sessionsOf, tiers, type H, type Scenario } from "./common.ts";
+import { assertInScratchBase, cleanEnv, git, isSymlinkTo, say, type EventOf, type RoleAgents } from "../harness.ts";
+import { actingCoordinator, askForThread, closeThread, mainIdle, sessionsOf, tiers, type H, type Scenario } from "./common.ts";
 
 /** The shared workspace task (plan Global Constraints, verbatim). */
 export const WS_TASK =
   "Add a `slugify(s)` function to api (`src/slugify.ts`, unit tests) and use it in web to display a slug of the title (`src/title.ts`, unit tests). Use the source branch `main`; do not ask me about it.";
 
-/** The request to main: the task, with the confirmation given up front. */
-export const WS_ASK_MAIN = `${WS_TASK} You have my confirmation already: create the thread without asking me to confirm it.`;
+/** The request to main: the task, with the confirmation given up front and the details left to the agents. */
+export const WS_ASK_MAIN =
+  `${WS_TASK} You have my confirmation already: create the thread without asking me to confirm it. ` +
+  "Decide details yourself with your recommendations; only stop for me if something is truly blocked.";
+
+/** What the user types into the coordinator's pane when the thread waits for them. */
+export const WAITING_ANSWER = "Go with your recommendations; decide the rest yourself and don't wait for me again.";
+
+/** Time kept after the review wait for the row's own checks: two `bun test` runs, git, and the tab closing. */
+const BUN_TEST_MS = 120_000;
+const AFTER_REVIEW_MS = 2 * BUN_TEST_MS + 120_000;
 
 const REPOS = ["api", "web"] as const;
 
-/** What a squash commit message must not carry: agent attribution, private doc paths, ticket ids. */
+/** What a squash commit message must not carry, as the product's commit-msg guard has it (agents-md.ts). */
 const BANNED: { name: string; re: RegExp }[] = [
-  { name: "Co-Authored-By", re: /co-authored-by/i },
+  { name: "Co-Authored-By", re: /co-authored-by:/i },
   { name: "Generated with", re: /generated with/i },
-  { name: ".docs/", re: /\.docs\// },
+  { name: ".docs/", re: /\.docs\//i },
   { name: "T<n>", re: /\bT[0-9]{1,4}\b/ },
 ];
 
@@ -46,6 +55,17 @@ export function commitsOutsideTickets(
     out.push(`${c.sha}: ${stray.length ? stray.join(", ") : `spans more than one ticket (${c.files.join(", ")})`}`);
   }
   return out;
+}
+
+/**
+ * What is wrong with a repo's feat diff: it must change something, and only files the repo's tickets list (their
+ * union: the squash carries every ticket). Empty when it is fine.
+ */
+export function featDiffProblems(repo: string, files: string[], tickets: { repo?: string; files?: string[] }[]): string[] {
+  if (!files.length) return ["no changes"];
+  const listed = new Set(tickets.filter((t) => t.repo === repo).flatMap((t) => t.files ?? []));
+  const stray = files.filter((f) => !listed.has(f));
+  return stray.length ? [`outside the tickets: ${stray.join(", ")}`] : [];
 }
 
 /** `git log --name-only` of `range` in `cwd`, without merges: each commit's sha and changed files. */
@@ -100,7 +120,8 @@ async function smokeWorktrees(h: H): Promise<void> {
   }
   const brief = join(paths(h.root).threadDir({ id: thread, slug: created.payload.slug }), "brief.md");
   const text = await briefWith(brief, [/^### api$/m, /^### web$/m], 20_000);
-  h.check("brief.md lists both repos", /^### api$/m.test(text) && /^### web$/m.test(text), brief);
+  const lists = /^### api$/m.test(text) && /^### web$/m.test(text);
+  h.check("brief.md lists both repos", lists, lists ? brief : `${brief}: ${text ? text.slice(-600) : "never written"}`);
   const sessions = (await h.events()).filter((e) => e.type === "session.created" && e.thread === thread);
   h.check("no session started for the proposed thread (no model calls)", sessions.length === 0, `${sessions.length}`);
 }
@@ -109,9 +130,37 @@ async function smokeWorktrees(h: H): Promise<void> {
 async function wsHappy(h: H): Promise<void> {
   await mainIdle(h);
   const thread = await askForThread(h, WS_ASK_MAIN);
-  await h.waitFor("thread.status_changed", (e) => e.thread === thread && e.payload.to === "review", h.left() - 120_000, `thread ${thread} in review`);
+  await reviewAnsweringWaits(h, thread);
   await verifyWsThread(h, thread);
   await closeThread(h, thread);
+}
+
+/**
+ * Waits for the thread to reach review, keeping AFTER_REVIEW_MS for the checks. Each thread.waiting on the way is
+ * answered as the user would: typed into the acting coordinator's pane (the coordinator talks to the user there).
+ */
+async function reviewAnsweringWaits(h: H, thread: string): Promise<void> {
+  let after = 0;
+  for (;;) {
+    const e = await h.waitFor(
+      ["thread.waiting", "thread.status_changed"],
+      (e) => e.thread === thread && e.seq > after && (e.type === "thread.waiting" || e.payload.to === "review"),
+      h.left() - AFTER_REVIEW_MS,
+      `thread ${thread} in review`,
+    );
+    after = e.seq;
+    if (e.type === "thread.status_changed") return;
+    const all = await h.events();
+    // Already past it: a wait that was followed by review needs no answer.
+    if (all.some((x) => x.type === "thread.status_changed" && x.thread === thread && x.seq > e.seq && x.payload.to === "review")) continue;
+    const c = actingCoordinator(all, thread);
+    if (!c?.pane) {
+      h.note(`thread ${thread} waits (${e.payload.what}) but has no coordinator pane to answer in`);
+      continue;
+    }
+    await say(h.herdr, c.pane, WAITING_ANSWER);
+    h.note(`thread ${thread} waited for the user (${e.payload.what}); answered in coordinator pane ${c.pane}`);
+  }
 }
 
 export async function verifyWsThread(h: H, thread: string): Promise<void> {
@@ -145,6 +194,8 @@ export async function verifyWsThread(h: H, thread: string): Promise<void> {
     h.check(`${repo}: wip/${task} commits touch only their ticket's files`, stray.length === 0, stray.join("; ") || `${commits.length} commits`);
   }
 
+  const s7 = latestStage(all, thread, 7);
+  h.check("stage 7 na by agt (no e2e commands in config)", s7?.state === "na" && s7.by === "agt", JSON.stringify(s7 ?? null));
   const s8 = latestStage(all, thread, 8);
   h.check("stage 8 na by agt (no browser in config)", s8?.state === "na" && s8.by === "agt", JSON.stringify(s8 ?? null));
   const s10 = latestStage(all, thread, 10);
@@ -161,6 +212,9 @@ export async function verifyWsThread(h: H, thread: string): Promise<void> {
       const main = (await git(repoPath, "rev-parse", "main")).trim();
       const count = (await git(repoPath, "rev-list", "--count", `main..${feat}`)).trim();
       h.check(`${repo}: ${feat} is one commit over main`, parent === main && count === "1", `${count} commits, parent ${parent.slice(0, 12)}`);
+      const diff = (await git(repoPath, "diff", "--name-only", "main", feat)).split("\n").filter(Boolean);
+      const outside = featDiffProblems(repo, diff, tickets);
+      h.check(`${repo}: ${feat} changes only its tickets' files`, outside.length === 0, outside.join("; ") || diff.join(", "));
       const problems = commitMessageProblems(await git(repoPath, "log", "-1", "--format=%B", feat));
       h.check(`${repo}: ${feat} message has no attribution, .docs/ path or ticket id`, problems.length === 0, problems.join(", ") || "clean");
       ready.push(repo);
@@ -188,7 +242,7 @@ async function testFeatCheckouts(h: H, feat: string, repos: string[]): Promise<v
       made.push(repo);
     }
     for (const repo of made) {
-      const r = await spawnAsync("sh", ["-c", 'cd "$1" && exec "$2" test', "sh", join(base, repo), process.execPath], cleanEnv(), 180_000);
+      const r = await spawnAsync("sh", ["-c", 'cd "$1" && exec "$2" test', "sh", join(base, repo), process.execPath], cleanEnv(), BUN_TEST_MS);
       const tail = (r.stderr + r.stdout).trim().split("\n").slice(-3).join(" | ");
       h.check(`${repo}: bun test passes on ${feat}`, r.exitCode === 0 && !r.timedOut, tail);
     }
@@ -202,7 +256,8 @@ const happy = (id: string, agents: RoleAgents): Scenario => ({ id, agents, works
 
 /**
  * Workspace rows (Plan 13): a no-model smoke of task worktrees, then the happy feature flow with Claude Code
- * everywhere and with each other agent as worker (coordinator on Claude Code), minus duplicates.
+ * everywhere and with each other agent as worker (coordinator on Claude Code), minus duplicates. The happy rows need
+ * `--timeout 40m` (docs/release-e2e.md).
  */
 export function workspaceScenarios(): Scenario[] {
   const cc: RoleAgents = { main: "claude-code", coordinator: "claude-code", worker: "claude-code" };

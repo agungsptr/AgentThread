@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { AGENT_KINDS } from "../../src/domain/types.ts";
 import { allScenarios, listRows } from "../release/scenarios/index.ts";
-import { commitMessageProblems, commitsOutsideTickets } from "../release/scenarios/workspace.ts";
+import { commitMessageProblems, commitsOutsideTickets, featDiffProblems, WS_ASK_MAIN, WS_TASK } from "../release/scenarios/workspace.ts";
 
 const ids = () => allScenarios().map((s) => s.id);
 
@@ -50,6 +50,9 @@ test("commitMessageProblems names each banned marker", () => {
   expect(commitMessageProblems("feat: add slugify to api\n\nUsed by the title view.")).toEqual([]);
   expect(commitMessageProblems("feat: x\n\nCo-Authored-By: Someone <a@b.c>")).toEqual(["Co-Authored-By"]);
   expect(commitMessageProblems("feat: x\n\nco-authored-by: Someone <a@b.c>")).toEqual(["Co-Authored-By"]);
+  // The product guard's rule: the trailer needs its colon; .docs/ matches in any case.
+  expect(commitMessageProblems("feat: drop the Co-Authored-By trailer from the template")).toEqual([]);
+  expect(commitMessageProblems("feat: x, see .DOCS/specs")).toEqual([".docs/"]);
   expect(commitMessageProblems("feat: x\n\n🤖 Generated with [Claude Code]")).toEqual(["Generated with"]);
   expect(commitMessageProblems("feat: x, see .docs/specs/kyc.md")).toEqual([".docs/"]);
   expect(commitMessageProblems("feat: x (T1, T12)")).toEqual(["T<n>"]);
@@ -75,4 +78,23 @@ test("commitsOutsideTickets accepts commits inside one ticket's files and names 
   expect(commitsOutsideTickets("web", [{ sha: "w1", files: ["src/title.ts"] }], [])).toEqual(["w1: src/title.ts"]);
   // A commit with no files (an empty commit) touches nothing.
   expect(commitsOutsideTickets("api", [{ sha: "a6", files: [] }], tickets)).toEqual([]);
+});
+
+test("featDiffProblems: the feat diff must be non-empty and inside the repo's tickets' files", () => {
+  const tickets = [
+    { ticket: "T1", repo: "api", files: ["src/slugify.ts", "tests/slugify.test.ts"] },
+    { ticket: "T2", repo: "api", files: ["src/index.ts"] },
+    { ticket: "T3", repo: "web", files: ["src/title.ts"] },
+  ];
+  // Union across the repo's tickets: files of two tickets are fine in the squash.
+  expect(featDiffProblems("api", ["src/slugify.ts", "src/index.ts"], tickets)).toEqual([]);
+  expect(featDiffProblems("api", ["src/slugify.ts", "src/other.ts", "src/title.ts"], tickets)).toEqual(["outside the tickets: src/other.ts, src/title.ts"]);
+  expect(featDiffProblems("api", [], tickets)).toEqual(["no changes"]);
+  expect(featDiffProblems("web", ["src/title.ts"], [])).toEqual(["outside the tickets: src/title.ts"]);
+});
+
+test("the ask to main carries the task, the confirmation and the decide-yourself line", () => {
+  expect(WS_ASK_MAIN.startsWith(WS_TASK)).toBe(true);
+  expect(WS_ASK_MAIN).toContain("create the thread without asking me to confirm");
+  expect(WS_ASK_MAIN).toContain("Decide details yourself with your recommendations; only stop for me if something is truly blocked.");
 });
