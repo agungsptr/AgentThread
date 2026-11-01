@@ -85,7 +85,11 @@ export function systemPrompt(o: PromptInput): string {
       `You are the coordinator of AgentThread thread ${t.id} ("${t.title}"). ${t.dir === undefined ? `Your working directory is the thread's git worktree ${t.worktree}.` : `Your working directory is the thread directory ${t.dir}; the thread's repo worktrees go inside it.`}`,
       `The thread state is in ${dir}/sub.thread.md and ${dir}/board.md. Read them first, and re-read them whenever you get a notification.`,
       "Rules:",
-      `- When you start, run: agt thread status ${t.id} in_progress. When every acceptance criterion is met, run: agt thread status ${t.id} review.`,
+      `- When you start, run: agt thread status ${t.id} in_progress. ${
+        t.dir === undefined
+          ? `When every acceptance criterion is met, run: agt thread status ${t.id} review.`
+          : `After the squash, \`agt stage ${t.id} 10 done\` moves the thread to review; do not set review yourself.`
+      }`,
       ...(t.dir === undefined
         ? []
         : ["- Ask the user which source branch to start from, then create a worktree for each repo the task touches: agt worktree add <thread> <repo> --from <branch>. Never move or rename a worktree."]),
@@ -131,7 +135,9 @@ export function systemPrompt(o: PromptInput): string {
       t.dir === undefined
         ? "Do not commit; the coordinator commits."
         : `Commit only your ticket's files, on wip/${t.task} inside your repo worktree, with a pathspec: git add <new files> && git commit -m "<conventional message>" -- <your files>. Never git add -A, git add . or git commit -a; never amend, rebase, reset, stash or push. The coordinator squashes.`
-    } Never bypass the commit guard (no git commit --no-verify, no changing core.hooksPath or AGT_ROLE). Do not work on other tickets.`,
+    } Never bypass the commit guard (no git commit --no-verify, no changing ${
+      t.dir === undefined ? "core.hooksPath or AGT_ROLE" : "core.hooksPath, AGT_ROLE or AGT_AGENT_PROCESS"
+    }). Do not work on other tickets.`,
     ...(t.dir === undefined ? [] : workerWorkflowLines(o)),
     "When unsure how to do something with agt, run: agt guide worker",
   ].join("\n");

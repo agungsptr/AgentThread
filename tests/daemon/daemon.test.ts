@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { request } from "../../src/daemon/client.ts";
 import { configHash, loadConfig } from "../../src/config/config.ts";
@@ -84,6 +84,20 @@ test("state survives a restart and ids keep counting", async () => {
     ok: true,
     result: { thread: "002" },
   });
+});
+
+test("daemon start rewrites a stale shared hook stub; a project without the guard gets none", async () => {
+  const hooks = join(root, ".agentthread", "hooks");
+  expect(existsSync(hooks)).toBe(false);
+  await daemon.stop();
+  mkdirSync(hooks, { recursive: true });
+  writeFileSync(join(hooks, "stub"), "#!/bin/sh\n# an older agt\nexit 0\n");
+  daemon = await startDaemon(root);
+  const stub = readFileSync(join(hooks, "stub"), "utf8");
+  expect(stub).not.toContain("an older agt");
+  expect(stub).toContain('[ "${AGT_AGENT_PROCESS:-}" = 1 ]');
+  expect(statSync(join(hooks, "stub")).mode & 0o111).not.toBe(0);
+  expect(readlinkSync(join(hooks, "pre-commit"))).toBe("stub");
 });
 
 test("refuses a second daemon and recovers from a stale socket", async () => {

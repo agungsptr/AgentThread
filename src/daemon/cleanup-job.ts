@@ -1,7 +1,7 @@
 import { existsSync, realpathSync } from "node:fs";
 import { lstat, readdir, rm } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import { THREAD_DIR_FILES } from "../agents/agents-md.ts";
+import { threadDirFiles } from "../agents/agents-md.ts";
 import type { Effect } from "../commands/handler.ts";
 import { spawnAsync } from "../herdr/bridge.ts";
 
@@ -33,7 +33,7 @@ export async function cleanupThread(e: CleanupEffect, stopping: () => boolean = 
     if (!(await hasBranch(r.repoPath, `feat/${e.task}`)) && (await hasBranch(r.repoPath, branch))) {
       const own = await git(r.repoPath, ["rev-list", `refs/heads/${branch}`, "--not", `--exclude=${branch}`, "--branches"]);
       if (own.exitCode !== 0 || own.timedOut) return stop(r.repo, `git rev-list failed: ${why(own)}`);
-      if (own.stdout.trim()) return stop(r.repo, `${branch} has commits that were never squashed`);
+      if (own.stdout.trim()) return stop(r.repo, `${branch} has commits that were never squashed; if it was merged another way, delete it with git branch -D ${branch} and run cleanup again`);
     }
     if (!existsSync(r.path)) continue;
     // git may not search above the worktree (the thread directory, or a workspace root that is itself a repo).
@@ -76,11 +76,11 @@ export function canonical(p: string): string {
   }
 }
 
-const GENERATED = new Set(THREAD_DIR_FILES);
-const GENERATED_DIRS = new Set(THREAD_DIR_FILES.flatMap((f) => f.split("/").slice(0, -1).map((_, i, parts) => parts.slice(0, i + 1).join("/"))));
-
 /** Whether `dir` exists and holds nothing but agt's files (and the folders they sit in). Symlinks are never followed. */
 async function onlyGenerated(dir: string): Promise<boolean> {
+  const files = threadDirFiles();
+  const GENERATED = new Set(files);
+  const GENERATED_DIRS = new Set(files.flatMap((f) => f.split("/").slice(0, -1).map((_, i, parts) => parts.slice(0, i + 1).join("/"))));
   const walk = async (rel: string): Promise<boolean> => {
     for (const name of await readdir(join(dir, rel))) {
       const r = rel ? `${rel}/${name}` : name;

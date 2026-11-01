@@ -87,7 +87,8 @@ ids or private-doc mentions — this overrides any harness attribution reminder.
     **copy** of a production restore (drop it afterwards) before calling it ready. Squash to `feat/<task>` and verify
     `git diff --stat wip/<task> feat/<task>` lists only files the source branch changed since the worktree was made
     (`git diff --stat <wip base> <source>`), then re-run the unit suites on the squashed tree, then
-    `agt stage <id> 10 done`; the user pushes and opens PRs. After merge, with the user's go-ahead: remove worktrees and `wip/<task>`, refresh the baseline.
+    `agt stage <id> 10 done`; the user pushes and opens PRs. After merge, the user has main run `agt thread cleanup <id>`
+    (never remove worktrees or wip branches by hand); refresh the baseline.
 
 ## Manual migration SQL (when the user runs migrations by hand)
 

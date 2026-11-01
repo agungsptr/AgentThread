@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { type Config, loadConfig } from "../config/config.ts";
 import { spawnRunner } from "../herdr/bridge.ts";
@@ -91,10 +91,28 @@ export function generatedExcludes(dir: string, tracked: ReadonlySet<string> = ne
   return SKILLS.filter((s) => !ownedFile(dir, s, tracked)).flatMap(relsOf);
 }
 
+/** Removes the files of `skill` in `dir` that carry the marker (a copy agt wrote), then the folders they leave empty. */
+function removeGenerated(dir: string, skill: (typeof SKILLS)[number]): void {
+  for (const rel of relsOf(skill)) {
+    const file = join(dir, rel);
+    if (existsSync(file) && hasMarker(readFileSync(file, "utf8"))) unlinkSync(file);
+  }
+  for (const r of SKILL_ROOTS) {
+    const top = join(dir, r, skill.name);
+    for (const d of [...new Set(skill.files.map((f) => dirname(join(top, f.rel))))].sort().reverse().concat(top)) {
+      try {
+        rmdirSync(d);
+      } catch {}
+    }
+  }
+}
+
 /**
  * Writes every generated skill into `dir`, under both skill roots, when it is ours to write: a skill any of whose files
- * is tracked or carries no marker is the project's own and is kept as it is (logged), everywhere. A file is rewritten
- * only when its content differs. Does nothing when `agents.skill` is false.
+ * is tracked or carries no marker is the project's own and is kept as it is (logged), everywhere. A skill the workspace
+ * root owns (a file of it under the root without the marker) is the project's own in every thread dir and worktree too:
+ * nothing is written there and a copy agt wrote earlier is removed. A file is rewritten only when its content differs.
+ * Does nothing when `agents.skill` is false.
  */
 export function writeSkills(
   dir: string,
@@ -106,6 +124,13 @@ export function writeSkills(
     const owned = ownedFile(dir, skill, o.tracked);
     if (owned) {
       o.log(`kept the project's own skill ${skill.name} at ${join(dir, owned)}`);
+      out[skill.name] = "kept";
+      continue;
+    }
+    const rootOwned = resolve(dir) === resolve(o.root) ? undefined : ownedFile(o.root, skill, new Set());
+    if (rootOwned) {
+      removeGenerated(dir, skill);
+      o.log(`kept the project's own skill ${skill.name} at ${join(o.root, rootOwned)}`);
       out[skill.name] = "kept";
       continue;
     }
@@ -135,7 +160,14 @@ export function refreshRootSkill(root: string, env: Env = process.env, log: (mes
     if (config.agents.skill === false) return;
     const git = (...args: string[]) => spawnRunner("git", ["-C", root, ...args], env, 5000);
     const common = git("rev-parse", "--git-common-dir");
-    if (common.exitCode !== 0 || !common.stdout.trim()) return;
+    if (common.exitCode !== 0 || !common.stdout.trim()) {
+      // a root outside git gets no generated skills; the ones it owns are still named
+      for (const skill of SKILLS) {
+        const owned = ownedFile(root, skill, new Set());
+        if (owned) log(`kept the project's own skill ${skill.name} at ${join(root, owned)}`);
+      }
+      return;
+    }
     const listed = git("ls-files", "--", ...SKILL_ROOTS);
     const tracked = new Set(listed.exitCode === 0 ? excludeLinesOf(listed.stdout).filter(Boolean) : []);
     const prefix = git("rev-parse", "--show-prefix");

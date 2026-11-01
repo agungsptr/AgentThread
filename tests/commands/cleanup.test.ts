@@ -239,7 +239,7 @@ describe("agt thread cleanup through the daemon (real git)", () => {
     expect(await cmd({ cmd: "thread.cleanup", thread: "001" }, MAIN)).toMatchObject({ ok: true });
     await waitFor(outcome);
     const all = await events();
-    expect(all.filter((x) => x.type === "thread.cleanup_failed").map((x) => x.payload)).toEqual([{ repo: "web", reason: "wip/kyc-1 has commits that were never squashed" }]);
+    expect(all.filter((x) => x.type === "thread.cleanup_failed").map((x) => x.payload)).toEqual([{ repo: "web", reason: "wip/kyc-1 has commits that were never squashed; if it was merged another way, delete it with git branch -D wip/kyc-1 and run cleanup again" }]);
     for (const repo of ["api", "web"]) {
       expect(existsSync(join(dir, repo, ".git"))).toBe(true);
       expect(branchExists(join(root, repo), "wip/kyc-1")).toBe(true);

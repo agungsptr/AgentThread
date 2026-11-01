@@ -25,7 +25,7 @@ Checked 2026-10-31 against the installed binaries (`--help` and strings only, no
 - Claude Code: reads `.claude/skills`.
 - omp 18.13.3: has a "Load skills from .claude/skills/*/SKILL.md" provider (also `.codex/skills`, `.opencode/skills`, `.agents/skills`).
 - OpenCode: its config has a Claude compatibility directory next to an `agents` one; its documented skill search includes `.claude/skills`. The binary was not exercised, so this rests on the docs and that string.
-- Codex 0.164.0: skill sources are `.agents/skills` and `$CODEX_HOME/skills` (`~/.codex/skills`); no `.claude/skills` string found. Codex agents therefore get no generated skill and rely on the `agt guide <role>` line in their prompt.
+- Codex 0.164.0: skill sources are `.agents/skills` and `$CODEX_HOME/skills` (`~/.codex/skills`); no `.claude/skills` string found. agt writes every generated skill (`agt`, `agt-feature-workflow`, `manage-docs`) under `.agents/skills` as well as `.claude/skills`, so Codex reads them from there.
 
 ## Adding an agent
 

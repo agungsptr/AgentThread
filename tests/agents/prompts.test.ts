@@ -118,6 +118,20 @@ test("a task coordinator's only repo commit is the squash", () => {
   expect(p).not.toContain("You never edit or commit repo files");
 });
 
+test("a task coordinator does not set review itself: stage 10 done does", () => {
+  for (const config of [DEFAULT_CONFIG, ZENTRO]) {
+    const p = coordinator(config);
+    expect(p.split("\n")).toContain(
+      "- When you start, run: agt thread status 007 in_progress. After the squash, `agt stage 007 10 done` moves the thread to review; do not set review yourself.",
+    );
+    expect(p).not.toContain("agt thread status 007 review");
+  }
+});
+
+test("a task worker may not change AGT_AGENT_PROCESS either", () => {
+  expect(worker(DEFAULT_CONFIG)).toContain("Never bypass the commit guard (no git commit --no-verify, no changing core.hooksPath, AGT_ROLE or AGT_AGENT_PROCESS).");
+});
+
 describe("legacy threads keep every old prompt byte for byte", () => {
   const want = JSON.parse(readFileSync(join(import.meta.dir, "__legacy__", "prompts.json"), "utf8")) as Record<string, string>;
   test("coordinator, worker, AGENTS.md, bootstrap and guide, whatever the workflow config", () => {

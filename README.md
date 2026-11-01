@@ -103,6 +103,10 @@ Workers never commit. Each thread worktree gets its own `core.hooksPath` whose `
 agent runs as a worker, and then forwards to the project's own hooks. The coordinator reviews and commits. A coordinator
 does not implement tickets itself; it delegates them to workers.
 
+The hooks share one stub in `.agentthread/hooks/`, which the daemon rewrites when it starts. After upgrading agt, restart
+the daemon and every running agent: the hooks apply role rules only to processes launched with `AGT_AGENT_PROCESS`,
+which agents started by an older agt do not have.
+
 `agt worker spawn <thread> --ticket <T> --agent <kind>` runs one worker on another agent than `agents.roles.worker`,
 with that agent's own default model and effort (the role's model and effort are not carried across vendors).
 

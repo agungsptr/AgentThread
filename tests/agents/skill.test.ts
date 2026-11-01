@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { DEFAULT_CONFIG, type Config } from "../../src/config/config.ts";
 import { featureWorkflowText, GENERATED_RELS, manageDocsText, MARKER, refreshRootSkill, skillText, writeSkills } from "../../src/agents/skill.ts";
 import { FEATURE_WORKFLOW, MANAGE_DOCS, TEMPLATES } from "../../src/workflow/index.ts";
@@ -426,5 +427,82 @@ describe("worktrees", () => {
     const wt = worktreeOf(root);
     write(root, wt, off);
     expect(existsSync(join(wt, REL))).toBe(false);
+  });
+});
+
+describe("a skill the workspace root owns", () => {
+  const OWN = ".claude/skills/manage-docs/SKILL.md";
+  /** A non-git workspace root holding its own manage-docs, and one repo inside it. */
+  function workspace(own = OWN) {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "agt-ws-own-")));
+    mkdirSync(join(root, dirname(own)), { recursive: true });
+    writeFileSync(join(root, own), "our own doc rules\n");
+    const repo = join(root, "api");
+    mkdirSync(repo);
+    renameSync(tempRepo(), repo);
+    return { root, repo };
+  }
+  const manageDocsRels = GENERATED_RELS.filter((r) => r.includes("/manage-docs/"));
+  const othersRels = GENERATED_RELS.filter((r) => !r.includes("/manage-docs/"));
+
+  for (const own of [OWN, ".agents/skills/manage-docs/SKILL.md"]) {
+    test(`a thread dir: no generated manage-docs under either root, the rest written, kept line logged (${own.split("/")[0]})`, () => {
+      const { root } = workspace(own);
+      const dir = join(root, ".agentthread", "threads", "001");
+      mkdirSync(dir, { recursive: true });
+      const logs: string[] = [];
+      writeThreadDirFiles({ root, dir, content: "# AgentThread\n", config: DEFAULT_CONFIG, log: (m) => logs.push(m) });
+      for (const rel of manageDocsRels) expect(existsSync(join(dir, rel))).toBe(false);
+      for (const rel of othersRels) expect(existsSync(join(dir, rel))).toBe(true);
+      expect(logs).toEqual([kept(root, "manage-docs", own)]);
+    });
+  }
+
+  test("a thread dir: a copy agt generated earlier is removed, its empty folders too", () => {
+    const { root } = workspace();
+    const dir = join(root, ".agentthread", "threads", "001");
+    mkdirSync(dir, { recursive: true });
+    writeSkills(dir, { root: "/elsewhere", config: DEFAULT_CONFIG, tracked: new Set(), log: () => {} });
+    for (const rel of manageDocsRels) expect(existsSync(join(dir, rel))).toBe(true);
+    writeThreadDirFiles({ root, dir, content: "# AgentThread\n", config: DEFAULT_CONFIG, log: () => {} });
+    for (const rel of manageDocsRels) expect(existsSync(join(dir, rel))).toBe(false);
+    expect(existsSync(join(dir, ".claude/skills/manage-docs"))).toBe(false);
+    for (const rel of othersRels) expect(existsSync(join(dir, rel))).toBe(true);
+  });
+
+  test("a repo worktree: no generated manage-docs under either root, the rest written, kept line logged, status clean", () => {
+    const { root, repo } = workspace();
+    const wt = join(root, ".worktrees", "api", "001-x");
+    addWorktree(repo, "thread/001-x", wt);
+    const logs: string[] = [];
+    writeAgentsFiles({ root, repo, repoName: "api", worktree: wt, content: "# AgentThread\n", env: ENV, config: DEFAULT_CONFIG, log: (m) => logs.push(m) });
+    for (const rel of manageDocsRels) expect(existsSync(join(wt, rel))).toBe(false);
+    for (const rel of othersRels) expect(existsSync(join(wt, rel))).toBe(true);
+    expect(logs).toContain(kept(root, "manage-docs", OWN));
+    expect(git(wt, "status", "--porcelain", "-uall")).toBe("");
+  });
+
+  test("a repo worktree: a copy agt generated earlier is removed", () => {
+    const { root, repo } = workspace();
+    const wt = join(root, ".worktrees", "api", "001-x");
+    addWorktree(repo, "thread/001-x", wt);
+    writeSkills(wt, { root: "/elsewhere", config: DEFAULT_CONFIG, tracked: new Set(), log: () => {} });
+    writeAgentsFiles({ root, repo, repoName: "api", worktree: wt, content: "# AgentThread\n", env: ENV, config: DEFAULT_CONFIG, log: () => {} });
+    for (const rel of manageDocsRels) expect(existsSync(join(wt, rel))).toBe(false);
+  });
+
+  test("a non-git root: refreshRootSkill prints the kept line and leaves the file alone", () => {
+    const { root } = workspace();
+    const logs: string[] = [];
+    refreshRootSkill(root, ENV, (m) => logs.push(m));
+    expect(logs).toEqual([kept(root, "manage-docs", OWN)]);
+    expect(readFileSync(join(root, OWN), "utf8")).toBe("our own doc rules\n");
+  });
+
+  test("a non-git root without a skill of its own: nothing logged", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "agt-ws-own-")));
+    const logs: string[] = [];
+    refreshRootSkill(root, ENV, (m) => logs.push(m));
+    expect(logs).toEqual([]);
   });
 });

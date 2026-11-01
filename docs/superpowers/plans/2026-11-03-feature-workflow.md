@@ -347,6 +347,7 @@
   - `cleanup needs thread <id> to be done; the user says when it is merged`
   - `legacy threads keep their worktree; remove it by hand`
 - **Check.** The job checks every worktree first with `git status --porcelain`, honouring ignores. Any output stops the job with `thread.cleanup_failed` (reason `uncommitted changes`) before anything is removed (Review Focus 3).
+- **Unsquashed work.** Without `feat/<task>`, a `wip/<task>` holding commits no other branch has stops the job before anything is removed, with reason `wip/<task> has commits that were never squashed; if it was merged another way, delete it with git branch -D wip/<task> and run cleanup again`; main gets `Cleanup of thread <id> stopped at <repo>: <reason>`.
 - **Removal.** Then, per repo:
   - `git worktree remove <path>`;
   - `git branch -D wip/<task>` in the repo.

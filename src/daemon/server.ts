@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
 import { adapterFor } from "../agents/adapters.ts";
+import { refreshHookStubs } from "../agents/agents-md.ts";
 import { configWarnings } from "../agents/roles.ts";
 import type { SpawnJob } from "../agents/spawn-job.ts";
 import { handle, type Effect } from "../commands/handler.ts";
@@ -55,6 +56,12 @@ export async function startDaemon(
     config = loadConfig(root);
     failStaleWorktreeRequests(store, state, root, config);
     failStaleCleanups(store, state, root, config);
+    // An upgraded agt must not leave the old commit guard in front of running worktrees.
+    try {
+      refreshHookStubs(root);
+    } catch (e) {
+      (opts.log ?? console.error)(`refreshing the commit guard hooks failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
     ensureSocketDir(p.socketDir);
     rmSync(p.socket, { force: true });
     await trails.refresh(state.threads.values());

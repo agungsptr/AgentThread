@@ -96,8 +96,11 @@ async function driveAsync<T>(steps: Steps<T>, runner: AsyncRunner, env: Env): Pr
 /** AGENTS.md, then every instruction file any adapter reads (always CLAUDE.md), each a symlink to AGENTS.md. */
 const LINKS = [...new Set(["CLAUDE.md", ...AGENT_KINDS.flatMap((k) => adapterFor(k).instructionFiles)])];
 const FILES = ["AGENTS.md", ...LINKS];
-/** Every file agt writes into a thread directory, relative to it: the instruction files and the generated skills. */
-export const THREAD_DIR_FILES: readonly string[] = [...FILES, ...GENERATED_RELS];
+/**
+ * Every file agt writes into a thread directory, relative to it: the instruction files and the generated skills. A
+ * function, not a constant: skill.ts reaches this module through guide.ts, so GENERATED_RELS may not exist yet at load.
+ */
+export const threadDirFiles = (): readonly string[] => [...FILES, ...GENERATED_RELS];
 const EXCLUDE_LINES = FILES.map((f) => `/${f}`);
 /** The lines the worktree excludes carry: the instruction files, and the generated skills when they are on. */
 const excludeLines = (skill: boolean) => (skill ? [...EXCLUDE_LINES, ...SKILL_EXCLUDES] : EXCLUDE_LINES);
@@ -362,6 +365,33 @@ function hookStub(guardDir: string): string {
   ].join("\n");
 }
 
+/** The shared stub in `dir` and every hook name as a symlink to it, each rewritten only when it differs. */
+function writeHookStubs(dir: string): void {
+  mkdirSync(dir, { recursive: true });
+  // One script, every hook name a symlink to it: a freshly written executable costs a one-off scan on some systems.
+  writeIfChanged(join(dir, "stub"), hookStub(dir));
+  for (const name of HOOK_NAMES) {
+    const link = join(dir, name);
+    let current = "";
+    try {
+      current = readlinkSync(link);
+    } catch {}
+    if (current !== "stub") {
+      removeIfPresent(link);
+      symlinkSync("stub", link);
+    }
+  }
+}
+
+/**
+ * Daemon start: rewrites the shared hook stub of `root` when the guard is already in use, so worktrees set up by an
+ * older agt run this agt's rules. Plain synchronous fs, no git; a project without the hooks folder is left alone.
+ */
+export function refreshHookStubs(root: string): void {
+  const dir = join(root, ".agentthread", "hooks");
+  if (existsSync(dir)) writeHookStubs(dir);
+}
+
 /**
  * Worker commit guard: a per-worktree core.hooksPath whose pre-commit refuses commits by role and branch (workers on wip/<task>, the coordinator on feat/<task>), pre-push refuses any push by an agent. Every
  * standard hook is a stub that then runs the project's own hook, found at run time through the worktree-scoped
@@ -374,20 +404,7 @@ function* guardInWorktree(c: Ctx, root: string, repo: string, wt: string, log: (
     // --path expands a leading ~/ as git itself does when it runs hooks; the stub reads the value back verbatim.
     const configured = (yield* git(c, repo, ["config", "--path", "--get", "core.hooksPath"]));
     const original = configured.ok ? configured.stdout.trim() : "";
-    mkdirSync(dir, { recursive: true });
-    // One script, every hook name a symlink to it: a freshly written executable costs a one-off scan on some systems.
-    writeIfChanged(join(dir, "stub"), hookStub(dir));
-    for (const name of HOOK_NAMES) {
-      const link = join(dir, name);
-      let current = "";
-      try {
-        current = readlinkSync(link);
-      } catch {}
-      if (current !== "stub") {
-        removeIfPresent(link);
-        symlinkSync("stub", link);
-      }
-    }
+    writeHookStubs(dir);
     const current = (yield* git(c, wt, ["config", "--worktree", "--get", "agentthread.hooksPath"]));
     // Unset means empty (the runners drop an empty argument, so an empty value cannot be passed).
     if (original === "") {

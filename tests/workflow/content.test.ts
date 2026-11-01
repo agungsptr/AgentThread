@@ -18,6 +18,12 @@ describe("feature-workflow content", () => {
     expect(FEATURE_WORKFLOW).toContain("Coordinator");
   });
 
+  test("stage 10: after merge, main runs agt thread cleanup; nothing is removed by hand", () => {
+    const text = FEATURE_WORKFLOW.replace(/\n\s+/g, " ");
+    expect(text).toContain("After merge, the user has main run `agt thread cleanup <id>` (never remove worktrees or wip branches by hand)");
+    expect(text).not.toContain("remove worktrees and `wip/<task>`");
+  });
+
   test("names every agt command", () => {
     for (const cmd of [
       "agt thread waiting <id>",
