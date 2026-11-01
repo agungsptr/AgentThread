@@ -345,6 +345,7 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       break;
     case "thread.cleanup_failed":
       delete t.cleanupRequested;
+      for (const repo of ev.payload.removed ?? []) delete t.worktrees[repo];
       note(t, ev, `cleanup stopped at ${ev.payload.repo}: ${ev.payload.reason}`);
       break;
     case "thread.tab_closed":

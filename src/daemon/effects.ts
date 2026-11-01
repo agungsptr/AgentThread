@@ -1,13 +1,13 @@
 import { spawn } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { mkdir, readdir, rm } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { agentEnv, claudeConfigDir } from "../agents/claude.ts";
 import { adapterFor } from "../agents/adapters.ts";
 import { bootstrapPrompt } from "../agents/prompts.ts";
 import { agentsMd, writeAgentsFilesAsync, writeThreadDirFiles } from "../agents/agents-md.ts";
 import { launchSpawnJob, type SpawnJob } from "../agents/spawn-job.ts";
-import { cleanupThread, type CleanupOutcome } from "./cleanup-job.ts";
+import { canonical, cleanupThread, type CleanupOutcome } from "./cleanup-job.ts";
 import type { Effect } from "../commands/handler.ts";
 import type { Command } from "../commands/schema.ts";
 import type { Config } from "../config/config.ts";
@@ -169,14 +169,14 @@ export function createEffectRunner(opts: {
           try {
             outcome = await cleanupThread(e, () => bg.stopped);
           } catch (err) {
-            outcome = { ok: false, repo: e.repos[0]?.repo ?? "(all)", error: err instanceof Error ? err.message : String(err) };
+            outcome = { ok: false, repo: e.repos[0]?.repo ?? "(all)", error: err instanceof Error ? err.message : String(err), removed: [] };
           }
           if (!outcome.ok) log(`cleanup of thread ${e.thread} stopped at ${outcome.repo}: ${outcome.error}`);
           try {
             opts.reportCleanup?.(
               outcome.ok
                 ? { cmd: "thread.cleanup_report", thread: e.thread, ok: true, repos: outcome.repos }
-                : { cmd: "thread.cleanup_report", thread: e.thread, ok: false, repo: outcome.repo, error: outcome.error },
+                : { cmd: "thread.cleanup_report", thread: e.thread, ok: false, repo: outcome.repo, error: outcome.error, removed: outcome.removed },
             );
           } catch (err) {
             log(`reporting the cleanup of thread ${e.thread} failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -373,15 +373,6 @@ export function runShellGroup(
   });
 }
 
-/** `p` with its existing ancestors resolved (macOS /var is /private/var), so git's paths compare equal. */
-function canonical(p: string): string {
-  try {
-    return realpathSync(p);
-  } catch {
-    const parent = dirname(p);
-    return parent === p ? p : join(canonical(parent), basename(p));
-  }
-}
 
 /**
  * Creates a task worktree: the config's worktree_setup command (run with `sh -c` in the root in its own process group,

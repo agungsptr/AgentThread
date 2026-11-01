@@ -92,7 +92,8 @@ export type EventBody =
   | { type: "thread.waiting"; thread: string; payload: { what: string } }
   | { type: "thread.cleanup_requested"; thread: string; payload: Record<string, never> }
   | { type: "thread.cleaned"; thread: string; payload: { repos: string[] } }
-  | { type: "thread.cleanup_failed"; thread: string; payload: { repo: string; reason: string } }
+  /** `removed`: the repos a job that stopped mid-way had already removed. */
+  | { type: "thread.cleanup_failed"; thread: string; payload: { repo: string; reason: string; removed?: string[] } }
   | { type: "stage.recorded"; thread: string; payload: { stage: number; state: StageState; by: StageBy; reason?: string } }
   | { type: "stack.acquired" | "stack.queued"; thread: string; payload: { thread: string; purpose?: string } }
   | { type: "stack.released"; thread: string; payload: { thread: string; reason: string } }

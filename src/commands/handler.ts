@@ -280,6 +280,7 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
       if (t.status === "done") reject(`thread ${t.id} is done`);
       return { events: [{ type: "thread.waiting", thread: t.id, payload: { what: cmd.what } }] };
     case "thread.cancel":
+      if (t.cleanupRequested) reject(cleanupRunning(t));
       if (!t.tierProposal) reject(`thread ${t.id} is not waiting for a tier`);
       // The usual path to done (dependents unblock), though an open or blocked thread cannot otherwise go straight to done.
       return threadStatus(state, t, "done", "cancelled before start", ctx, { cancel: true });
@@ -525,6 +526,7 @@ function newThread(state: State, cmd: Extract<Command, { cmd: "thread.new" }>, c
  */
 function addWorktree(t: Thread, repo: string, from: string | undefined, ctx: HandlerContext): Decision {
   if (t.legacy || t.dir === undefined || t.task === undefined) reject(`thread ${t.id} uses the single-repo layout`);
+  if (t.cleanupRequested) reject(cleanupRunning(t));
   if (t.status === "done") reject(`thread ${t.id} is done`);
   const repos = workspaceReposNoSpawn(ctx.root, ctx.config ?? DEFAULT_CONFIG);
   const entry = Object.hasOwn(repos, repo) ? repos[repo] : undefined;
@@ -559,6 +561,8 @@ function reportWorktree(state: State, t: Thread, repo: string, failure: string |
   const reason = failure.trim().replace(/\.$/, "") || "unknown error";
   return { events: [{ type: "worktree.failed", thread: t.id, payload: { repo, reason } }, ...notice(`Worktree for ${repo} failed: ${reason}.`)] };
 }
+
+const cleanupRunning = (t: Thread) => `cleanup of thread ${t.id} is running`;
 
 /**
  * `agt thread cleanup`: a done (merged) task thread's worktrees and wip/<task> branches go. The command records the
@@ -603,7 +607,8 @@ function reportCleanup(state: State, t: Thread, cmd: Extract<Command, { cmd: "th
   }
   const repo = cmd.repo ?? "(all)";
   const reason = (cmd.error ?? "").trim().replace(/\.$/, "") || "unknown error";
-  return { events: [{ type: "thread.cleanup_failed", thread: t.id, payload: { repo, reason } }, ...notice(`Cleanup of thread ${t.id} stopped at ${repo}: ${reason}`)] };
+  const removed = cmd.removed?.length ? { removed: cmd.removed } : {};
+  return { events: [{ type: "thread.cleanup_failed", thread: t.id, payload: { repo, reason, ...removed } }, ...notice(`Cleanup of thread ${t.id} stopped at ${repo}: ${reason}`)] };
 }
 
 /** A proposed tier: the proposal, then either the choice (--now) or the timer, running unless main is working. */
@@ -621,6 +626,7 @@ function checkTier(tier: string, ctx: HandlerContext): void {
 }
 
 function threadStatus(state: State, t: Thread, to: ThreadStatus, reason: string | undefined, ctx: HandlerContext, how: { cancel?: boolean } = {}): Decision {
+  if (t.cleanupRequested) reject(cleanupRunning(t));
   if (!how.cancel && !canTransitionThread(t.status, to)) reject(`thread ${t.id} cannot go ${t.status} → ${to}`);
   if ((to === "open" || to === "in_progress") && !depsDone(state, t.dependsOn)) {
     reject(`thread ${t.id} has unfinished dependencies: ${t.dependsOn.join(", ")}`);

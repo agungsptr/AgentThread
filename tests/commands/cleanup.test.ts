@@ -87,6 +87,23 @@ describe("thread.cleanup in the handler", () => {
     expect(errorOf(run(s, { cmd: "thread.cleanup_report", thread: "001", ok: true, repos: ["api"] }, { role: "main" }))).toBe("role main may not run thread.cleanup_report");
   });
 
+  test("while a cleanup runs, thread status changes and worktree adds are rejected", () => {
+    const s = stateOf(INIT, taskThreadCreated("001", "kyc-1", { status: "done" }), added("api"), { type: "thread.cleanup_requested", thread: "001", payload: {} });
+    expect(errorOf(run(s, { cmd: "thread.status", thread: "001", status: "in_progress" }))).toBe("cleanup of thread 001 is running");
+    expect(errorOf(run(s, { cmd: "thread.cancel", thread: "001" }))).toBe("cleanup of thread 001 is running");
+    expect(errorOf(run(s, { cmd: "worktree.add", thread: "001", repo: "web", from: "main" }, COORD))).toBe("cleanup of thread 001 is running");
+  });
+
+  test("a failure after some repos were removed drops those repos from the thread's worktrees", () => {
+    const s = stateOf(INIT, taskThreadCreated("001", "kyc-1", { status: "done" }), added("api"), added("web"), { type: "thread.cleanup_requested", thread: "001", payload: {} });
+    const r = run(s, { cmd: "thread.cleanup_report", thread: "001", ok: false, repo: "web", error: "git branch -D wip/kyc-1 failed: x (already removed: api)", removed: ["api"] });
+    if (!r.ok) throw new Error(r.error);
+    expect(r.events[0]).toEqual({ type: "thread.cleanup_failed", thread: "001", payload: { repo: "web", reason: "git branch -D wip/kyc-1 failed: x (already removed: api)", removed: ["api"] } });
+    const after = stateOf(INIT, taskThreadCreated("001", "kyc-1", { status: "done" }), added("api"), added("web"), { type: "thread.cleanup_requested", thread: "001", payload: {} }, r.events[0]!);
+    expect(Object.keys(after.threads.get("001")!.worktrees)).toEqual(["web"]);
+    expect(after.threads.get("001")!.cleanupRequested).toBeUndefined();
+  });
+
   test("the outcome without a pending request is ignored", () => {
     const s = stateOf(INIT, taskThreadCreated("001", "kyc-1", { status: "done" }), added("api"));
     expect(run(s, { cmd: "thread.cleanup_report", thread: "001", ok: true, repos: ["api"] })).toMatchObject({ ok: true, events: [] });
@@ -202,9 +219,66 @@ describe("agt thread cleanup through the daemon (real git)", () => {
     expect(failed).toHaveLength(1);
     expect(failed[0]!.repo).toBe("web");
     expect(failed[0]!.reason).toContain("already removed: api");
+    expect(project(await events()).threads.get("001")!.worktrees).toEqual({ web: expect.anything() });
     expect(existsSync(join(dir, "api"))).toBe(false);
     expect(branchExists(join(root, "api"), "wip/kyc-1")).toBe(false);
     expect(existsSync(dir)).toBe(true);
+  });
+
+  /** A commit on wip/kyc-1 that no other branch has (same tree, so the worktree stays clean), made without hooks. */
+  const extraCommit = (repo: string) => {
+    const c = sh(repo, "-c", "user.name=T", "-c", "user.email=t@example.com", "commit-tree", "wip/kyc-1^{tree}", "-p", "wip/kyc-1", "-m", "extra").out;
+    expect(sh(repo, "update-ref", "refs/heads/wip/kyc-1", c).ok).toBe(true);
+  };
+
+  test("no feat/<task> and wip/<task> has its own commits: nothing is removed", async () => {
+    const root = workspace();
+    const { cmd, events, waitFor, dir } = await doneThread(root);
+    sh(join(root, "web"), "branch", "-D", "feat/kyc-1");
+    extraCommit(join(root, "web"));
+    expect(await cmd({ cmd: "thread.cleanup", thread: "001" }, MAIN)).toMatchObject({ ok: true });
+    await waitFor(outcome);
+    const all = await events();
+    expect(all.filter((x) => x.type === "thread.cleanup_failed").map((x) => x.payload)).toEqual([{ repo: "web", reason: "wip/kyc-1 has commits that were never squashed" }]);
+    for (const repo of ["api", "web"]) {
+      expect(existsSync(join(dir, repo, ".git"))).toBe(true);
+      expect(branchExists(join(root, repo), "wip/kyc-1")).toBe(true);
+    }
+  });
+
+  test("no feat/<task> but wip/<task> has no commits of its own: cleaned", async () => {
+    const root = workspace();
+    const { cmd, waitFor, dir } = await doneThread(root);
+    for (const repo of ["api", "web"]) sh(join(root, repo), "branch", "-D", "feat/kyc-1");
+    expect(await cmd({ cmd: "thread.cleanup", thread: "001" }, MAIN)).toMatchObject({ ok: true });
+    await waitFor((e) => e.some((x) => x.type === "thread.cleaned"));
+    for (const repo of ["api", "web"]) expect(branchExists(join(root, repo), "wip/kyc-1")).toBe(false);
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  test("a feat/<task> branch: cleaned even when wip/<task> has commits of its own", async () => {
+    const root = workspace();
+    const { cmd, waitFor } = await doneThread(root);
+    extraCommit(join(root, "web"));
+    expect(await cmd({ cmd: "thread.cleanup", thread: "001" }, MAIN)).toMatchObject({ ok: true });
+    await waitFor((e) => e.some((x) => x.type === "thread.cleaned"));
+    expect(branchExists(join(root, "web"), "wip/kyc-1")).toBe(false);
+    expect(branchExists(join(root, "web"), "feat/kyc-1")).toBe(true);
+  });
+
+  test("a worktree folder deleted by hand: only its stale entry goes, unrelated stale entries stay", async () => {
+    const root = workspace();
+    const { cmd, waitFor, dir } = await doneThread(root);
+    const api = join(root, "api");
+    const other = join(root, "api-other");
+    expect(sh(api, "worktree", "add", "-q", "-b", "other", other, "main").ok).toBe(true);
+    Bun.spawnSync(["rm", "-rf", other, join(dir, "api")]);
+    expect(await cmd({ cmd: "thread.cleanup", thread: "001" }, MAIN)).toMatchObject({ ok: true });
+    await waitFor((e) => e.some((x) => x.type === "thread.cleaned"));
+    const list = sh(api, "worktree", "list", "--porcelain").out;
+    expect(list).not.toContain("kyc-1");
+    expect(list).toContain(other);
+    expect(branchExists(api, "wip/kyc-1")).toBe(false);
   });
 
   test("a cleanup still pending when the daemon starts is marked failed, so it can be run again", async () => {
