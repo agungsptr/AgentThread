@@ -30,6 +30,7 @@ import { paths } from "../../src/project/paths.ts";
 export const REPO = resolve(import.meta.dir, "../..");
 export const AGT = join(REPO, "bin", "agt");
 export const FIXTURE = join(import.meta.dir, "fixture-repo");
+export const FIXTURE_WORKSPACE = join(import.meta.dir, "fixture-workspace");
 const HERDR_BIN = process.env.AGT_E2E_HERDR_BIN || Bun.which("herdr", { PATH: process.env.PATH ?? "" }) || "herdr";
 
 /** The sockets of the user's own Herdr: the inherited one and the default session's. Never touched. */
@@ -282,6 +283,73 @@ export async function scratchRepo(hints: string[] = [], at?: string): Promise<st
     appendFileSync(join(dir, ".git", "info", "exclude"), `\n/${FIXED_MARKER}\n`);
   }
   return dir;
+}
+
+/** Throws unless `root` is inside the scratch base (the temp dir that holds every harness-made folder). */
+export function assertInScratchBase(root: string): void {
+  const base = realpathSync(tmpdir());
+  const r = existsSync(root) ? realpathSync(root) : resolve(root);
+  if (r === base || !r.startsWith(`${base}/`)) throw new Error(`${root} is outside the scratch base ${base}`);
+}
+
+/** Renames `*.tmpl` template files to their real name (they keep it out of this repo's `bun test` patterns). */
+function untemplate(d: string): void {
+  for (const f of readdirSync(d, { withFileTypes: true })) {
+    const p = join(d, f.name);
+    if (f.isDirectory()) untemplate(p);
+    else if (f.name.endsWith(".tmpl")) renameSync(p, p.slice(0, -".tmpl".length));
+  }
+}
+
+const GIT_IDENTITY = [
+  ["config", "user.email", "e2e@agentthread.invalid"],
+  ["config", "user.name", "AgentThread e2e"],
+];
+
+/**
+ * A two-repo workspace made from fixture-workspace/ in a new temp dir (or, for tests, the existing `into` dir): `api`
+ * and `web` are git repos with one commit on `main`, `hints` are appended to each AGENTS.md before that commit, then
+ * `agt init` creates `.docs` and the config lists both repos and the stack commands. Returns the root.
+ */
+export async function scratchWorkspace(hints: { api?: string[]; web?: string[] } = {}, into?: string): Promise<string> {
+  if (into !== undefined) assertInScratchBase(into);
+  const dir = into !== undefined ? realpathSync(into) : realpathSync(mkdtempSync(join(tmpdir(), TEMP_PREFIX)));
+  assertInScratchBase(dir); // before any git
+  cpSync(FIXTURE_WORKSPACE, dir, { recursive: true });
+  untemplate(dir);
+  const sh = async (cwd: string, args: string[]) => {
+    const r = await spawnAsync("git", ["-C", cwd, ...args], cleanEnv(), 15_000);
+    if (r.exitCode !== 0) throw new Error(`git ${args[0]} failed in ${cwd}: ${r.stderr}`);
+  };
+  for (const repo of ["api", "web"] as const) {
+    const at = join(dir, repo);
+    const lines = hints[repo] ?? [];
+    if (lines.length) appendFileSync(join(at, "AGENTS.md"), `\n${lines.map((h) => `- ${h}`).join("\n")}\n`);
+    for (const args of [["init", "-q", "-b", "main"], ...GIT_IDENTITY, ["add", "-A"], ["commit", "-q", "-m", "fixture"]]) await sh(at, args);
+  }
+  writeConfig(
+    dir,
+    { main: "claude-code", coordinator: "claude-code", worker: "claude-code" },
+    {
+      workspace: {
+        repos: Object.fromEntries(["api", "web"].map((r) => [r, { path: r, source_branch: "main", unit: "bun test", typecheck: "bun run typecheck" }])),
+      },
+      workflow: { stack: { restart: "make restart TASK={task}", status: "make status" } },
+    },
+  );
+  const init = await agt(dir, ["init"]);
+  if (init.exitCode !== 0) throw new Error(`agt init failed in ${dir}: ${init.stderr.trim() || init.stdout.trim()}`);
+  return dir;
+}
+
+/** A workspace thread's task name and its repo worktrees (repo -> path), read from the event log. */
+export async function wsTask(root: string, thread: string): Promise<{ task: string; worktrees: Record<string, string> }> {
+  const all = await events(root);
+  const created = all.find((e) => e.type === "thread.created" && e.thread === thread) as EventOf<"thread.created"> | undefined;
+  if (!created?.payload.task) throw new Error(`no thread.created with a task for ${thread}`);
+  const worktrees: Record<string, string> = {};
+  for (const e of all) if (e.type === "worktree.added" && e.thread === thread) worktrees[e.payload.repo] = e.payload.path;
+  return { task: created.payload.task, worktrees };
 }
 
 /** Runs the agt CLI as the user for `root`, outside any pane. */
