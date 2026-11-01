@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { guide } from "../../src/agents/guide.ts";
 import { rulesOf } from "../../src/agents/agents-md.ts";
-import { systemPrompt } from "../../src/agents/prompts.ts";
+import { MAIN_CLEANUP_RULE, systemPrompt } from "../../src/agents/prompts.ts";
 import { DEFAULT_CONFIG } from "../../src/config/config.ts";
 import { USAGE } from "../../src/cli/usage.ts";
 
@@ -47,12 +47,16 @@ describe("guide", () => {
   test("each role's rules are included, without the identity line", () => {
     for (const role of ["main", "coordinator", "worker"] as const) {
       const g = guide({ role, ...base, thread: T });
-      const rules = rulesOf(systemPrompt({ root: "/repo", role, thread: T, ticket: "<ticket>", config: DEFAULT_CONFIG })).filter((l) => l && !l.includes("When unsure how to do something with agt"));
+      // T is a legacy thread: main's cleanup rule (task threads only) is left out of its guide.
+      const rules = rulesOf(systemPrompt({ root: "/repo", role, thread: T, ticket: "<ticket>", config: DEFAULT_CONFIG })).filter((l) => l && !l.includes("When unsure how to do something with agt") && l !== MAIN_CLEANUP_RULE);
       for (const r of rules) expect(g).toContain(r);
       expect(g).not.toContain("When unsure how to do something with agt");
       expect(g).not.toContain("You are the coordinator of AgentThread");
     }
     expect(guide({ role: "coordinator", ...base })).toContain("agt thread status <thread> in_progress");
+    expect(guide({ role: "main", ...base })).toContain(MAIN_CLEANUP_RULE);
+    expect(guide({ role: "main", ...base })).toContain("agt thread cleanup <id>");
+    expect(guide({ role: "main", ...base, thread: T })).not.toContain("thread cleanup");
   });
 
   test("failure handling and state location", () => {

@@ -133,6 +133,8 @@ export interface Thread {
   worktrees: Record<string, { path: string; branch: string; source: string }>;
   /** Repo worktrees being created in the background (worktree.requested, not yet added or failed), by repo name. */
   worktreeRequests: Record<string, { path: string; branch: string; source: string }>;
+  /** A cleanup (`agt thread cleanup`) runs in the background: requested, not yet cleaned or failed. */
+  cleanupRequested?: boolean;
   /** True for a thread created before thread directories (its thread.created has a worktree and no dir). */
   legacy: boolean;
   maxWorkers?: number;
@@ -214,7 +216,7 @@ export function actorSession(state: State, actor: Actor): string | undefined {
 export const COMMAND_OUTPUT_TYPES: ReadonlySet<string> = new Set([
   "thread.status_changed", "ticket.created", "ticket.claimed", "ticket.completed", "ticket.blocked", "ticket.reopened",
   "ticket.reviewed", "ticket.accepted", "ticket.returned", "stage.recorded", "log.appended", "decision.recorded", "note.recorded", "progress.recorded", "question.recorded", "question.answered",
-  "worker.queued", "thread.waiting",
+  "worker.queued", "thread.waiting", "thread.cleanup_requested",
 ]);
 
 /**
@@ -330,6 +332,20 @@ export function applyEvent(state: State, ev: StoredEvent): void {
     case "worktree.failed":
       delete t.worktreeRequests[ev.payload.repo];
       note(t, ev, `worktree for ${ev.payload.repo} failed: ${ev.payload.reason}`);
+      break;
+    case "thread.cleanup_requested":
+      t.cleanupRequested = true;
+      note(t, ev, "cleanup requested");
+      break;
+    case "thread.cleaned":
+      // The worktrees are gone: nothing may run in them or read their git trail any more.
+      delete t.cleanupRequested;
+      for (const repo of ev.payload.repos) delete t.worktrees[repo];
+      note(t, ev, `cleaned up: removed the worktrees and wip/${t.task ?? ""} of ${ev.payload.repos.join(", ")}`);
+      break;
+    case "thread.cleanup_failed":
+      delete t.cleanupRequested;
+      note(t, ev, `cleanup stopped at ${ev.payload.repo}: ${ev.payload.reason}`);
       break;
     case "thread.tab_closed":
       delete t.tab;

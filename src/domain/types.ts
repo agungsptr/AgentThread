@@ -90,6 +90,9 @@ export type EventBody =
   | { type: "ticket.accepted"; thread: string; payload: { ticket: string } }
   | { type: "ticket.returned"; thread: string; payload: { ticket: string; note: string } }
   | { type: "thread.waiting"; thread: string; payload: { what: string } }
+  | { type: "thread.cleanup_requested"; thread: string; payload: Record<string, never> }
+  | { type: "thread.cleaned"; thread: string; payload: { repos: string[] } }
+  | { type: "thread.cleanup_failed"; thread: string; payload: { repo: string; reason: string } }
   | { type: "stage.recorded"; thread: string; payload: { stage: number; state: StageState; by: StageBy; reason?: string } }
   | { type: "stack.acquired" | "stack.queued"; thread: string; payload: { thread: string; purpose?: string } }
   | { type: "stack.released"; thread: string; payload: { thread: string; reason: string } }

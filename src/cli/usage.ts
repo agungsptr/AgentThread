@@ -11,6 +11,7 @@ export const USAGE = `usage: agt <command>
   thread cancel <id>
   thread status <id> <status> [--reason <text>]
   thread waiting <id> "<what>"   say the coordinator waits for the user; main is told, and it ends when the user answers
+  thread cleanup <id>   a merged (done) task thread: remove its worktrees and wip/<task> branches, in the background (stops on uncommitted changes)
   ticket add <thread> <title...> --scope <path> [--scope <path>]...            (a legacy thread)
   ticket add <thread> <title...> --repo <repo> --file <path> [--file <path>]... [--doc <path>]   (a task thread; --file takes files, not directories)
   ticket files <thread>/<ticket>   the repo-relative files the ticket may change

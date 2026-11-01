@@ -26,6 +26,16 @@ export const CommandSchema = z.discriminatedUnion("cmd", [
   z.object({ cmd: z.literal("thread.choose"), thread: threadId, tier: tierName, auto: z.boolean().optional() }),
   z.object({ cmd: z.literal("thread.cancel"), thread: threadId }),
   z.object({ cmd: z.literal("thread.waiting"), thread: threadId, what: text }),
+  z.object({ cmd: z.literal("thread.cleanup"), thread: threadId }),
+  /** Internal: the background cleanup job's outcome, reported by the daemon itself. */
+  z.object({
+    cmd: z.literal("thread.cleanup_report"),
+    thread: threadId,
+    ok: z.boolean(),
+    repos: z.array(text).optional(),
+    repo: text.optional(),
+    error: z.string().optional(),
+  }),
   z.object({ cmd: z.literal("thread.status"), thread: threadId, status: z.enum(THREAD_STATUSES), reason: z.string().optional() }),
   z.object({
     cmd: z.literal("ticket.add"),

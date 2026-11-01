@@ -279,6 +279,10 @@ async function thread(sub: string | undefined, args: string[], root: string, env
     if (!args[0] || args.length > 1) throw new UsageError("thread cancel needs <id>");
     return send(root, env, { cmd: "thread.cancel", thread: args[0] });
   }
+  if (sub === "cleanup") {
+    if (!args[0] || args.length > 1) throw new UsageError("thread cleanup needs <id>");
+    return send(root, env, { cmd: "thread.cleanup", thread: args[0] });
+  }
   if (sub === "waiting") {
     const [id, ...what] = args;
     if (!id || !what.length) throw new UsageError('thread waiting needs <id> "<what>"');

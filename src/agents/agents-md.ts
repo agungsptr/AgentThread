@@ -6,7 +6,7 @@ import { paths } from "../project/paths.ts";
 import { AGENT_KINDS } from "../domain/types.ts";
 import { adapterFor } from "./adapters.ts";
 import { systemPrompt, type PromptThread } from "./prompts.ts";
-import { generatedExcludes, SKILL_EXCLUDES, SKILL_ROOTS, skillExclude, writeSkills } from "./skill.ts";
+import { GENERATED_RELS, generatedExcludes, SKILL_EXCLUDES, SKILL_ROOTS, skillExclude, writeSkills } from "./skill.ts";
 
 type ThreadRef = PromptThread;
 
@@ -96,6 +96,8 @@ async function driveAsync<T>(steps: Steps<T>, runner: AsyncRunner, env: Env): Pr
 /** AGENTS.md, then every instruction file any adapter reads (always CLAUDE.md), each a symlink to AGENTS.md. */
 const LINKS = [...new Set(["CLAUDE.md", ...AGENT_KINDS.flatMap((k) => adapterFor(k).instructionFiles)])];
 const FILES = ["AGENTS.md", ...LINKS];
+/** Every file agt writes into a thread directory, relative to it: the instruction files and the generated skills. */
+export const THREAD_DIR_FILES: readonly string[] = [...FILES, ...GENERATED_RELS];
 const EXCLUDE_LINES = FILES.map((f) => `/${f}`);
 /** The lines the worktree excludes carry: the instruction files, and the generated skills when they are on. */
 const excludeLines = (skill: boolean) => (skill ? [...EXCLUDE_LINES, ...SKILL_EXCLUDES] : EXCLUDE_LINES);

@@ -16,6 +16,8 @@ export type Effect =
   | { kind: "git.worktree.add"; branch: string; path: string; thread: { id: string; title: string; slug: string } }
   /** A task worktree of one workspace repo, at `<dir>/<repo>` on a new `wip/<task>` from `source`. */
   | { kind: "git.worktree.add"; thread: string; repo: string; repoPath: string; path: string; branch: string; source: string }
+  /** Removes a done task thread's repo worktrees and wip/<task> branches, then its directory if only agt's files are left. */
+  | { kind: "git.thread.cleanup"; thread: string; task: string; dir: string; repos: { repo: string; repoPath: string; path: string }[] }
   | { kind: "thread.dir.ensure"; thread: { id: string; title: string; slug: string; task: string; dir: string } }
   | { kind: "herdr.tab.ensure"; thread: string; label: string; cwd: string; env: Record<string, string>; tab?: string }
   | { kind: "herdr.tab.close"; thread: string; tab: string }
@@ -63,6 +65,8 @@ const ALLOWED: Record<CommandName, readonly Role[]> = {
   "thread.choose": ["user", "main"],
   "thread.cancel": ["user", "main"],
   "thread.waiting": ["coordinator"],
+  "thread.cleanup": ["user", "main"],
+  "thread.cleanup_report": ["user"],
   "ticket.add": ["coordinator"],
   "ticket.files": ROLES,
   "ticket.claim": ["worker"],
@@ -394,6 +398,10 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
       return addWorktree(t, cmd.repo, cmd.from, ctx);
     case "worktree.report":
       return reportWorktree(state, t, cmd.repo, cmd.ok ? undefined : (cmd.error ?? "unknown error"));
+    case "thread.cleanup":
+      return cleanupThread(t, ctx);
+    case "thread.cleanup_report":
+      return reportCleanup(state, t, cmd);
     case "log":
       return { events: [{ type: "log.appended", thread: t.id, payload: { message: cmd.message } }] };
     case "decide":
@@ -550,6 +558,52 @@ function reportWorktree(state: State, t: Thread, repo: string, failure: string |
   }
   const reason = failure.trim().replace(/\.$/, "") || "unknown error";
   return { events: [{ type: "worktree.failed", thread: t.id, payload: { repo, reason } }, ...notice(`Worktree for ${repo} failed: ${reason}.`)] };
+}
+
+/**
+ * `agt thread cleanup`: a done (merged) task thread's worktrees and wip/<task> branches go. The command records the
+ * request and returns at once; the effect checks and removes them in the background and reports back with
+ * thread.cleanup_report.
+ */
+function cleanupThread(t: Thread, ctx: HandlerContext): Decision {
+  if (t.legacy || t.dir === undefined || t.task === undefined) reject("legacy threads keep their worktree; remove it by hand");
+  if (t.status !== "done") reject(`cleanup needs thread ${t.id} to be done; the user says when it is merged`);
+  if (t.cleanupRequested) reject(`cleanup of thread ${t.id} is already running`);
+  const pending = Object.keys(t.worktreeRequests);
+  if (pending.length) reject(`a worktree for ${pending.join(", ")} is still being created`);
+  if (!Object.keys(t.worktrees).length) reject(`thread ${t.id} has no worktrees to clean up`);
+  const all = workspaceReposNoSpawn(ctx.root, ctx.config ?? DEFAULT_CONFIG);
+  for (const [repo, w] of Object.entries(t.worktrees)) {
+    if (!Object.hasOwn(all, repo)) reject(`repo ${repo} is no longer in the workspace config; remove its worktree ${w.path} by hand`);
+  }
+  // In the config's order: the worktrees were added in whatever order their jobs finished.
+  const repos = Object.entries(all)
+    .filter(([repo]) => Object.hasOwn(t.worktrees, repo))
+    .map(([repo, entry]) => ({ repo, repoPath: resolve(ctx.root, entry.path), path: t.worktrees[repo]!.path }));
+  return {
+    events: [{ type: "thread.cleanup_requested", thread: t.id, payload: {} }],
+    effects: [{ kind: "git.thread.cleanup", thread: t.id, task: t.task, dir: t.dir, repos }],
+    result: { requested: true, repos: repos.map((r) => r.repo) },
+  };
+}
+
+/** The cleanup job's outcome: the thread is cleaned or the cleanup stopped at a repo, and main gets a notice. */
+function reportCleanup(state: State, t: Thread, cmd: Extract<Command, { cmd: "thread.cleanup_report" }>): Decision {
+  if (!t.cleanupRequested) return { events: [] }; // a stale or repeated report
+  const main = liveSessions(state, undefined, "main")[0];
+  const notice = (text: string): EventBody[] => (main ? [{ type: "notice.queued", payload: { session: main.id, text } }] : []);
+  if (cmd.ok) {
+    const repos = cmd.repos ?? [];
+    return {
+      events: [
+        { type: "thread.cleaned", thread: t.id, payload: { repos } },
+        ...notice(`Thread ${t.id} is cleaned up: removed the worktrees and wip/${t.task ?? ""} of ${repos.join(", ")}.`),
+      ],
+    };
+  }
+  const repo = cmd.repo ?? "(all)";
+  const reason = (cmd.error ?? "").trim().replace(/\.$/, "") || "unknown error";
+  return { events: [{ type: "thread.cleanup_failed", thread: t.id, payload: { repo, reason } }, ...notice(`Cleanup of thread ${t.id} stopped at ${repo}: ${reason}`)] };
 }
 
 /** A proposed tier: the proposal, then either the choice (--now) or the timer, running unless main is working. */

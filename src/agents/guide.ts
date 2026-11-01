@@ -6,7 +6,7 @@ import type { SessionRole } from "../domain/types.ts";
 import { usageLines } from "../cli/usage.ts";
 import { paths } from "../project/paths.ts";
 import { rulesOf } from "./agents-md.ts";
-import { systemPrompt, type PromptThread } from "./prompts.ts";
+import { MAIN_CLEANUP_RULE, systemPrompt, type PromptThread } from "./prompts.ts";
 
 type ThreadRef = PromptThread;
 
@@ -45,8 +45,9 @@ const COMMANDS: Record<SessionRole, string[]> = {
   worker: ["ticket claim|reopen", "ticket done", "ticket block", "note", "progress", "question"],
 };
 
-/** Task threads only: the stage, stack-lock and waiting commands their coordinator runs (§13). */
+/** Task threads only: the stage, stack-lock and waiting commands their coordinator runs (§13), and main's cleanup. */
 const COMMANDS_TASK: Partial<Record<SessionRole, string[]>> = {
+  main: ["thread cleanup"],
   coordinator: ["stage", "stack acquire", "stack release", "thread waiting"],
 };
 
@@ -95,7 +96,7 @@ const TITLES: Record<SessionRole, string> = { main: "Main", coordinator: "Coordi
 function roleGuide(role: SessionRole, o: GuideInput, level: "#" | "##"): string {
   const t = o.thread ?? (o.legacy ? LEGACY_PLACEHOLDER : PLACEHOLDER);
   const rules = rulesOf(systemPrompt({ root: o.root, role, thread: t, ticket: "<ticket>", config: o.config })).filter(
-    (l) => l !== "" && !l.includes("When unsure how to do something with agt, run: agt guide"),
+    (l) => l !== "" && !l.includes("When unsure how to do something with agt, run: agt guide") && (l !== MAIN_CLEANUP_RULE || t.dir !== undefined),
   );
   const dir = paths(o.root).threadDir(t);
   const h = level === "#" ? "##" : "###";

@@ -7,6 +7,7 @@ import { adapterFor } from "../agents/adapters.ts";
 import { bootstrapPrompt } from "../agents/prompts.ts";
 import { agentsMd, writeAgentsFilesAsync, writeThreadDirFiles } from "../agents/agents-md.ts";
 import { launchSpawnJob, type SpawnJob } from "../agents/spawn-job.ts";
+import { cleanupThread, type CleanupOutcome } from "./cleanup-job.ts";
 import type { Effect } from "../commands/handler.ts";
 import type { Command } from "../commands/schema.ts";
 import type { Config } from "../config/config.ts";
@@ -54,6 +55,8 @@ export function createEffectRunner(opts: {
    * one (tests), the outcome is only logged.
    */
   report?: (command: Extract<Command, { cmd: "worktree.report" }>) => void;
+  /** The same for the background cleanup job's outcome. */
+  reportCleanup?: (command: Extract<Command, { cmd: "thread.cleanup_report" }>) => void;
   /** The worktree_setup command's time limit (default 5 minutes). */
   setupTimeoutMs?: number;
 }): EffectRunner {
@@ -96,15 +99,20 @@ export function createEffectRunner(opts: {
   const jobs = new Set<Promise<void>>();
   const repoChains = new Map<string, Promise<void>>();
   const bg: Background = { groups: new Set(), setupChain: Promise.resolve(), stopped: false };
-  const inRepoChain = (key: string, fn: () => Promise<void>): Promise<void> => {
-    const next = (repoChains.get(key) ?? Promise.resolve()).then(fn);
+  // A job over several repos (a cleanup) joins every repo's chain at once: it starts when all of them are free, and
+  // each repo's next job waits for it. Joining happens synchronously, so two such jobs can never wait on each other.
+  const inRepoChains = (keys: string[], fn: () => Promise<void>): Promise<void> => {
+    const next = Promise.all(keys.map((k) => repoChains.get(k) ?? Promise.resolve())).then(fn);
     const tail = next.catch(() => {});
-    repoChains.set(key, tail);
-    void tail.then(() => {
-      if (repoChains.get(key) === tail) repoChains.delete(key);
-    });
+    for (const key of keys) {
+      repoChains.set(key, tail);
+      void tail.then(() => {
+        if (repoChains.get(key) === tail) repoChains.delete(key);
+      });
+    }
     return next;
   };
+  const inRepoChain = (key: string, fn: () => Promise<void>): Promise<void> => inRepoChains([key], fn);
   const stop = async (): Promise<void> => {
     bg.stopped = true;
     for (const pid of bg.groups) killGroup(pid);
@@ -146,6 +154,32 @@ export function createEffectRunner(opts: {
             opts.report?.({ cmd: "worktree.report", thread: e.thread, repo: e.repo, ok: error === undefined, ...(error !== undefined ? { error } : {}) });
           } catch (err) {
             log(`reporting the worktree for ${e.repo} of thread ${e.thread} failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        });
+        jobs.add(job);
+        void job.finally(() => jobs.delete(job));
+        return [];
+      }
+      case "git.thread.cleanup": {
+        // Like a task worktree, in the background and outside the command queue; it holds every repo it touches, so
+        // it never races a worktree add (or another cleanup) in the same repo. Its outcome re-enters as a command.
+        const e = effect;
+        const job = inRepoChains([...new Set(e.repos.map((r) => r.repoPath))], async () => {
+          let outcome: CleanupOutcome;
+          try {
+            outcome = await cleanupThread(e, () => bg.stopped);
+          } catch (err) {
+            outcome = { ok: false, repo: e.repos[0]?.repo ?? "(all)", error: err instanceof Error ? err.message : String(err) };
+          }
+          if (!outcome.ok) log(`cleanup of thread ${e.thread} stopped at ${outcome.repo}: ${outcome.error}`);
+          try {
+            opts.reportCleanup?.(
+              outcome.ok
+                ? { cmd: "thread.cleanup_report", thread: e.thread, ok: true, repos: outcome.repos }
+                : { cmd: "thread.cleanup_report", thread: e.thread, ok: false, repo: outcome.repo, error: outcome.error },
+            );
+          } catch (err) {
+            log(`reporting the cleanup of thread ${e.thread} failed: ${err instanceof Error ? err.message : String(err)}`);
           }
         });
         jobs.add(job);

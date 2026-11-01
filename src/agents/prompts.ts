@@ -60,6 +60,9 @@ function coordinatorWorkflowLines(o: PromptInput): string[] {
   ];
 }
 
+/** Main's rule for `agt thread cleanup` (task threads only: the legacy guide leaves it out). */
+export const MAIN_CLEANUP_RULE = "- Run agt thread cleanup <id> only when the user says so, after they told you the thread is merged.";
+
 export function systemPrompt(o: PromptInput): string {
   if (o.role === "main") {
     return [
@@ -71,6 +74,7 @@ export function systemPrompt(o: PromptInput): string {
       'To pass a message to a thread\'s coordinator use: agt tell <thread-id> "<message>".',
       "Do not edit project source files yourself; implementation happens in the thread worktrees.",
       "You will receive short notifications (for example a thread ready for review) as prompts; relay them to the user.",
+      MAIN_CLEANUP_RULE,
       "When unsure how to do something with agt, run: agt guide main",
     ].join("\n");
   }

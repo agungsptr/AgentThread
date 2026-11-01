@@ -54,6 +54,7 @@ export async function startDaemon(
     if (!state.project) throw new Error("project not initialized; run `agt init`");
     config = loadConfig(root);
     failStaleWorktreeRequests(store, state, root, config);
+    failStaleCleanups(store, state, root, config);
     ensureSocketDir(p.socketDir);
     rmSync(p.socket, { force: true });
     await trails.refresh(state.threads.values());
@@ -75,6 +76,13 @@ export async function startDaemon(
     return next;
   };
 
+  const reenter = (command: Extract<Command, { cmd: "worktree.report" | "thread.cleanup_report" }>, what: string) => {
+    if (shuttingDown) return;
+    void enqueue(async () => {
+      const r = await runCommand({ command, actor: { role: "user" } });
+      if (!r.ok) (opts.log ?? console.error)(`${what} report for thread ${command.thread} failed: ${r.error}`);
+    }).catch((e) => (opts.log ?? console.error)(`${what} report for thread ${command.thread} failed: ${e instanceof Error ? e.message : String(e)}`));
+  };
   const runEffect = createEffectRunner({
     root,
     config,
@@ -82,14 +90,9 @@ export async function startDaemon(
     thread: (id) => state.threads.get(id),
     log: opts.log,
     launch: opts.launch,
-    // The background worktree job's outcome re-enters through the queue, as the spawn job's reports do.
-    report: (command) => {
-      if (shuttingDown) return;
-      void enqueue(async () => {
-        const r = await runCommand({ command, actor: { role: "user" } });
-        if (!r.ok) (opts.log ?? console.error)(`worktree report for thread ${command.thread} failed: ${r.error}`);
-      }).catch((e) => (opts.log ?? console.error)(`worktree report for thread ${command.thread} failed: ${e instanceof Error ? e.message : String(e)}`));
-    },
+    // The background worktree and cleanup jobs' outcomes re-enter through the queue, as the spawn job's reports do.
+    report: (command) => reenter(command, "worktree"),
+    reportCleanup: (command) => reenter(command, "cleanup"),
     ...(opts.setupTimeoutMs !== undefined ? { setupTimeoutMs: opts.setupTimeoutMs } : {}),
   });
 
@@ -276,5 +279,16 @@ function failStaleWorktreeRequests(store: EventStore, state: ReturnType<typeof p
       if (!decision.ok || !decision.events.length) continue;
       for (const ev of store.append(decision.events, decision.actor ?? { role: "user" })) applyEvent(state, ev);
     }
+  }
+}
+
+/** A cleanup still running at startup lost its job with the previous daemon: it is marked failed (main is told). */
+function failStaleCleanups(store: EventStore, state: ReturnType<typeof project>, root: string, config: Config): void {
+  for (const t of state.threads.values()) {
+    if (!t.cleanupRequested) continue;
+    const error = "the daemon restarted during the cleanup; run agt thread cleanup again";
+    const decision = handle(state, { cmd: "thread.cleanup_report", thread: t.id, ok: false, error }, { role: "user" }, { root, config, newId: randomUUID });
+    if (!decision.ok || !decision.events.length) continue;
+    for (const ev of store.append(decision.events, decision.actor ?? { role: "user" })) applyEvent(state, ev);
   }
 }
