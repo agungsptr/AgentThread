@@ -6,7 +6,7 @@ import { parse } from "yaml";
 import { loadConfig } from "../../src/config/config.ts";
 import { paths } from "../../src/project/paths.ts";
 import { isWorkspaceProject } from "../../src/project/workspace.ts";
-import { events, git, removeScratch, scratchWorkspace, wsTask } from "../release/harness.ts";
+import { events, git, removeScratch, scratchWorkspace, writeWorkspaceConfig, wsTask } from "../release/harness.ts";
 
 const roots: string[] = [];
 afterAll(() => roots.forEach((r) => removeScratch(r)));
@@ -75,4 +75,18 @@ test("wsTask reads the task id and worktrees from the event log", async () => {
   const root = await built;
   expect(wsTask).toBeFunction();
   await expect(wsTask(root, "nope")).rejects.toThrow();
+});
+
+test("writeWorkspaceConfig keeps the workspace and stack, sets the row's agents and merges the row's config", async () => {
+  const root = await scratchWorkspace();
+  roots.push(root);
+  writeWorkspaceConfig(root, { main: "claude-code", coordinator: "claude-code", worker: "opencode" }, { agents: { complexity: { timeout: "1h" } } });
+  const raw = parse(readFileSync(join(root, ".agentthread", "config.yaml"), "utf8"));
+  expect(Object.keys(raw.workspace.repos).sort()).toEqual(["api", "web"]);
+  expect(raw.workflow.stack).toEqual({ restart: "make restart TASK={task}", status: "make status" });
+  expect(raw.agents.roles.worker.agent).toBe("opencode");
+  expect(raw.agents.roles.coordinator.agent).toBe("claude-code");
+  expect(raw.agents.autonomous).toBe(true);
+  expect(raw.agents.complexity.timeout).toBe("1h");
+  expect(loadConfig(root).agents.roles.worker.agent).toBe("opencode");
 });

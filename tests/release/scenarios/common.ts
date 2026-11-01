@@ -40,6 +40,8 @@ export interface Scenario {
   manager?: boolean;
   /** A fixed scratch root instead of a new temp dir (only MIXED_MAIN_ROOT, which the user trusts once for Claude Code). */
   scratchAt?: string;
+  /** Build a two-repo workspace (scratchWorkspace) instead of a single scratch repo. */
+  workspace?: true;
   /** Lines appended to the scratch repo's AGENTS.md. */
   hints?: string[];
   /** Merged into .agentthread/config.yaml. */

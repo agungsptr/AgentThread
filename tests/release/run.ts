@@ -26,16 +26,18 @@ import {
   say,
   stopAllServers,
   scratchRepo,
+  scratchWorkspace,
   startHerdr,
   raceScenario,
   trustGate,
   waitForEvent,
   watchTrustDialogs,
   writeConfig,
+  writeWorkspaceConfig,
   type HerdrServer,
 } from "./harness.ts";
 import type { H, Scenario } from "./scenarios/common.ts";
-import { allScenarios } from "./scenarios/index.ts";
+import { allScenarios, listRows } from "./scenarios/index.ts";
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
@@ -53,7 +55,7 @@ const log = (m: string) => console.log(`${new Date().toISOString().slice(11, 19)
 
 let scenarios = allScenarios();
 if (values.list) {
-  for (const s of scenarios) console.log(`${s.id.padEnd(28)} main=${s.agents.main} coordinator=${s.agents.coordinator} worker=${s.agents.worker}`);
+  for (const line of listRows(scenarios)) console.log(line);
   process.exit(0);
 }
 if (values.only) {
@@ -165,13 +167,20 @@ async function runRow(sc: Scenario): Promise<{ status: "PASS" | "FAIL"; reason?:
     server = await startHerdr();
     const socketLine = server.proof.split("\n").find((l) => l.startsWith("socket:"));
     note(`isolated Herdr session ${server.session}, ${socketLine} (live: ${process.env.HERDR_SOCKET_PATH ?? "none inherited"})`);
-    root = await scratchRepo(sc.hints, sc.scratchAt);
-    writeConfig(root, sc.agents, sc.config);
-    const init = await agt(root, ["init", "--name", "e2e"], withXdg());
-    if (init.exitCode !== 0) throw new Error(`agt init failed: ${init.stderr}`);
-    await git(root, "add", ".gitignore");
-    await git(root, "commit", "-q", "-m", "agt init");
-    note(`scratch repo ${root}`);
+    if (sc.workspace) {
+      // Two repos (api, web) under a root that is no repo; the builder already ran agt init there.
+      root = await scratchWorkspace();
+      writeWorkspaceConfig(root, sc.agents, sc.config);
+      note(`scratch workspace ${root}`);
+    } else {
+      root = await scratchRepo(sc.hints, sc.scratchAt);
+      writeConfig(root, sc.agents, sc.config);
+      const init = await agt(root, ["init", "--name", "e2e"], withXdg());
+      if (init.exitCode !== 0) throw new Error(`agt init failed: ${init.stderr}`);
+      await git(root, "add", ".gitignore");
+      await git(root, "commit", "-q", "-m", "agt init");
+      note(`scratch repo ${root}`);
+    }
 
     const ws = await server.herdr.ok(["workspace", "create", "--cwd", root, "--label", `e2e-${sc.id}`, "--no-focus"]);
     const r = root;

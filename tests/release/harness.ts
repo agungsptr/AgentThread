@@ -20,7 +20,7 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { stringify } from "yaml";
+import { parse, stringify } from "yaml";
 import { deepMerge } from "../../src/config/config.ts";
 import { request } from "../../src/daemon/client.ts";
 import type { AgentKind, StoredEvent } from "../../src/domain/types.ts";
@@ -556,6 +556,15 @@ export function writeConfig(root: string, agents: RoleAgents, extra: Record<stri
   };
   mkdirSync(join(root, ".agentthread"), { recursive: true });
   writeFileSync(join(root, ".agentthread", "config.yaml"), stringify(deepMerge(base, extra)));
+}
+
+/**
+ * Rewrites a scratch workspace's config for a row: its workspace and workflow sections are kept, the role agents are
+ * the row's (replaced, never merged with the builder's), and `extra` is merged on top.
+ */
+export function writeWorkspaceConfig(root: string, agents: RoleAgents, extra: Record<string, any> = {}): void {
+  const { agents: _builder, ...kept } = (parse(readFileSync(join(root, ".agentthread", "config.yaml"), "utf8")) ?? {}) as Record<string, any>;
+  writeConfig(root, agents, deepMerge(kept, extra));
 }
 
 // ---------- cleanup ----------
