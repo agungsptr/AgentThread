@@ -44,6 +44,8 @@ export interface Scenario {
   workspace?: true;
   /** Lines appended to the scratch repo's AGENTS.md. */
   hints?: string[];
+  /** A workspace row's lines appended to each repo's AGENTS.md (before its fixture commit). */
+  wsHints?: { api?: string[]; web?: string[] };
   /** Merged into .agentthread/config.yaml. */
   config?: Record<string, any>;
   /** Env for `agt start` in the pane; the daemon it starts inherits it. */

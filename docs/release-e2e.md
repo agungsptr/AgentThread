@@ -82,11 +82,37 @@ still running in the scratch repo is killed. Check afterwards with
   (`max_turns: 3`), `edge-rotate-age` (`max_age: 2m`), `edge-daemon-restart`, `edge-herdr-restart`, `edge-tab-closed`,
   `edge-missing-binary`, `edge-bad-model` (a coordinator on a model that does not exist: the stall watchdog's
   `session.stalled` notice reaches main after its first turn).
-- Workspace (`tests/release/fixture-workspace/`: repos `api` and `web` under a root that is no repo):
-  `ws-smoke-worktrees` (no model calls: the harness creates a task thread and adds a worktree per repo),
-  `ws-happy-claude-code` and `ws-happy-worker-<agent>` (coordinator on Claude Code). A happy row answers each
-  `thread.waiting` by typing into the coordinator's pane. The happy rows need `--timeout 40m`:
-  `bun run e2e:release --only ws-happy-claude-code --timeout 40m`.
+- Workspace (`tests/release/fixture-workspace/`: repos `api` and `web` under a root that is no repo): see Workspace
+  rows below.
+
+### Workspace rows
+
+Every workspace row runs on Claude Code (except the worker of `ws-happy-worker-<agent>`). A row that runs a thread
+answers each `thread.waiting` by typing into the coordinator's pane. The rows marked 40m run a whole thread and need
+`--timeout 40m`, for example `bun run e2e:release --only ws-happy-claude-code,ws-cleanup --timeout 40m`.
+
+- `ws-smoke-worktrees`: no model calls. The harness creates a task thread and adds a worktree per repo.
+- `ws-happy-claude-code` and `ws-happy-worker-<agent>` (coordinator on Claude Code), 40m: main gets the task; the thread
+  runs to review; tickets, `wip/<task>` commits, stages 7, 8 and 10, the `feat/<task>` squash and its `bun test` are
+  checked.
+- `ws-edge-out-of-ticket`, 40m: api's `AGENTS.md` says to add a line to `CHANGELOG.md` whenever `src/slugify.ts`
+  changes, and no ticket lists it. No commit on `wip/<task>` may touch `CHANGELOG.md`; the api slugify ticket ends
+  reviewed or blocked.
+- `ws-edge-return`, 40m: the coordinator is told to return the first ticket once ("add a test for an empty string").
+  The ticket is returned, reviewed again (by its still-live worker, else a new worker session), then accepted.
+- `ws-edge-stage-gates`: no model calls; a browser URL is configured, so stage 8 is open. The scenario drives git and
+  the CLI as the coordinator (`AGT_ROLE=coordinator`, `AGT_AGENT_PROCESS=1`): its commit on `feat/<task>` is refused
+  until `agt stage <id> 8 na --reason test`, and `agt stack acquire <id> --for e2e4` is rejected until the user runs
+  `agt stage <id> 7 approve --by user`.
+- `ws-stack-lock`, 40m: two threads, each coordinator told to restart the stack before testing. Both get
+  `stack.acquired`, the events never show two holders at once, and `.stack.log` has a restart per thread at least 5s
+  apart (each restart sleeps 5s).
+- `ws-cleanup`, 40m: after the happy flow the user runs `agt thread status <id> done` and `agt thread cleanup <id>`:
+  `thread.cleaned`, both worktrees and `wip/<task>` gone, `feat/<task>` kept.
+- `ws-tab-shell`: no model calls beyond the coordinator's start. The first coordinator's agent process has
+  `AGT_AGENT_PROCESS=1` (its env is read with `ps -E`, or `/proc/<pid>/environ` on Linux). The user's shell split in the
+  thread's tab does not; that shell's commit on `wip/<task>` succeeds. Both environments are recorded as notes (`AGT_`
+  variables only).
 
 ## Reading the report
 
