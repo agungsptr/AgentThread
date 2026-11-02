@@ -464,7 +464,8 @@ export const TRUST_GRACE_MS = 30_000;
  * Answers Claude Code's one-time workspace-trust dialog in main's pane, as the user would once per project. In any
  * other pane (a coordinator or worker) agt answers it itself, for the folders it created: the harness never does, and
  * `foreign` is told once per pane when a dialog is still showing after `graceMs`, so the row fails instead of the
- * harness masking a product failure. A dialog that goes away within the grace is noted as answered by agt. Every other
+ * harness masking a product failure. A dialog gone for two polls in a row is noted as cleared (agt's own daemon log line
+ * says what it trusted); one missed poll keeps the pane's grace clock, so a flickering read cannot reset it. Every other
  * dialog is left alone (a blocked worker is a scenario's subject). Returns the panes it answered.
  */
 export function watchTrustDialogs(
@@ -481,6 +482,8 @@ export function watchTrustDialogs(
   const reported = new Set<string>();
   /** Coordinator/worker panes showing the dialog, with when it was first seen. */
   const showing = new Map<string, number>();
+  /** Panes of `showing` missing from the last poll: cleared when missing from two in a row. */
+  const missed = new Set<string>();
   let stopped = false;
   const done = (async () => {
     while (!stopped) {
@@ -493,6 +496,7 @@ export function watchTrustDialogs(
           if (!TRUST.test(screen)) continue;
           if (a.pane_id !== mainPane()) {
             seen.add(a.pane_id);
+            missed.delete(a.pane_id);
             const since = showing.get(a.pane_id) ?? now();
             showing.set(a.pane_id, since);
             if (now() - since < graceMs) continue;
@@ -510,8 +514,13 @@ export function watchTrustDialogs(
           log(`answered the Claude Code workspace-trust dialog in ${a.pane_id}`);
         }
         for (const pane of [...showing.keys()].filter((p) => !seen.has(p))) {
+          if (!missed.has(pane)) {
+            missed.add(pane);
+            continue;
+          }
+          missed.delete(pane);
           showing.delete(pane);
-          log(`agt answered the Claude Code workspace-trust dialog in ${pane}`);
+          log(`Claude Code workspace-trust dialog cleared in ${pane}`);
         }
       } catch {}
       if (!stopped) await sleep(o.pollMs ?? 1_500);

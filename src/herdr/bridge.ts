@@ -114,14 +114,20 @@ export interface HerdrBridge {
   renamePane(paneId: string, label: string): void;
   runInPane(paneId: string, command: string): void;
   agentStart(o: { name: string; kind: string; pane: string; args: string[]; timeoutMs?: number }): void;
+  /** Like agentStart without blocking the event loop: the spawn job watches the pane while Herdr waits for readiness. */
+  agentStartAsync?(o: { name: string; kind: string; pane: string; args: string[]; timeoutMs?: number }): Promise<void>;
   agentPrompt(target: string, text: string): void;
   closePane(pane: string): void;
   agentExists(target: string): boolean;
   agentList(): AgentListing[];
 }
 
-/** Reads a pane's screen and types keys into it: what the spawn job needs to answer an agent's startup dialog. */
+/**
+ * Reads a pane's screen and its agent's state, and types keys into it: what the spawn job needs to answer an agent's
+ * startup dialog. All async, so the job keeps going (its agent start, its report) while it watches.
+ */
 export interface PaneScreen {
+  agentListAsync(): Promise<AgentListing[]>;
   /** The visible screen as text. */
   paneReadAsync(pane: string): Promise<string>;
   /** One named key, such as `down` or `enter`. */
@@ -182,10 +188,12 @@ export class HerdrCli implements HerdrBridge, PaneScreen {
 
   agentStart(o: { name: string; kind: string; pane: string; args: string[]; timeoutMs?: number }): void {
     const herdrTimeout = o.timeoutMs ?? 60_000;
-    this.call(
-      ["agent", "start", o.name, "--kind", o.kind, "--pane", o.pane, "--timeout", String(herdrTimeout), "--", ...o.args],
-      herdrTimeout + 10_000,
-    );
+    this.call(agentStartArgs(o, herdrTimeout), herdrTimeout + 10_000);
+  }
+
+  async agentStartAsync(o: { name: string; kind: string; pane: string; args: string[]; timeoutMs?: number }): Promise<void> {
+    const herdrTimeout = o.timeoutMs ?? 60_000;
+    await this.callAsync(agentStartArgs(o, herdrTimeout), herdrTimeout + 10_000);
   }
 
   agentPrompt(target: string, text: string): void {
@@ -296,6 +304,11 @@ export class HerdrCli implements HerdrBridge, PaneScreen {
       throw new HerdrError("bad_output", `${what}: unparseable output`);
     }
   }
+}
+
+/** `herdr agent start` waits up to `herdrTimeout` for the agent to be ready (a startup dialog keeps it from that). */
+function agentStartArgs(o: { name: string; kind: string; pane: string; args: string[] }, herdrTimeout: number): string[] {
+  return ["agent", "start", o.name, "--kind", o.kind, "--pane", o.pane, "--timeout", String(herdrTimeout), "--", ...o.args];
 }
 
 function field(args: string[], value: unknown, ...keys: string[]): string {

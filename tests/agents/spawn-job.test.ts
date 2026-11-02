@@ -264,45 +264,89 @@ function trustRoot(): { root: string; thread: string } {
   return { root, thread };
 }
 
-/** A fake pane screen: `screens` are what successive reads return (the last one repeats). */
-function screen(screens: string[], events: string[] = []) {
-  let reads = 0;
+type Status = "idle" | "working" | "blocked" | "done" | "unknown" | "absent";
+
+/**
+ * A fake Herdr screen: successive polls see `polls[i]` (the last one repeats), a pane's agent status and its visible
+ * screen. Answering the dialog (enter) clears it, as Claude Code does. `events` records reads, keys and anything else.
+ */
+function screen(polls: { status: Status; text: string }[], events: string[] = []) {
+  let i = 0;
+  let answered = false;
+  const now = () => (answered ? { status: "working" as Status, text: "Welcome to Claude Code" } : polls[Math.min(i, polls.length - 1)]!);
   return {
     events,
-    reads: () => reads,
-    paneReadAsync: async (pane: string) => (events.push(`read ${pane}`), screens[Math.min(reads++, screens.length - 1)] ?? ""),
-    paneSendKeysAsync: async (pane: string, key: string) => void events.push(`keys ${pane} ${key}`),
-  };
+    reads: () => events.filter((e) => e.startsWith("read")).length,
+    keys: () => events.filter((e) => e.startsWith("keys")),
+    agentListAsync: async () => {
+      const st = now().status;
+      i++;
+      return st === "absent" ? [] : ["w1:p1", "w1:p3"].map((pane) => ({ pane, status: st, kind: "claude" }));
+    },
+    paneReadAsync: async (pane: string) => (events.push(`read ${pane}`), now().text),
+    paneSendKeysAsync: async (pane: string, key: string) => {
+      events.push(`keys ${pane} ${key}`);
+      if (key === "enter") answered = true;
+    },
+  } as const;
 }
 
+const DIALOG = { status: "blocked", text: TRUST_SCREEN } as const;
+const STARTING = { status: "absent", text: "" } as const;
 const noSleep = async () => {};
+const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 
-test("a trust dialog in a pane under <root>/.worktrees/ is answered once with down then enter, and logged", async () => {
+test("a blocked agent showing the trust dialog in a pane under <root>/.worktrees/ is answered once (down, enter), and logged", async () => {
   const { root, thread } = trustRoot();
   const { b } = bridge("not_ready");
-  const s = screen(["", TRUST_SCREEN, TRUST_SCREEN, "Welcome to Claude Code"]);
+  const s = screen([STARTING, DIALOG]);
   const logs: string[] = [];
   await runSpawnJob(
     { ...JOB, root, split: { ...JOB.split!, cwd: thread } },
     { herdr: b, screen: s, report: async () => true, sleep: noSleep, log: (m) => void logs.push(m) },
   );
-  expect(s.events.filter((e) => e.startsWith("keys"))).toEqual(["keys w1:p3 down", "keys w1:p3 enter"]);
+  expect(s.keys()).toEqual(["keys w1:p3 down", "keys w1:p3 enter"]);
   expect(logs).toEqual([`trusted ${thread} for Claude Code (a folder agt created)`]);
 });
 
-test("a root pane job's cwd decides as well: its thread folder under .worktrees/ is answered", async () => {
+test("the dialog is answered while Herdr's agent start is still waiting for the agent to be ready", async () => {
+  const { root, thread } = trustRoot();
+  const { b } = bridge();
+  const events: string[] = [];
+  const s = screen([STARTING, DIALOG], events);
+  // Real Herdr's `agent start --timeout` returns only once the agent is ready, which the dialog prevents.
+  (b as { agentStartAsync?: unknown }).agentStartAsync = async () => {
+    for (let i = 0; i < 1_000 && s.keys().length < 2; i++) await tick();
+    events.push("start resolved");
+  };
+  await runSpawnJob({ ...JOB, root, split: undefined, pane: "w1:p1", cwd: thread }, { herdr: b, screen: s, report: async () => true, sleep: tick, log: () => {} });
+  expect(events.filter((e) => !e.startsWith("read"))).toEqual(["keys w1:p1 down", "keys w1:p1 enter", "start resolved"]);
+});
+
+test("dialog text on the screen of an agent that is not blocked is never answered, and the watch ends once the agent runs", async () => {
+  const { root, thread } = trustRoot();
+  for (const status of ["working", "idle"] as const) {
+    const { b } = bridge();
+    const s = screen([STARTING, { status, text: TRUST_SCREEN }]);
+    await runSpawnJob({ ...JOB, root, split: { ...JOB.split!, cwd: thread } }, { herdr: b, screen: s, report: async () => true, sleep: noSleep, log: () => {} });
+    expect(s.keys()).toEqual([]);
+    expect(s.reads()).toBe(0);
+  }
+});
+
+test("a blocked agent whose screen only mentions trust (no dialog options) is not answered", async () => {
   const { root, thread } = trustRoot();
   const { b } = bridge("not_ready");
-  const s = screen([TRUST_SCREEN]);
-  await runSpawnJob({ ...JOB, root, split: undefined, pane: "w1:p1", cwd: thread }, { herdr: b, screen: s, report: async () => true, sleep: noSleep, log: () => {} });
-  expect(s.events.filter((e) => e.startsWith("keys"))).toEqual(["keys w1:p1 down", "keys w1:p1 enter"]);
+  const s = screen([{ status: "blocked", text: "Do you trust the files? (a message, not the dialog)" }]);
+  await runSpawnJob({ ...JOB, root, split: { ...JOB.split!, cwd: thread } }, { herdr: b, screen: s, report: async () => true, sleep: noSleep, log: () => {} });
+  expect(s.keys()).toEqual([]);
 });
 
 test("a pane outside <root>/.worktrees/ is never answered or even read: that trust is the user's choice", async () => {
   const { root } = trustRoot();
   for (const cwd of [root, join(root, "api"), `${root}/.worktrees-other/x`]) {
     const { b } = bridge("not_ready");
-    const s = screen([TRUST_SCREEN]);
+    const s = screen([DIALOG]);
     await runSpawnJob({ ...JOB, root, split: { ...JOB.split!, cwd } }, { herdr: b, screen: s, report: async () => true, sleep: noSleep, log: () => {} });
     expect(s.events).toEqual([]);
   }
@@ -310,17 +354,17 @@ test("a pane outside <root>/.worktrees/ is never answered or even read: that tru
 
 test("no trust dialog within the watch (about 60s) sends no keys, and the watch ends", async () => {
   const { root, thread } = trustRoot();
-  const { b } = bridge();
-  const s = screen(["Welcome to Claude Code"]);
+  const { b } = bridge("not_ready");
+  const s = screen([{ status: "blocked", text: "An MCP server needs approval" }]);
   await runSpawnJob({ ...JOB, root, split: { ...JOB.split!, cwd: thread } }, { herdr: b, screen: s, report: async () => true, sleep: noSleep, log: () => {} });
   expect(s.reads()).toBe(60);
-  expect(s.events.filter((e) => e.startsWith("keys"))).toEqual([]);
+  expect(s.keys()).toEqual([]);
 });
 
 test("another agent kind is never answered (adapters opt in through trustPrompt)", async () => {
   const { root, thread } = trustRoot();
   const { b } = bridge("not_ready");
-  const s = screen([TRUST_SCREEN]);
+  const s = screen([DIALOG]);
   await runSpawnJob({ ...JOB, kind: "opencode", root, split: { ...JOB.split!, cwd: thread } }, { herdr: b, screen: s, report: async () => true, sleep: noSleep, log: () => {} });
   expect(s.events).toEqual([]);
 });
@@ -329,11 +373,11 @@ test("the trust watch never delays the spawn report", async () => {
   const { root, thread } = trustRoot();
   const { b } = bridge("not_ready");
   const events: string[] = [];
-  // The dialog shows only from the fifth read: the report must already be in by then.
-  const s = screen(["", "", "", "", TRUST_SCREEN], events);
+  // The dialog shows only from the fifth poll: the report must already be in by then.
+  const s = screen([STARTING, STARTING, STARTING, STARTING, DIALOG], events);
   await runSpawnJob(
     { ...JOB, root, split: { ...JOB.split!, cwd: thread } },
-    { herdr: b, screen: s, report: async (c) => (events.push(`report ${(c as { cmd: string }).cmd}`), true), sleep: async () => void (await Promise.resolve()), log: () => {} },
+    { herdr: b, screen: s, report: async (c) => (events.push(`report ${(c as { cmd: string }).cmd}`), true), sleep: tick, log: () => {} },
   );
   const reported = events.indexOf("report session.attached");
   expect(reported).toBeGreaterThanOrEqual(0);
@@ -343,13 +387,29 @@ test("the trust watch never delays the spawn report", async () => {
 test("a failed start or a refused report ends the trust watch without keys", async () => {
   const { root, thread } = trustRoot();
   const failed = bridge("start");
-  const s1 = screen([TRUST_SCREEN]);
+  const s1 = screen([STARTING, STARTING, DIALOG]);
   await runSpawnJob({ ...JOB, root, split: { ...JOB.split!, cwd: thread } }, { herdr: failed.b, screen: s1, report: async () => true, sleep: noSleep, log: () => {} });
-  expect(s1.events).toEqual([]);
+  expect(s1.keys()).toEqual([]);
   const refused = bridge("not_ready");
-  const s2 = screen(["", "", TRUST_SCREEN]);
+  const s2 = screen([STARTING, STARTING, DIALOG]);
   await runSpawnJob({ ...JOB, root, split: { ...JOB.split!, cwd: thread } }, { herdr: refused.b, screen: s2, report: async () => false, sleep: noSleep, log: () => {} });
-  expect(s2.events.filter((e) => e.startsWith("keys"))).toEqual([]);
+  expect(s2.keys()).toEqual([]);
+});
+
+test("a start retried while the pane's shell is busy keeps one watch, which answers after the launch", async () => {
+  const { root, thread } = trustRoot();
+  const { b } = bridge();
+  let busy = 3;
+  const events: string[] = [];
+  (b as { agentStart: unknown }).agentStart = () => {
+    if (busy-- > 0) throw new HerdrError("agent_pane_busy", "busy");
+    events.push("launched");
+    throw new HerdrError("agent_not_ready", "blocked at startup");
+  };
+  const s = screen([STARTING, DIALOG], events);
+  await runSpawnJob({ ...JOB, root, split: { ...JOB.split!, cwd: thread } }, { herdr: b, screen: s, report: async () => true, sleep: noSleep, log: () => {} });
+  expect(s.keys()).toEqual(["keys w1:p3 down", "keys w1:p3 enter"]);
+  expect(events.indexOf("launched")).toBeLessThan(events.indexOf("keys w1:p3 down"));
 });
 
 test("the trust watch's length is overridable from the environment, and 0 turns it off (tests keep jobs short-lived)", async () => {
@@ -358,7 +418,20 @@ test("the trust watch's length is overridable from the environment, and 0 turns 
   expect(spawnTrustPolls({ AGT_SPAWN_TRUST_POLLS: "-1" })).toBe(60);
   const { root, thread } = trustRoot();
   const { b } = bridge("not_ready");
-  const s = screen([TRUST_SCREEN]);
+  const s = screen([DIALOG]);
   await runSpawnJob({ ...JOB, root, split: { ...JOB.split!, cwd: thread } }, { herdr: b, screen: s, trustPolls: 0, report: async () => true, sleep: noSleep, log: () => {} });
   expect(s.events).toEqual([]);
+});
+
+test("before Herdr confirms the launch, the pane's previous agent seen idle or done does not end the watch", async () => {
+  const { root, thread } = trustRoot();
+  const { b } = bridge();
+  const events: string[] = [];
+  // The pane's earlier agent is listed done until the new one starts and shows the dialog.
+  const s = screen([{ status: "done", text: "" }, { status: "done", text: "" }, DIALOG], events);
+  (b as { agentStartAsync?: unknown }).agentStartAsync = async () => {
+    for (let i = 0; i < 1_000 && s.keys().length < 2; i++) await tick();
+  };
+  await runSpawnJob({ ...JOB, root, split: undefined, pane: "w1:p1", cwd: thread }, { herdr: b, screen: s, report: async () => true, sleep: tick, log: () => {} });
+  expect(s.keys()).toEqual(["keys w1:p1 down", "keys w1:p1 enter"]);
 });

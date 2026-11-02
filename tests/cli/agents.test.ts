@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { parse } from "yaml";
 import { systemPrompt } from "../../src/agents/prompts.ts";
 import { initProject } from "../../src/project/init.ts";
-import { FAKE_CLAUDE, FAKE_HERDR, fakeHerdrState, isolatedConfigHome, repoName, tempRepo, waitFor, waitWorktreeAdded, SPAWN_REPORT_ENV } from "../helpers.ts";
+import { FAKE_CLAUDE, FAKE_HERDR, fakeHerdrState, isolatedConfigHome, repoName, tempRepo, waitFor, waitWorktreeAdded, SPAWN_TEST_ENV } from "../helpers.ts";
 
 const BIN = join(import.meta.dir, "../../bin/agt");
 let root: string;
@@ -16,7 +16,7 @@ function agt(args: string[], extra: Record<string, string> = {}, stdin?: string,
   const r = Bun.spawnSync([process.execPath, BIN, ...args], {
     cwd,
     env: {
-      PATH: process.env.PATH ?? "", HOME: "/nonexistent", XDG_CONFIG_HOME: xdg, AGT_ROOT: root, FAKE_HERDR_STATE: fake.file, ...SPAWN_REPORT_ENV,
+      PATH: process.env.PATH ?? "", HOME: "/nonexistent", XDG_CONFIG_HOME: xdg, AGT_ROOT: root, FAKE_HERDR_STATE: fake.file, ...SPAWN_TEST_ENV,
       HERDR_ENV: "1", HERDR_WORKSPACE_ID: "w1", HERDR_TAB_ID: "w1:t0", HERDR_PANE_ID: "w1:p0", HERDR_BIN_PATH: FAKE_HERDR,
       AGT_CLAUDE_BIN: FAKE_CLAUDE, AGT_OPENCODE_BIN: "/nonexistent/opencode", AGT_CODEX_BIN: "/nonexistent/codex", AGT_OMP_BIN: "/nonexistent/omp", FAKE_CLAUDE_LOG: claudeLog,
       ...extra,

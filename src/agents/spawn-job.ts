@@ -101,30 +101,40 @@ export async function runSpawnJob(
   const sleep = deps.sleep ?? ((ms: number) => Bun.sleep(ms));
   let created: string | undefined;
   let attached: { pane: string; pending?: string };
-  let trust: { stop(): void; done: Promise<void> } | undefined;
+  let trust: ReturnType<typeof watchTrust>;
   try {
     const pane = job.pane ?? (created = splitWithFallbacks(deps.herdr, job.split!));
     // A leading space keeps the line out of shell history (HISTCONTROL=ignorespace, zsh's HIST_IGNORE_SPACE).
     const exported = job.pane ? Object.entries(job.exportEnv ?? {}) : [];
     if (exported.length) deps.herdr.runInPane(pane, ` export ${exported.map(([k, v]) => `${k}=${shellQuote(v)}`).join(" ")}`);
+    const start = { name: job.name, kind: job.kind, pane, args: job.args };
     for (let attempt = 0; ; attempt++) {
+      // The trust watch runs beside the start: Herdr's `agent start` waits for the agent to be ready, which a trust
+      // dialog prevents, so the dialog must be answered while it waits. It goes on beside the bootstrap and the report,
+      // never delaying them (a bootstrap the dialog blocks is queued for the agent's first idle as usual).
+      trust ??= watchTrust(job, pane, deps.screen, deps.trustPolls ?? TRUST_POLLS, sleep, deps.log ?? ((m) => console.error(`agt __spawn: ${m}`)));
       try {
-        deps.herdr.agentStart({ name: job.name, kind: job.kind, pane, args: job.args });
+        if (deps.herdr.agentStartAsync) await deps.herdr.agentStartAsync(start);
+        else deps.herdr.agentStart(start);
+        trust?.launched();
         break;
       } catch (e) {
         // The agent is in the pane but waiting on a startup dialog (trust, MCP): it is started, just not ready yet.
-        if (e instanceof HerdrError && e.code === "agent_not_ready") break;
-        // Real Herdr refuses a freshly split pane until its shell reaches the prompt.
+        if (e instanceof HerdrError && e.code === "agent_not_ready") {
+          trust?.launched();
+          break;
+        }
+        // Real Herdr refuses a freshly split pane until its shell reaches the prompt. Nothing launched: the watch
+        // starts again, with its whole length, on the attempt that does.
         if (e instanceof HerdrError && e.code === "agent_pane_busy" && attempt < (deps.busyRetries ?? BUSY_RETRIES)) {
+          trust?.stop();
+          trust = undefined;
           await sleep(BUSY_RETRY_MS);
           continue;
         }
         throw e;
       }
     }
-    // Runs beside the bootstrap and the report, never before them: the daemon hears of the agent at once, and a
-    // bootstrap the dialog blocks is queued for the agent's first idle as usual.
-    trust = watchTrust(job, pane, deps.screen, deps.trustPolls ?? TRUST_POLLS, sleep, deps.log ?? ((m) => console.error(`agt __spawn: ${m}`)));
     let pending: string | undefined;
     if (job.bootstrap) {
       try {
@@ -175,19 +185,28 @@ export function agtCreatedFolder(root: string, cwd: string): boolean {
  * Answers the agent's one-time folder-trust dialog, once, when its adapter has one and the agent runs in a folder agt
  * created. A non-git thread folder in a workspace does not inherit the trust the user gave the workspace root, so
  * without this every coordinator would stop at the dialog. The user's own folders are never answered for, and Claude's
- * config is never touched: agt answers the dialog on screen as the user would. Read errors are retried until the end.
+ * config is never touched: agt answers the dialog on screen as the user would. Keys go only to an agent Herdr reports
+ * `blocked` whose screen shows the whole dialog. Once Herdr has confirmed the launch (its start returned) and lists
+ * the agent running (idle, working, done), the agent is past the dialog and the watch ends; before that such a status
+ * may be the pane's previous agent. Until then, and on any error, it polls on until its end.
  */
 function watchTrust(job: SpawnJob, pane: string, screen: PaneScreen | undefined, polls: number, sleep: (ms: number) => Promise<void>, log: (m: string) => void) {
   const prompt = adapterForHerdrKind(job.kind)?.trustPrompt;
   const cwd = job.cwd ?? job.split?.cwd;
   if (!screen || !prompt || polls === 0 || cwd === undefined || !agtCreatedFolder(job.root, cwd)) return undefined;
   let stopped = false;
+  let launched = false;
   const done = (async () => {
     for (let i = 0; i < polls && !stopped; i++) {
       if (i > 0) await sleep(TRUST_POLL_MS);
       if (stopped) return;
       try {
-        if (!prompt.screen.test(await screen.paneReadAsync(pane))) continue;
+        const status = (await screen.agentListAsync()).find((a) => a.pane === pane)?.status;
+        if (launched && (status === "idle" || status === "working" || status === "done")) return;
+        if (status !== "blocked") continue;
+        const text = await screen.paneReadAsync(pane);
+        if (!prompt.screen.every((re) => re.test(text))) continue;
+        if (stopped) return; // stopped while reading: a busy retry's watch, a failed start or a refused report
         for (const [k, key] of prompt.keys.entries()) {
           if (k > 0) await sleep(TRUST_KEY_GAP_MS);
           await screen.paneSendKeysAsync(pane, key);
@@ -199,7 +218,7 @@ function watchTrust(job: SpawnJob, pane: string, screen: PaneScreen | undefined,
       }
     }
   })();
-  return { stop: () => void (stopped = true), done };
+  return { stop: () => void (stopped = true), launched: () => void (launched = true), done };
 }
 
 function closeQuietly(herdr: HerdrBridge, pane: string): void {

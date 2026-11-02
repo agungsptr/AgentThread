@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { HerdrCli, HerdrError, shellQuote, spawnAsync, spawnRunner, type Runner } from "../../src/herdr/bridge.ts";
+import { HerdrCli, HerdrError, shellQuote, spawnAsync, spawnRunner, type AsyncRunner, type Runner } from "../../src/herdr/bridge.ts";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -183,6 +183,26 @@ describe("agent commands", () => {
       { args: ["agent", "prompt", "w1:p2", "Ticket T1 is done."], timeout: 10000 },
       { args: ["pane", "close", "w1:p3"], timeout: 10000 },
     ]);
+  });
+
+  test("async agent start, pane read and send-keys: same argv and error mapping; a pane read is raw text", async () => {
+    const calls: { args: string[]; timeout: number }[] = [];
+    let reply = { exitCode: 0, stdout: '{"result":{"type":"ok"}}', stderr: "" };
+    const asyncRunner: AsyncRunner = async (_bin, args, _env, timeoutMs) => (calls.push({ args, timeout: timeoutMs }), reply);
+    const h = new HerdrCli({ bin: "herdr", asyncRunner });
+    await h.agentStartAsync({ name: "n", kind: "claude", pane: "w1:p3", args: ["x"] });
+    reply = { exitCode: 0, stdout: "Do you trust the files in this folder?\n", stderr: "" };
+    expect(await h.paneReadAsync("w1:p3")).toBe("Do you trust the files in this folder?\n");
+    await h.paneSendKeysAsync("w1:p3", "down");
+    expect(calls).toEqual([
+      { args: ["agent", "start", "n", "--kind", "claude", "--pane", "w1:p3", "--timeout", "60000", "--", "x"], timeout: 70000 },
+      { args: ["pane", "read", "w1:p3", "--source", "visible"], timeout: 10000 },
+      { args: ["pane", "send-keys", "w1:p3", "down"], timeout: 10000 },
+    ]);
+    reply = { exitCode: 1, stdout: "", stderr: JSON.stringify({ error: { code: "agent_not_ready", message: "agent is blocked at startup" } }) };
+    const e = await h.agentStartAsync({ name: "n", kind: "claude", pane: "w1:p3", args: [] }).catch((x) => x);
+    expect(e).toBeInstanceOf(HerdrError);
+    expect((e as HerdrError).code).toBe("agent_not_ready");
   });
 
   test("fake herdr: agent start needs a known pane; pane close removes it", () => {

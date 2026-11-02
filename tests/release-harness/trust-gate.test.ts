@@ -36,7 +36,16 @@ test("a coordinator's trust dialog that goes away within 30s does not fail the r
   await f.done();
   expect(f.foreign).toEqual([]);
   expect(f.keys).toEqual([]); // the harness never answers outside main's pane
-  expect(f.log).toContain("agt answered the Claude Code workspace-trust dialog in w1:p2");
+  expect(f.log).toContain("Claude Code workspace-trust dialog cleared in w1:p2");
+});
+
+test("a dialog missing from one poll only (a flicker) keeps its grace clock: past 30s in all it still fails the row", async () => {
+  // Polls are 1.5s apart: the dialog is missed at t=15s only.
+  const f = fake((t) => ({ "w1:p2": t !== 15_000 }), 90_000);
+  await f.done();
+  expect(f.log.filter((m) => m.includes("cleared"))).toEqual([]);
+  expect(f.foreign.map((x) => x.pane)).toEqual(["w1:p2"]);
+  expect(f.foreign[0]!.at).toBeLessThan(33_000);
 });
 
 test("a coordinator's trust dialog still showing after 30s fails the row, once", async () => {

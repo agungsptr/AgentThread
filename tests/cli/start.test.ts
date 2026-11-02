@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { systemPrompt } from "../../src/agents/prompts.ts";
 import { shellQuote } from "../../src/herdr/bridge.ts";
 import { initProject } from "../../src/project/init.ts";
-import { FAKE_AGENT, FAKE_HERDR, fakeHerdrState, isolatedConfigHome, tempRepo, SPAWN_REPORT_ENV } from "../helpers.ts";
+import { FAKE_AGENT, FAKE_HERDR, fakeHerdrState, isolatedConfigHome, tempRepo, SPAWN_TEST_ENV } from "../helpers.ts";
 
 const BIN = join(import.meta.dir, "../../bin/agt");
 
@@ -18,7 +18,7 @@ function agt(args: string[], extra: Record<string, string> = {}, opts: { herdr?:
     HOME: "/nonexistent",
     XDG_CONFIG_HOME: xdg,
     AGT_ROOT: root,
-    ...SPAWN_REPORT_ENV,
+    ...SPAWN_TEST_ENV,
     FAKE_HERDR_STATE: fake.file,
     // never the real agent binaries
     AGT_CLAUDE_BIN: "/nonexistent/claude",
