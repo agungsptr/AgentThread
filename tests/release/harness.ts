@@ -605,7 +605,7 @@ async function answerConfirmed(herdr: Pick<Herdr, "run">, pane: string, screen: 
   if (r.answered) log(`answered the Claude Code workspace-trust dialog in ${pane}`);
   else
     log(
-      `the Claude Code workspace-trust dialog in ${pane} still had "No, exit" selected after ${TRUST_TRIES} downs; left it to the user. Its screen:\n${r.screen.split("\n").slice(-SCREEN_LINES).join("\n")}`,
+      `the Claude Code workspace-trust dialog in ${pane} did not show "Yes" selected after ${TRUST_TRIES} downs; left it to the user. Its screen:\n${r.screen.split("\n").slice(-SCREEN_LINES).join("\n")}`,
     );
   return r.answered;
 }

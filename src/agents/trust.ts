@@ -11,6 +11,8 @@ export interface TrustPrompt {
   marker: string;
   /** The option that trusts the folder. */
   choice: RegExp;
+  /** The option that refuses it; the dialog's options start at its last line on screen. */
+  refuse: RegExp;
   /** Moves the selection to the next option. */
   move: string;
   /** Picks the selected option. */
@@ -22,6 +24,7 @@ export const CLAUDE_TRUST_PROMPT: TrustPrompt = {
   screen: [/trust this folder|Do you trust the files/i, /No, exit/i],
   marker: "❯",
   choice: /Yes, I trust this folder/i,
+  refuse: /No, exit/i,
   move: "down",
   confirm: "enter",
 };
@@ -34,23 +37,26 @@ export const TRUST_KEY_GAP_MS = 300;
 export const isTrustDialog = (screen: string, prompt: TrustPrompt): boolean => prompt.screen.every((re) => re.test(screen));
 
 /**
- * Whether the dialog on `screen` has the trusting option selected: some marked line is that option and no other marked
- * line is something else (a shell prompt using the same marker, say), so `confirm` can never pick "No, exit".
+ * Whether the dialog on `screen` has the trusting option selected. Only the dialog's own option lines are judged: the
+ * last `refuse` line on screen and the first `choice` line after it. The trusting line must carry the marker and the
+ * refusing one must not. Other marked lines (a shell prompt drawn with the same glyph, above an inline dialog with the
+ * command that started it, or below it) are not options and never count.
  */
 export function trustChoiceSelected(screen: string, prompt: TrustPrompt): boolean {
-  const marked = screen
-    .split("\n")
-    .map((line) => line.trimStart())
-    .filter((line) => line.startsWith(prompt.marker))
-    .map((line) => line.slice(prompt.marker.length).trim());
-  return marked.length > 0 && marked.every((line) => prompt.choice.test(line));
+  const lines = screen.split("\n");
+  const no = lines.findLastIndex((line) => prompt.refuse.test(line));
+  if (no < 0) return false;
+  const yes = lines.findIndex((line, i) => i > no && prompt.choice.test(line));
+  if (yes < 0) return false;
+  const marked = (line: string) => line.trimStart().startsWith(prompt.marker);
+  return marked(lines[yes]!) && !marked(lines[no]!);
 }
 
 /**
- * Answers the trust dialog on `screen` with confirmation: `confirm` is sent only once a read shows the trusting option
- * selected; until then `move` is sent and the screen read again, at most `tries` times. A blind `move` can land before
- * the dialog takes input, so the cursor is checked, never assumed. Gives up, sending nothing more, when the tries run
- * out or the dialog is gone; `screen` is the last one read.
+ * Answers the trust dialog on `screen` with confirmation: `confirm` is sent only once two reads in a row show the
+ * trusting option selected (one read may catch a redraw midway); until then `move` is sent and the screen read again,
+ * at most `tries` moves. A blind `move` can land before the dialog takes input, so the cursor is checked, never
+ * assumed. Gives up, sending nothing more, when the moves run out or the dialog is gone; `screen` is the last one read.
  */
 export async function answerTrustDialog(
   io: { read(): Promise<string>; send(key: string): Promise<void>; sleep(ms: number): Promise<void> },
@@ -59,15 +65,23 @@ export async function answerTrustDialog(
   o: { tries?: number; gapMs?: number } = {},
 ): Promise<{ answered: boolean; screen: string }> {
   const tries = o.tries ?? TRUST_TRIES;
-  for (let i = 0; ; i++) {
+  const gapMs = o.gapMs ?? TRUST_KEY_GAP_MS;
+  let moves = 0;
+  let seen = 0; // consecutive reads with the trusting option selected
+  for (;;) {
     if (!isTrustDialog(screen, prompt)) return { answered: false, screen };
     if (trustChoiceSelected(screen, prompt)) {
-      await io.send(prompt.confirm);
-      return { answered: true, screen };
+      if (++seen >= 2) {
+        await io.send(prompt.confirm);
+        return { answered: true, screen };
+      }
+    } else {
+      seen = 0;
+      if (moves === tries) return { answered: false, screen };
+      await io.send(prompt.move);
+      moves++;
     }
-    if (i === tries) return { answered: false, screen };
-    await io.send(prompt.move);
-    await io.sleep(o.gapMs ?? TRUST_KEY_GAP_MS);
+    await io.sleep(gapMs);
     screen = await io.read();
   }
 }

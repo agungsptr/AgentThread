@@ -89,3 +89,17 @@ test("a session still starting is never ended by poll misses (the sweep's spawn_
   expect(run("idle", null, m)).toEqual([]);
   expect(run("idle", null, m)).toEqual([{ session: "s1", signal: "ended" }]);
 });
+
+test("a starting session once listed blocked and then missing has exited: two misses end it", () => {
+  const m = new Map<string, number>();
+  const poll = (listed: string | null, blockedNotified: boolean) =>
+    diffAgentStatus({
+      sessions: [{ ...sess("starting"), ...(blockedNotified ? { blockedNotified } : {}) }],
+      listed: listed ? [{ pane: "p1", status: listed as "blocked" }] : [],
+      misses: m,
+      hooks: () => false,
+    });
+  expect(poll("blocked", false)).toEqual([{ session: "s1", signal: "blocked" }]);
+  expect(poll(null, true)).toEqual([]);
+  expect(poll(null, true)).toEqual([{ session: "s1", signal: "ended" }]);
+});

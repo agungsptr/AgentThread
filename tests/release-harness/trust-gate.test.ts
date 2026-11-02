@@ -79,7 +79,7 @@ test("main's dialog stuck on 'No, exit' never gets enter: the screen is logged o
   await f.done();
   expect(f.keys).toEqual(Array(5).fill("main down"));
   expect(f.log.filter((m) => m.includes("left it to the user"))).toEqual([
-    `the Claude Code workspace-trust dialog in main still had "No, exit" selected after 5 downs; left it to the user. Its screen:\n${TRUST_SCREEN}`,
+    `the Claude Code workspace-trust dialog in main did not show "Yes" selected after 5 downs; left it to the user. Its screen:\n${TRUST_SCREEN}`,
   ]);
 });
 
@@ -104,7 +104,7 @@ test("answerTrustIn confirms the choice the same way: enter only on 'Yes', never
     let t = 0;
     expect(await answerTrustIn(herdr, "main", 60_000, (m) => void log.push(m), { now: () => t, sleep: async (ms) => void (t += ms) })).toBe(answered);
     expect(sent).toEqual([...keys]);
-    if (!answered) expect(log[0]).toStartWith('the Claude Code workspace-trust dialog in main still had "No, exit" selected after 5 downs');
+    if (!answered) expect(log[0]).toStartWith('the Claude Code workspace-trust dialog in main did not show "Yes" selected after 5 downs');
   }
 });
 

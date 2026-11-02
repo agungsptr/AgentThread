@@ -251,11 +251,12 @@ function watchTrust(
         const status = (await screen.agentListAsync()).find((a) => a.pane === pane)?.status;
         if (launched && (status === "idle" || status === "working" || status === "done")) return;
         blocked = undefined;
-        // Answered: Herdr may list the agent blocked a little longer; the watch waits for it to be ready.
-        if (answered || status !== "blocked") continue;
+        if (status !== "blocked") continue;
         const text = await screen.paneReadAsync(pane);
         blocked = text;
-        if (!isTrustDialog(text, prompt)) continue;
+        // Answered: Herdr may list the agent blocked a little longer, or a second startup dialog follows. The watch waits
+        // for the agent to be ready, keeping the screen so a watch that ends with the agent still blocked logs it.
+        if (answered || !isTrustDialog(text, prompt)) continue;
         if (stopped) return; // stopped while reading: a busy retry's watch, a failed start or a refused report
         const io = { read: () => screen.paneReadAsync(pane), send: (key: string) => screen.paneSendKeysAsync(pane, key), sleep };
         const r = await answerTrustDialog(io, prompt, text);
@@ -268,7 +269,7 @@ function watchTrust(
         if (stopped) return;
         blocked = r.screen;
         if (!isTrustDialog(r.screen, prompt)) continue; // the dialog went away meanwhile: look again
-        log(`the trust dialog in pane ${pane} (session ${job.session}) still had "No, exit" selected after ${TRUST_TRIES} ${prompt.move}s; left it to the user. Its screen:\n${lastLines(r.screen)}`);
+        log(`the trust dialog in pane ${pane} (session ${job.session}) did not show "Yes" selected after ${TRUST_TRIES} ${prompt.move}s; left it to the user. Its screen:\n${lastLines(r.screen)}`);
         return;
       } catch {
         // the pane may be busy or gone; read again until the watch ends

@@ -547,7 +547,7 @@ test("'No, exit' still selected after 5 downs: enter is never pressed, the scree
   await runSpawnJob(trustJob(thread, root), { herdr: c.herdr, screen: c.screen, report: report(c.events), sleep: noSleep, log: (m) => void logs.push(m) });
   expect(c.keys()).toEqual(Array(5).fill("keys down"));
   expect(logs).toEqual([
-    `the trust dialog in pane w1:p3 (session s-1) still had "No, exit" selected after 5 downs; left it to the user. Its screen:\n${drawDialog(false)}`,
+    `the trust dialog in pane w1:p3 (session s-1) did not show "Yes" selected after 5 downs; left it to the user. Its screen:\n${drawDialog(false)}`,
   ]);
   // The agent is still at the dialog: the bootstrap waits in the daemon's queue.
   expect(c.events.at(-1)).toBe(`report ${JSON.stringify({ cmd: "session.attached", session: "s-1", pane: "w1:p3", pending: JOB.bootstrap })}`);
@@ -601,4 +601,24 @@ test("without a dialog the bootstrap goes as soon as the launched agent is liste
   (c.herdr as { agentStart: unknown }).agentStart = () => void c.events.push("start");
   await runSpawnJob(trustJob(thread, root), { herdr: c.herdr, screen: c.screen, report: report(c.events), sleep: noSleep, log: () => {} });
   expect(c.events).toEqual(["start", `prompt ${JOB.bootstrap}`, `report ${JSON.stringify({ cmd: "session.attached", session: "s-1", pane: "w1:p3" })}`]);
+});
+
+test("after the answer the watch keeps reading a still-blocked agent: a second startup dialog's screen is logged when it ends", async () => {
+  const { root, thread } = trustRoot();
+  const c = claudeStart({ absent: 1 });
+  // Once trusted, another startup dialog (not the trust one) keeps the agent blocked.
+  const list = c.screen.agentListAsync;
+  let trusted = false;
+  c.screen.agentListAsync = async () => (trusted ? [{ pane: "w1:p3", status: "blocked", kind: "claude" }] : list());
+  const read = c.screen.paneReadAsync;
+  c.screen.paneReadAsync = async () => (trusted ? "An MCP server needs approval" : read());
+  const send = c.screen.paneSendKeysAsync;
+  c.screen.paneSendKeysAsync = async (p, k) => (await send(p, k), void (k === "enter" && (trusted = true)));
+  const logs: string[] = [];
+  await runSpawnJob(trustJob(thread, root), { herdr: c.herdr, screen: c.screen, report: report(c.events), sleep: noSleep, log: (m) => void logs.push(m) });
+  expect(c.keys()).toEqual(["keys down", "keys enter"]);
+  expect(logs).toEqual([
+    `trusted ${thread} for Claude Code (a folder agt created)`,
+    "the trust watch ended unanswered while the agent in pane w1:p3 (session s-1) was blocked; its screen:\nAn MCP server needs approval",
+  ]);
 });
