@@ -63,6 +63,30 @@ export function awaitsWorker(state: State, t: Thread, ticket: string): boolean {
   return !w || !isLive(w);
 }
 
+/** Fresh workers an open ticket gets when its workers exit before starting (Ticket.earlyExits); past that the coordinator decides. */
+export const MAX_EARLY_RESPAWNS = 2;
+
+/**
+ * The ticket's latest worker when it exited before starting (Session.exitedEarly), the ticket is still open and none
+ * of its workers is live; undefined otherwise.
+ */
+export function exitedBeforeStart(state: State, t: Thread, ticket: string): Session | undefined {
+  if (t.tickets.find((x) => x.id === ticket)?.status !== "open") return undefined;
+  const workers = [...state.sessions.values()].filter((s) => s.role === "worker" && s.thread === t.id && s.ticket === ticket);
+  if (workers.some(isLive)) return undefined;
+  const last = workers.at(-1);
+  return last?.exitedEarly ? last : undefined;
+}
+
+/**
+ * Whether an open ticket waits for a fresh worker because its worker exited before starting: at most
+ * MAX_EARLY_RESPAWNS times (counted from the events, so a daemon restart keeps both the wait and the count).
+ */
+export function awaitsRespawn(state: State, t: Thread, ticket: string): boolean {
+  const k = t.tickets.find((x) => x.id === ticket);
+  return exitedBeforeStart(state, t, ticket) !== undefined && (k?.earlyExits ?? 0) <= MAX_EARLY_RESPAWNS;
+}
+
 /**
  * The ticket that keeps `ticket` from starting on a task thread: one in the same repo with a file in common that is
  * in a file-holding status or has a live worker already (spawned, not yet claimed). `also` names tickets spawned in the

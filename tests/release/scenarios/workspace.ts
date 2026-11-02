@@ -691,5 +691,6 @@ export function workspaceScenarios(): Scenario[] {
     asUser("ws-tab-shell", tabShell),
   ])
     rows.set(s.id, s);
-  return [...rows.values()];
+  // Worker panes stay open after their session ends, so a failed row's screen dump (run.ts) can still read them.
+  return [...rows.values()].map((s) => ({ ...s, config: { ...s.config, herdr: { ...s.config?.herdr, close_worker_pane_on_end: false } } }));
 }

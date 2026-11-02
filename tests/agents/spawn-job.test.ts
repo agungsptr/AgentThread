@@ -435,3 +435,48 @@ test("before Herdr confirms the launch, the pane's previous agent seen idle or d
   await runSpawnJob({ ...JOB, root, split: undefined, pane: "w1:p1", cwd: thread }, { herdr: b, screen: s, report: async () => true, sleep: tick, log: () => {} });
   expect(s.keys()).toEqual(["keys w1:p1 down", "keys w1:p1 enter"]);
 });
+
+// ---------- screen evidence in the daemon log ----------
+
+const lines = (n: number) => Array.from({ length: n }, (_, i) => `line ${i + 1}`).join("\n");
+
+test("a failed agent start writes the pane's visible screen (its last 40 lines) to the log before closing the pane", async () => {
+  const { b, calls } = bridge("start");
+  const events: string[] = [];
+  const s = screen([{ status: "unknown", text: lines(50) }], events);
+  const logs: string[] = [];
+  await runSpawnJob(JOB, { herdr: b, screen: s, report: async () => true, sleep: noSleep, log: (m) => void logs.push(m) });
+  expect(logs).toEqual([`agent start failed in pane w1:p3 (session s-1); its screen:\n${lines(50).split("\n").slice(-40).join("\n")}`]);
+  expect(calls.at(-1)).toBe("close w1:p3");
+});
+
+test("a failed start whose screen cannot be read still reports failed", async () => {
+  const { b } = bridge("start");
+  const s = { ...screen([STARTING]), paneReadAsync: async () => Promise.reject(new Error("gone")) };
+  const reports: object[] = [];
+  const logs: string[] = [];
+  await runSpawnJob(JOB, { herdr: b, screen: s, report: async (c) => (reports.push(c), true), sleep: noSleep, log: (m) => void logs.push(m) });
+  expect(reports).toEqual([expect.objectContaining({ cmd: "session.failed" })]);
+  expect(logs).toEqual([]);
+});
+
+test("a trust watch that ends without answering while the agent is blocked writes its screen to the log", async () => {
+  const { root, thread } = trustRoot();
+  const { b } = bridge("not_ready");
+  const s = screen([{ status: "blocked", text: "An MCP server needs approval" }]);
+  const logs: string[] = [];
+  await runSpawnJob({ ...JOB, root, split: { ...JOB.split!, cwd: thread } }, { herdr: b, screen: s, report: async () => true, sleep: noSleep, log: (m) => void logs.push(m) });
+  expect(s.reads()).toBe(60); // the last read is the one logged
+  expect(logs).toEqual(["the trust watch ended unanswered while the agent in pane w1:p3 (session s-1) was blocked; its screen:\nAn MCP server needs approval"]);
+});
+
+test("a trust watch that ends with the agent running, or never blocked, logs no screen", async () => {
+  const { root, thread } = trustRoot();
+  for (const polls of [[STARTING, { status: "idle", text: "" }], [STARTING]] as { status: Status; text: string }[][]) {
+    const { b } = bridge();
+    const s = screen(polls);
+    const logs: string[] = [];
+    await runSpawnJob({ ...JOB, root, split: { ...JOB.split!, cwd: thread } }, { herdr: b, screen: s, report: async () => true, sleep: noSleep, log: (m) => void logs.push(m) });
+    expect(logs).toEqual([]);
+  }
+});

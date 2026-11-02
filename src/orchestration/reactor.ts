@@ -1,10 +1,11 @@
 import { handoffRequestPrompt, returnNotice } from "../agents/prompts.ts";
+import { roleAgent } from "../agents/roles.ts";
 import type { Effect } from "../commands/handler.ts";
 import { type Config, durationMs } from "../config/config.ts";
 import type { EventBody, StoredEvent } from "../domain/types.ts";
 import { isLive, type Session, type State, type Thread } from "../state/projection.ts";
 import { generateHandoff } from "./handoff.ts";
-import { awaitsWorker, conflictingTicket, liveSessions, rotateCoordinator, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure, workerCwd, workerLimit } from "./sessions.ts";
+import { awaitsRespawn, awaitsWorker, conflictingTicket, exitedBeforeStart, liveSessions, rotateCoordinator, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure, workerCwd, workerLimit } from "./sessions.ts";
 import { tierRun } from "./tiers.ts";
 
 const CHECKPOINT_NOTICE = (thread: string | undefined) =>
@@ -40,6 +41,9 @@ const MAX_FRESH_WORKERS = 2;
 const KEEPS_EXITING = "returned ticket's workers keep exiting";
 /** The coordinator's notice when a returned ticket is released because its fresh workers keep exiting. */
 const EXITING = "the returned ticket's workers keep exiting, so the ticket is open again.";
+const earlyNotice = (ticket: string) => `The worker for ticket ${ticket} exited before starting; agt started a fresh one.`;
+const earlyTwiceNotice = (thread: string, ticket: string) =>
+  `The worker for ticket ${ticket} exited before starting, twice; check its pane or spawn it again with agt worker spawn ${thread} --ticket ${ticket}.`;
 const doneNotice = (ticket: string, summary: string | undefined) => `Ticket ${ticket} is done${summary ? `: ${summary}` : ""}.`;
 const reviewNotice = (thread: string, ticket: string, summary: string | undefined) =>
   `Ticket ${ticket} is ready for review: ${summary ?? ""}. Review its commits, then agt ticket accept ${thread}/${ticket} or agt ticket return ${thread}/${ticket} "<what to fix>".`;
@@ -107,19 +111,35 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
     if (!t || t.status === "done" || !t.rootPane) return;
     // Workers ended earlier in this call (an accepted ticket's) no longer hold a slot; state does not know yet.
     let free = workerLimit(t, ctx.config) - liveSessions(state, t.id, "worker").filter((w) => !ended.has(w.id)).length - (spawnedPerThread.get(t.id) ?? 0);
-    // Returned tickets whose worker is gone go first (they were running), then the queue.
+    // Returned tickets whose worker is gone go first (they were running), then the queue, then open tickets whose
+    // worker exited before starting (they wait like a queued spawn).
     const returned = t.tickets.filter((k) => k.status === "in_progress" && awaitsWorker(state, t, k.id)).map((k) => k.id);
-    for (const ticket of [...returned, ...t.workerQueue.filter((x) => !returned.includes(x))]) {
+    const respawns = t.tickets.filter((k) => awaitsRespawn(state, t, k.id)).map((k) => k.id);
+    for (const ticket of new Set([...returned, ...t.workerQueue, ...respawns])) {
       if (free <= 0) break;
       if (spawnedTickets.has(`${t.id}/${ticket}`) || released.has(`${t.id}/${ticket}`)) continue; // spawned or released earlier in this call; state isn't updated yet
       if (!awaitsWorker(state, t, ticket)) continue;
       if (workerCwd(t, ticket) === undefined) continue; // its repo has no worktree (yet)
       if (conflictingTicket(state, t, ticket, new Set([...spawnedTickets].filter((x) => x.startsWith(`${t.id}/`)).map((x) => x.slice(t.id.length + 1))))) continue; // shares a file with a running ticket
       spawnedTickets.add(`${t.id}/${ticket}`);
-      take(spawnWorker(state, t, ticket, ctx, t.workerAgents[ticket], ended));
+      // A fresh worker for an early exit keeps the agent of the one it replaces when that was not roles.worker (--agent).
+      const early = t.workerAgents[ticket] ? undefined : exitedBeforeStart(state, t, ticket);
+      const agent = t.workerAgents[ticket] ?? (early && early.agent !== roleAgent(ctx.config, "worker").agent ? early.agent : undefined);
+      take(spawnWorker(state, t, ticket, ctx, agent, ended));
       spawnedPerThread.set(t.id, (spawnedPerThread.get(t.id) ?? 0) + 1);
       free--;
     }
+  };
+  /**
+   * A worker that exited before starting (Session.exitedEarly: its ticket was still open) must not strand its ticket:
+   * fillWorkers gives the ticket a fresh one through the queue (awaitsRespawn: max_workers, file conflicts), and the
+   * coordinator hears it. Past MAX_EARLY_RESPAWNS the ticket stays open and the coordinator decides. Returns whether
+   * the coordinator was told.
+   */
+  const earlyExitNotice = (s: Session, t: Thread): boolean => {
+    if (!s.exitedEarly || !s.ticket || t.status === "done" || exitedBeforeStart(state, t, s.ticket)?.id !== s.id) return false;
+    notify(coordinatorToNotify(t.id), awaitsRespawn(state, t, s.ticket) ? earlyNotice(s.ticket) : earlyTwiceNotice(t.id, s.ticket));
+    return true;
   };
   /** The coordinator hears a ticket is ready for review at the event the projection picked (Ticket.reviewNoticeSeq). */
   const reviewReady = (ev: StoredEvent) => {
@@ -288,7 +308,10 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
           const exiting = returned && (k.freshWorkers ?? 0) >= MAX_FRESH_WORKERS;
           if (held && (!returned || exiting)) releaseTicket(t.id, k.id, exiting ? KEEPS_EXITING : "worker session lost");
           const w = cap(workerRef(s.ticket, "worker"));
-          notify(coordinatorToNotify(t.id), exiting ? `${w} was lost; ${EXITING}` : returned ? `${w} was lost; ${FRESH}` : held ? `${w} was lost; the ticket is open again.` : `${w} was lost.`);
+          // One lost before it started is replaced, and the coordinator hears that instead.
+          if (!earlyExitNotice(s, t)) {
+            notify(coordinatorToNotify(t.id), exiting ? `${w} was lost; ${EXITING}` : returned ? `${w} was lost; ${FRESH}` : held ? `${w} was lost; the ticket is open again.` : `${w} was lost.`);
+          }
           // A released ticket is not open in `state` yet, so this only spawns other queued tickets (and returned ones); the coordinator decides on the released one.
           fillWorkers(t.id);
         }
@@ -382,6 +405,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
             releaseTicket(t!.id, k.id, lostSpawn ? "worker spawn report lost" : s.pane || s.turns > 0 ? "worker session failed" : "worker spawn failed");
           }
           notify(coordinatorToNotify(s.thread), text ?? `${cap(workerRef(s.ticket, "worker"))} failed: ${ev.payload.reason}.`);
+          if (t) earlyExitNotice(s, t);
         }
         if (s?.role === "coordinator") {
           const main = liveSessions(state, undefined, "main")[0];
@@ -459,6 +483,8 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
           } else if (k?.status === "in_progress" && k.assignee === s.id) {
             releaseTicket(t.id, k.id, "worker session ended");
             notify(coordinatorToNotify(t.id), `${cap(workerRef(k.id, "worker"))} ended; the ticket is open again.`);
+          } else {
+            earlyExitNotice(s, t);
           }
         }
         fillWorkers(s?.thread);

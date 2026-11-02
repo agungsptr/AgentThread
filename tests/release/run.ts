@@ -18,6 +18,7 @@ import {
   type Check,
   cleanEnv,
   cleanupProcesses,
+  dumpPaneScreens,
   events,
   git,
   MIXED_MAIN_TRUST,
@@ -250,6 +251,8 @@ async function runRow(sc: Scenario): Promise<{ status: "PASS" | "FAIL"; reason?:
     failure = e instanceof Error ? e.message : String(e);
     log(`[${sc.id}] error: ${failure}`);
   } finally {
+    // A failed or timed-out row (a startup timeout included) keeps what every pane showed; the server stops in cleanup.
+    if (server && !cleaning && (failure || checks.some((c) => !c.ok))) await dumpPaneScreens(server.herdr, note);
     await cleanup();
   }
   // A row must assert something of its own; the harness checks every row gets do not count.

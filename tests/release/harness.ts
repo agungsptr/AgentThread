@@ -529,6 +529,28 @@ export function watchTrustDialogs(
   return { stop: () => void (stopped = true), answered, done };
 }
 
+/** How much of each pane's screen a failed row keeps in its notes. */
+export const SCREEN_LINES = 40;
+
+/**
+ * A failed or timed-out row's evidence, read before its Herdr server stops: every pane's visible screen (`pane read
+ * <id> --source visible`), its last SCREEN_LINES lines, as one note per pane. Never throws; what cannot be read is noted.
+ */
+export async function dumpPaneScreens(herdr: Pick<Herdr, "run">, note: (m: string) => void): Promise<void> {
+  const why = (r: { stderr: string; error?: { message: string } }) => r.error?.message ?? r.stderr.trim();
+  try {
+    const list = await herdr.run(["pane", "list"], 10_000);
+    if (list.exitCode !== 0) return note(`pane screens: herdr pane list failed (${why(list)})`);
+    for (const { pane_id } of ((list.result?.panes ?? []) as { pane_id: string }[])) {
+      const r = await herdr.run(["pane", "read", pane_id, "--source", "visible"], 10_000);
+      if (r.exitCode !== 0) note(`screen of pane ${pane_id}: unreadable (${why(r)})`);
+      else note(`screen of pane ${pane_id} (last ${SCREEN_LINES} lines):\n${r.stdout.split("\n").slice(-SCREEN_LINES).join("\n")}`);
+    }
+  } catch (e) {
+    note(`pane screens: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
 /** The folders agt trusted for Claude Code, from its spawn jobs' lines in the daemon log (src/agents/spawn-job.ts). */
 export function agtTrustedFolders(daemonLog: string): string[] {
   return [...daemonLog.matchAll(/trusted (.+) for Claude Code \(a folder agt created\)$/gm)].map((m) => m[1]!);

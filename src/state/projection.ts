@@ -49,6 +49,8 @@ export interface Session {
   hooksSeen?: boolean;
   /** Seq of the agent.blocked event that raised that notice (the only one the reactor notifies for). */
   blockedSeq?: number;
+  /** A worker that ended, was lost or failed while its ticket was still open: it exited before starting (see Ticket.earlyExits). */
+  exitedEarly?: boolean;
   /** When the session was created (session.created ts). */
   createdAt: string;
 }
@@ -83,6 +85,11 @@ export interface Ticket {
   accepted?: boolean;
   /** Task threads: fresh workers created for the ticket since its latest return (see session.created); bounds respawns. */
   freshWorkers?: number;
+  /**
+   * Workers of the ticket that ended, were lost or failed while it was still open (before any claimed it), since its
+   * latest claim; the reactor gives it a fresh worker for the first MAX_EARLY_RESPAWNS of them (orchestration/sessions.ts).
+   */
+  earlyExits?: number;
 }
 
 export interface Entry {
@@ -392,6 +399,7 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       const k = ticket(ev.payload.ticket);
       k.status = "in_progress";
       k.assignee = ev.payload.assignee;
+      delete k.earlyExits; // a worker started on it: the next early exit counts from zero
       note(t, ev, `${k.id} claimed by ${k.assignee}`);
       break;
     }
@@ -450,6 +458,7 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       delete k.completedAt;
       delete k.returnNote;
       delete k.freshWorkers;
+      delete k.earlyExits;
       delete k.accepted;
       note(t, ev, `${k.id} reopened`);
       break;
@@ -595,6 +604,20 @@ function reviewNoticeAt(state: State, s: Session, seq: number): void {
   if (k?.status === "review" && k.assignee === s.id && k.reviewNoticeSeq === undefined) k.reviewNoticeSeq = seq;
 }
 
+/**
+ * A live worker leaving while its ticket is still open, with no other live worker for it, exited before starting: it
+ * is marked (Session.exitedEarly) and counted on the ticket (Ticket.earlyExits). Called before its status changes.
+ */
+function countEarlyExit(state: State, s: Session): void {
+  if (s.role !== "worker" || !isLive(s) || !s.thread || !s.ticket) return;
+  const t = state.threads.get(s.thread);
+  const k = t?.tickets.find((x) => x.id === s.ticket);
+  if (!t || t.status === "done" || k?.status !== "open") return;
+  if ([...state.sessions.values()].some((o) => o.id !== s.id && o.role === "worker" && o.thread === s.thread && o.ticket === s.ticket && isLive(o))) return;
+  s.exitedEarly = true;
+  k.earlyExits = (k.earlyExits ?? 0) + 1;
+}
+
 /** Applies session and notice events; returns false for every other event type. */
 function applySessionEvent(state: State, ev: StoredEvent): boolean {
   switch (ev.type) {
@@ -718,6 +741,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
     case "session.lost": {
       const s = sessionOf(state, ev.seq, ev.payload.session);
       reviewNoticeAt(state, s, ev.seq);
+      countEarlyExit(state, s);
       // A coordinator that exited normally is reported lost by `agt start`, so it gets replaced.
       if (isLive(s) || (s.status === "ended" && s.role === "coordinator")) {
         s.status = "lost";
@@ -748,6 +772,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
     case "session.ended": {
       const s = sessionOf(state, ev.seq, ev.payload.session);
       reviewNoticeAt(state, s, ev.seq);
+      countEarlyExit(state, s);
       if (isLive(s)) {
         s.status = "ended";
         threadNote(state, ev, `session ${short(ev.payload.session)} ended`);
@@ -756,6 +781,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
     }
     case "session.failed":
       reviewNoticeAt(state, sessionOf(state, ev.seq, ev.payload.session), ev.seq);
+      countEarlyExit(state, sessionOf(state, ev.seq, ev.payload.session));
       sessionOf(state, ev.seq, ev.payload.session).status = "failed";
       threadNote(state, ev, `session ${short(ev.payload.session)} failed: ${ev.payload.reason}`);
       return true;

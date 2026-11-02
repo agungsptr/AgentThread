@@ -99,7 +99,9 @@ export async function runSpawnJob(
   },
 ): Promise<void> {
   const sleep = deps.sleep ?? ((ms: number) => Bun.sleep(ms));
+  const log = deps.log ?? ((m: string) => console.error(`agt __spawn: ${m}`));
   let created: string | undefined;
+  let started: string | undefined; // the pane the agent start ran in
   let attached: { pane: string; pending?: string };
   let trust: ReturnType<typeof watchTrust>;
   try {
@@ -108,11 +110,12 @@ export async function runSpawnJob(
     const exported = job.pane ? Object.entries(job.exportEnv ?? {}) : [];
     if (exported.length) deps.herdr.runInPane(pane, ` export ${exported.map(([k, v]) => `${k}=${shellQuote(v)}`).join(" ")}`);
     const start = { name: job.name, kind: job.kind, pane, args: job.args };
+    started = pane;
     for (let attempt = 0; ; attempt++) {
       // The trust watch runs beside the start: Herdr's `agent start` waits for the agent to be ready, which a trust
       // dialog prevents, so the dialog must be answered while it waits. It goes on beside the bootstrap and the report,
       // never delaying them (a bootstrap the dialog blocks is queued for the agent's first idle as usual).
-      trust ??= watchTrust(job, pane, deps.screen, deps.trustPolls ?? TRUST_POLLS, sleep, deps.log ?? ((m) => console.error(`agt __spawn: ${m}`)));
+      trust ??= watchTrust(job, pane, deps.screen, deps.trustPolls ?? TRUST_POLLS, sleep, log);
       try {
         if (deps.herdr.agentStartAsync) await deps.herdr.agentStartAsync(start);
         else deps.herdr.agentStart(start);
@@ -146,6 +149,11 @@ export async function runSpawnJob(
     attached = { pane, ...(pending ? { pending } : {}) };
   } catch (e) {
     trust?.stop();
+    // What the agent's pane showed is the only trace of why it did not start: keep it in the daemon log.
+    if (started && deps.screen) {
+      const text = await deps.screen.paneReadAsync(started).catch(() => undefined);
+      if (text !== undefined) log(`agent start failed in pane ${started} (session ${job.session}); its screen:\n${lastLines(text)}`);
+    }
     if (created) closeQuietly(deps.herdr, created);
     await deps.report({ cmd: "session.failed", session: job.session, reason: e instanceof Error ? e.message : String(e) });
     return;
@@ -161,6 +169,10 @@ export async function runSpawnJob(
   closeQuietly(deps.herdr, attached.pane);
   console.error(`agt __spawn: session ${job.session} was failed by the daemon; stopped its agent`);
 }
+
+/** How much of a pane's screen goes to the daemon log. */
+const SCREEN_LINES = 40;
+const lastLines = (text: string) => text.split("\n").slice(-SCREEN_LINES).join("\n");
 
 /** The trust watch lasts about 60s: TRUST_POLLS reads, TRUST_POLL_MS apart. */
 const TRUST_POLLS = 60;
@@ -188,7 +200,8 @@ export function agtCreatedFolder(root: string, cwd: string): boolean {
  * config is never touched: agt answers the dialog on screen as the user would. Keys go only to an agent Herdr reports
  * `blocked` whose screen shows the whole dialog. Once Herdr has confirmed the launch (its start returned) and lists
  * the agent running (idle, working, done), the agent is past the dialog and the watch ends; before that such a status
- * may be the pane's previous agent. Until then, and on any error, it polls on until its end.
+ * may be the pane's previous agent. Until then, and on any error, it polls on until its end. A watch that ends unanswered
+ * while the agent is blocked (another dialog, or one it did not recognize) writes the screen it last read to the log.
  */
 function watchTrust(job: SpawnJob, pane: string, screen: PaneScreen | undefined, polls: number, sleep: (ms: number) => Promise<void>, log: (m: string) => void) {
   const prompt = adapterForHerdrKind(job.kind)?.trustPrompt;
@@ -196,6 +209,8 @@ function watchTrust(job: SpawnJob, pane: string, screen: PaneScreen | undefined,
   if (!screen || !prompt || polls === 0 || cwd === undefined || !agtCreatedFolder(job.root, cwd)) return undefined;
   let stopped = false;
   let launched = false;
+  /** The screen read at the last poll when the agent was blocked; cleared by any other status. */
+  let blocked: string | undefined;
   const done = (async () => {
     for (let i = 0; i < polls && !stopped; i++) {
       if (i > 0) await sleep(TRUST_POLL_MS);
@@ -203,8 +218,10 @@ function watchTrust(job: SpawnJob, pane: string, screen: PaneScreen | undefined,
       try {
         const status = (await screen.agentListAsync()).find((a) => a.pane === pane)?.status;
         if (launched && (status === "idle" || status === "working" || status === "done")) return;
+        blocked = undefined;
         if (status !== "blocked") continue;
         const text = await screen.paneReadAsync(pane);
+        blocked = text;
         if (!prompt.screen.every((re) => re.test(text))) continue;
         if (stopped) return; // stopped while reading: a busy retry's watch, a failed start or a refused report
         for (const [k, key] of prompt.keys.entries()) {
@@ -217,6 +234,7 @@ function watchTrust(job: SpawnJob, pane: string, screen: PaneScreen | undefined,
         // the pane may be busy or gone; read again until the watch ends
       }
     }
+    if (!stopped && blocked !== undefined) log(`the trust watch ended unanswered while the agent in pane ${pane} (session ${job.session}) was blocked; its screen:\n${lastLines(blocked)}`);
   })();
   return { stop: () => void (stopped = true), launched: () => void (launched = true), done };
 }

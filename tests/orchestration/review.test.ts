@@ -22,9 +22,12 @@ function apply(state: State, bodies: EventBody[], actor: Actor = USER): StoredEv
   return bodies.map((b) => {
     const ev = { ...b, seq: state.lastSeq + 1, ts: at(clock++), actor } as StoredEvent;
     applyEvent(state, ev);
+    log.push(ev);
     return ev;
   });
 }
+/** Every event `apply` stored since the last world(), for replays. */
+let log: StoredEvent[] = [];
 
 /** Every effect the reactor produced while settling, in order. */
 let effects: Effect[] = [];
@@ -47,15 +50,18 @@ function exec(state: State, cmd: unknown, actor: Actor = COORD): HandleResult {
 const signal = (s: State, session: string, type: "agent.idle" | "session.active" | "session.ended") =>
   settle(s, apply(s, [{ type, thread: "001", payload: { session } }]));
 
+const initial = (maxWorkers: number, legacy: boolean): EventBody[] => [
+  INIT,
+  legacy ? threadCreated("001", { status: "in_progress", maxWorkers }) : taskThreadCreated("001", "kyc-1", { status: "in_progress", maxWorkers }),
+  { type: "thread.tab_opened", thread: "001", payload: { tab: "w1:t2", rootPane: "w1:p2" } },
+];
+
 function world(maxWorkers = 5, legacy = false): State {
   ids = 0;
   clock = 0;
   effects = [];
-  const s = stateOf(
-    INIT,
-    legacy ? threadCreated("001", { status: "in_progress", maxWorkers }) : taskThreadCreated("001", "kyc-1", { status: "in_progress", maxWorkers }),
-    { type: "thread.tab_opened", thread: "001", payload: { tab: "w1:t2", rootPane: "w1:p2" } },
-  );
+  log = [];
+  const s = stateOf(...initial(maxWorkers, legacy));
   apply(s, [
     { type: "worktree.added", thread: "001", payload: { repo: "api", path: "/repo/.worktrees/kyc-1/api", branch: "wip/kyc-1", source: "main" } },
     { type: "session.created", thread: "001", payload: { session: C, role: "coordinator", agent: "claude-code", name: "c" } },
@@ -430,5 +436,142 @@ describe("the finished-worker grace sweep", () => {
     const r = sweep(s, at(clock + grace + 1000), { root: "/repo", config: DEFAULT_CONFIG, newId });
     expect(r.events).toContainEqual({ type: "session.ended", thread: "001", payload: { session: w.id } });
     expect(r.effects).toContainEqual({ kind: "pane.close", pane: "w1:p3" });
+  });
+});
+
+describe("a worker that exits before claiming its ticket", () => {
+  const RESPAWN = "The worker for ticket T1 exited before starting; agt started a fresh one.";
+  const TWICE = "The worker for ticket T1 exited before starting, twice; check its pane or spawn it again with agt worker spawn 001 --ticket T1.";
+  const exitBody = (how: "ended" | "lost" | "failed", session: string): EventBody =>
+    how === "ended"
+      ? { type: "session.ended", thread: "001", payload: { session } }
+      : how === "lost"
+        ? { type: "session.lost", thread: "001", payload: { session, reason: "gone" } }
+        : { type: "session.failed", thread: "001", payload: { session, reason: "boom" } };
+  const exit = (s: State, how: "ended" | "lost" | "failed", session: string) => settle(s, apply(s, [exitBody(how, session)]));
+  /** The worker the coordinator spawned for T1, attached and started (the real run's polled start), not claiming yet. */
+  const started = (s: State, pane = "w1:p3"): Session => {
+    const w = workerOf(s, "T1");
+    apply(s, [
+      { type: "session.attached", thread: "001", payload: { session: w.id, pane } },
+      { type: "session.started", thread: "001", payload: { session: w.id, source: "poll" } },
+    ]);
+    return w;
+  };
+  const spawnsFor = (ticket: string) => effects.filter((e) => e.kind === "agent.spawn" && e.ticket === ticket).length;
+
+  for (const how of ["ended", "lost", "failed"] as const) {
+    test(`${how}: a fresh worker twice, each with the notice; a third early exit leaves the ticket open with the notice`, () => {
+      const s = world();
+      addTicket(s, "T1", ["src/a.ts"]);
+      expect(exec(s, { cmd: "worker.spawn", thread: "001", ticket: "T1" }).ok).toBe(true);
+      const w0 = started(s);
+      effects = [];
+      exit(s, how, w0.id);
+      const w1 = workerOf(s, "T1");
+      expect(w1.id).not.toBe(w0.id);
+      expect(isLive(w1)).toBe(true);
+      expect(spawnsFor("T1")).toBe(1);
+      expect(effects.find((e) => e.kind === "agent.spawn")).toMatchObject({ session: w1.id, ticket: "T1", cwd: "/repo/.worktrees/kyc-1/api" });
+      expect(coordNotices(s)).toContain(RESPAWN);
+      expect(ticketOf(s, "T1").status).toBe("open");
+
+      const before = coordNotices(s).length;
+      exit(s, how, started(s, "w1:p4").id);
+      const w2 = workerOf(s, "T1");
+      expect(w2.id).not.toBe(w1.id);
+      expect(spawnsFor("T1")).toBe(2);
+      expect(coordNotices(s).slice(before)).toContain(RESPAWN);
+
+      const before3 = coordNotices(s).length;
+      exit(s, how, started(s, "w1:p5").id);
+      expect(spawnsFor("T1")).toBe(2);
+      expect(workerOf(s, "T1").id).toBe(w2.id);
+      expect(ticketOf(s, "T1")).toMatchObject({ status: "open" });
+      expect(s.threads.get("001")!.workerQueue).toEqual([]);
+      const later = coordNotices(s).slice(before3);
+      expect(later).toContain(TWICE);
+      expect(later).not.toContain(RESPAWN);
+    });
+  }
+
+  test("the early-exit count is rebuilt from the events", () => {
+    const s = world();
+    addTicket(s, "T1", ["src/a.ts"]);
+    exec(s, { cmd: "worker.spawn", thread: "001", ticket: "T1" });
+    exit(s, "ended", started(s).id);
+    exit(s, "ended", started(s, "w1:p4").id);
+    expect(ticketOf(s, "T1").earlyExits).toBe(2);
+    // replayed from scratch, the projection reaches the same count
+    const replay = stateOf(...initial(5, false));
+    for (const ev of log) applyEvent(replay, ev);
+    expect(replay.threads.get("001")!.tickets.find((k) => k.id === "T1")!.earlyExits).toBe(2);
+  });
+
+  test("a worker that claimed the ticket and then ended follows the existing flow: released, no respawn", () => {
+    const s = world();
+    addTicket(s, "T1", ["src/a.ts"]);
+    exec(s, { cmd: "worker.spawn", thread: "001", ticket: "T1" });
+    const w = started(s);
+    expect(exec(s, { cmd: "ticket.claim", thread: "001", ticket: "T1" }, asWorker(w)).ok).toBe(true);
+    effects = [];
+    exit(s, "ended", w.id);
+    expect(spawnsFor("T1")).toBe(0);
+    expect(ticketOf(s, "T1")).toMatchObject({ status: "open" });
+    expect(ticketOf(s, "T1").earlyExits).toBeUndefined();
+    expect(coordNotices(s)).toEqual(["Worker for T1 ended; the ticket is open again."]);
+  });
+
+  test("at max_workers the fresh worker waits in the queue and starts when a slot frees", () => {
+    const s = world(1);
+    addTicket(s, "T1", ["src/a.ts"]);
+    addTicket(s, "T2", ["src/b.ts"]);
+    addTicket(s, "T3", ["src/c.ts"]);
+    exec(s, { cmd: "worker.spawn", thread: "001", ticket: "T1" });
+    const w = started(s);
+    exec(s, { cmd: "worker.spawn", thread: "001", ticket: "T2" }); // queued: T1's worker holds the only slot
+    exec(s, { cmd: "worker.spawn", thread: "001", ticket: "T3" });
+    effects = [];
+    exit(s, "ended", w.id);
+    // the freed slot goes to the queue's head; T1 waits behind T3
+    expect(effects.filter((e) => e.kind === "agent.spawn").map((e) => (e as { ticket?: string }).ticket)).toEqual(["T2"]);
+    expect(coordNotices(s)).toContain(RESPAWN);
+    const finish = (ticket: string) => {
+      const x = workerOf(s, ticket);
+      expect(exec(s, { cmd: "ticket.claim", thread: "001", ticket }, { ...asWorker(x), ticket }).ok).toBe(true);
+      signal(s, x.id, "session.ended");
+    };
+    finish("T2");
+    expect(spawnsFor("T3")).toBe(1);
+    expect(spawnsFor("T1")).toBe(0);
+    finish("T3");
+    expect(spawnsFor("T1")).toBe(1);
+    expect(isLive(workerOf(s, "T1"))).toBe(true);
+    expect(ticketOf(s, "T1").status).toBe("open");
+  });
+
+  test("never while another live worker holds the ticket", () => {
+    const s = world();
+    addTicket(s, "T1", ["src/a.ts"]);
+    exec(s, { cmd: "worker.spawn", thread: "001", ticket: "T1" });
+    const w = started(s);
+    const other = "00000000-0000-4000-8000-0000000000ff";
+    apply(s, [{ type: "session.created", thread: "001", payload: { session: other, role: "worker", agent: "claude-code", name: "w2", ticket: "T1" } }]);
+    effects = [];
+    exit(s, "ended", w.id);
+    expect(spawnsFor("T1")).toBe(0);
+    expect(coordNotices(s)).not.toContain(RESPAWN);
+    expect(ticketOf(s, "T1").earlyExits).toBeUndefined();
+  });
+
+  test("never on a done thread", () => {
+    const s = world();
+    addTicket(s, "T1", ["src/a.ts"]);
+    exec(s, { cmd: "worker.spawn", thread: "001", ticket: "T1" });
+    const w = started(s);
+    s.threads.get("001")!.status = "done";
+    effects = [];
+    exit(s, "ended", w.id);
+    expect(spawnsFor("T1")).toBe(0);
   });
 });
