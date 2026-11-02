@@ -237,6 +237,7 @@ export function createEffectRunner(opts: {
             session: effect.session,
             name: effect.name,
             kind: adapter.herdrKind,
+            cwd: effect.cwd,
             ...(effect.pane ? { pane: effect.pane, exportEnv: launched.processEnv } : {}),
             ...(effect.splitFrom
               ? {

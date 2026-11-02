@@ -10,12 +10,14 @@ export const USER: Actor = { role: "user" };
 
 /**
  * A short spawn-report retry window (3 × 100ms instead of 20 × 500ms): a spawn job whose daemon a test has stopped
- * exits within about a second instead of retrying for 10s. Pass it in the env of a CLI-started daemon; daemons started
+ * exits within about a second instead of retrying for 10s. No trust watch either: a job would otherwise read a fake
+ * Herdr's pane for 60s after its report (tests/agents/spawn-job.test.ts covers the watch). Pass it in the env of a CLI-started daemon; daemons started
  * in the test process hand process.env to their jobs, so it is set there as well.
  */
-export const SPAWN_REPORT_ENV = { AGT_SPAWN_REPORT_ATTEMPTS: "3", AGT_SPAWN_REPORT_DELAY_MS: "100" } as const;
+export const SPAWN_REPORT_ENV = { AGT_SPAWN_REPORT_ATTEMPTS: "3", AGT_SPAWN_REPORT_DELAY_MS: "100", AGT_SPAWN_TRUST_POLLS: "0" } as const;
 process.env.AGT_SPAWN_REPORT_ATTEMPTS ??= SPAWN_REPORT_ENV.AGT_SPAWN_REPORT_ATTEMPTS;
 process.env.AGT_SPAWN_REPORT_DELAY_MS ??= SPAWN_REPORT_ENV.AGT_SPAWN_REPORT_DELAY_MS;
+process.env.AGT_SPAWN_TRUST_POLLS ??= SPAWN_REPORT_ENV.AGT_SPAWN_TRUST_POLLS;
 
 export const INIT: EventBody = { type: "project.initialized", payload: { name: "demo" } };
 

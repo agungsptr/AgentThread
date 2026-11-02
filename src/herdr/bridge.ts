@@ -120,6 +120,14 @@ export interface HerdrBridge {
   agentList(): AgentListing[];
 }
 
+/** Reads a pane's screen and types keys into it: what the spawn job needs to answer an agent's startup dialog. */
+export interface PaneScreen {
+  /** The visible screen as text. */
+  paneReadAsync(pane: string): Promise<string>;
+  /** One named key, such as `down` or `enter`. */
+  paneSendKeysAsync(pane: string, key: string): Promise<void>;
+}
+
 const envArgs = (env: Record<string, string>) => Object.entries(env).flatMap(([k, v]) => ["--env", `${k}=${v}`]);
 
 export function shellQuote(s: string): string {
@@ -127,7 +135,7 @@ export function shellQuote(s: string): string {
 }
 
 /** Drives Herdr through its CLI. Every call parses the JSON `result`, and herdr's JSON errors become HerdrError. */
-export class HerdrCli implements HerdrBridge {
+export class HerdrCli implements HerdrBridge, PaneScreen {
   constructor(private readonly opts: { bin: string; env?: Env; runner?: Runner; asyncRunner?: AsyncRunner; timeoutMs?: number }) {}
 
   get bin(): string {
@@ -246,15 +254,24 @@ export class HerdrCli implements HerdrBridge {
     }
   }
 
+  async paneReadAsync(pane: string): Promise<string> {
+    // `pane read` prints the screen itself, not a JSON result.
+    return (await this.callAsync(["pane", "read", pane, "--source", "visible"], undefined, { raw: true })) as string;
+  }
+
+  async paneSendKeysAsync(pane: string, key: string): Promise<void> {
+    await this.callAsync(["pane", "send-keys", pane, key], undefined, { raw: true });
+  }
+
   private call(args: string[], timeoutMs = this.opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, o: { emptyOk?: boolean } = {}): unknown {
     return this.result(args, (this.opts.runner ?? spawnRunner)(this.opts.bin, args, this.opts.env ?? process.env, timeoutMs), timeoutMs, o);
   }
 
-  private async callAsync(args: string[], timeoutMs = this.opts.timeoutMs ?? DEFAULT_TIMEOUT_MS): Promise<unknown> {
-    return this.result(args, await (this.opts.asyncRunner ?? spawnAsync)(this.opts.bin, args, this.opts.env ?? process.env, timeoutMs), timeoutMs);
+  private async callAsync(args: string[], timeoutMs = this.opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, o: { raw?: boolean } = {}): Promise<unknown> {
+    return this.result(args, await (this.opts.asyncRunner ?? spawnAsync)(this.opts.bin, args, this.opts.env ?? process.env, timeoutMs), timeoutMs, o);
   }
 
-  private result(args: string[], r: RunResult, timeoutMs: number, o: { emptyOk?: boolean } = {}): unknown {
+  private result(args: string[], r: RunResult, timeoutMs: number, o: { emptyOk?: boolean; raw?: boolean } = {}): unknown {
     const what = `herdr ${args.slice(0, 2).join(" ")}`;
     if (r.timedOut) throw new HerdrError("timeout", `${what}: timed out after ${timeoutMs}ms`);
     if (r.exitCode !== 0) {
@@ -271,6 +288,7 @@ export class HerdrCli implements HerdrBridge {
       }
       throw new HerdrError(code, `${what}: ${message}`);
     }
+    if (o.raw) return r.stdout;
     if (o.emptyOk && r.stdout.trim() === "") return undefined;
     try {
       return (JSON.parse(r.stdout) as { result?: unknown }).result;

@@ -1,17 +1,19 @@
 #!/usr/bin/env bun
 // Release e2e runner: bun run e2e:release [--only <id,…>] [--agents <kind,…>] [--timeout <dur>] [--list] [--keep]
 // Real Herdr (an isolated named session per row), real agents, real models. See docs/release-e2e.md.
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { durationMs } from "../../src/config/config.ts";
 import { AGENT_KINDS, type AgentKind } from "../../src/domain/types.ts";
 import { shellQuote, spawnAsync } from "../../src/herdr/bridge.ts";
+import { paths } from "../../src/project/paths.ts";
 import { detectAgents } from "../../src/project/setup.ts";
 import {
   AGT,
   agt,
+  agtTrustedFolders,
   answerTrustIn,
   type Check,
   cleanEnv,
@@ -144,6 +146,10 @@ async function runRow(sc: Scenario): Promise<{ status: "PASS" | "FAIL"; reason?:
   const cleanup = () =>
     (cleaning ??= (async () => {
       watcher?.stop();
+      // The trust dialogs agt answered itself, from its spawn jobs' daemon log lines.
+      if (root && existsSync(paths(root).daemonLog)) {
+        for (const folder of agtTrustedFolders(readFileSync(paths(root).daemonLog, "utf8"))) note(`agt trusted ${folder} for Claude Code`);
+      }
       // The daemon first (it would react to the agents vanishing), then Herdr with every pane, then any straggler.
       if (root) await cleanupProcesses(root, note, { sweepCwd: false }).catch((e) => note(`cleanup: ${e}`));
       if (server) await server.stop().catch((e) => note(`herdr stop: ${e}`));
@@ -226,7 +232,8 @@ async function runRow(sc: Scenario): Promise<{ status: "PASS" | "FAIL"; reason?:
     };
     // A fixed-root row's folder is trusted once by the user; a dialog there means that step is missing, so say how.
     const trustCheck = sc.scratchAt ? MIXED_MAIN_TRUST : "no trust dialog in a coordinator/worker pane";
-    // The dialog is left unanswered, so the row ends at once (teardown as on a timeout) instead of at its deadline.
+    // agt answers it in the folders it created; one still showing after the grace ends the row at once (teardown as on
+    // a timeout) instead of at its deadline.
     const trustAbort = trustGate();
     watcher = watchTrustDialogs(server.herdr, () => h.mainPane, note, (pane) => {
       h.check(trustCheck, false, `trust dialog in pane ${pane}`);

@@ -20,10 +20,11 @@ function fakeHerdr(pane: string) {
   return { herdr, keys };
 }
 
-test("a trust dialog outside main's pane is reported and never answered", async () => {
+// `graceMs: 0` stands for a dialog still showing past the 30s agt has to answer it (tests/release-harness/trust-gate.test.ts).
+test("a trust dialog outside main's pane still showing past the grace is reported once and never answered", async () => {
   const { herdr, keys } = fakeHerdr("w1:p5");
   const foreign: string[] = [];
-  const w = watchTrustDialogs(herdr, () => "w1:p1", () => {}, (p) => foreign.push(p));
+  const w = watchTrustDialogs(herdr, () => "w1:p1", () => {}, (p) => foreign.push(p), { graceMs: 0 });
   try {
     for (let i = 0; i < 50 && foreign.length === 0; i++) await Bun.sleep(20);
     await Bun.sleep(1_700); // a second poll: still reported once, still unanswered
@@ -46,10 +47,10 @@ test("a trust dialog in main's pane is answered", async () => {
   }
 });
 
-test("a foreign trust dialog ends the row within seconds, not at its deadline", async () => {
+test("a foreign trust dialog past the grace ends the row within seconds, not at its deadline", async () => {
   const gate = trustGate();
   const { herdr } = fakeHerdr("w1:p7");
-  const w = watchTrustDialogs(herdr, () => "w1:p1", () => {}, (p) => gate.fail(p, "no trust dialog in a coordinator/worker pane"));
+  const w = watchTrustDialogs(herdr, () => "w1:p1", () => {}, (p) => gate.fail(p, "no trust dialog in a coordinator/worker pane"), { graceMs: 0 });
   const t0 = Date.now();
   try {
     const never = new Promise<void>(() => {});

@@ -40,6 +40,11 @@ export interface AgentAdapter {
   launch(o: LaunchInput): { args: string[]; env: Record<string, string>; processEnv: Record<string, string> };
   promptArgs(text: string): string[];
   capabilities: { hooks: boolean; contextSize: boolean; preCompact: boolean };
+  /**
+   * The agent's one-time folder-trust dialog, which agt answers itself when the agent starts in a folder agt created
+   * (under `<root>/.worktrees/`): `screen` matches the visible dialog and `keys` are typed to choose "trust".
+   */
+  trustPrompt?: { screen: RegExp; keys: string[] };
 }
 
 const positional = (text: string): string[] => [text];
@@ -74,6 +79,8 @@ const claudeAdapter: AgentAdapter = {
   },
   promptArgs: positional,
   capabilities: { hooks: true, contextSize: true, preCompact: true },
+  // The cursor starts on "No, exit"; the second option trusts the folder. Claude's own config is never read or written.
+  trustPrompt: { screen: /trust this folder|Do you trust the files/i, keys: ["down", "enter"] },
 };
 
 /** The git commands a task-thread role runs without asking in OpenCode's ask mode (§13): workers commit, the coordinator squashes. */
@@ -184,6 +191,11 @@ export function adapterFor(agent: AgentKind): AgentAdapter {
   const a = (ADAPTERS as Partial<Record<string, AgentAdapter>>)[agent];
   if (!a) throw new Error(`no adapter for agent ${agent}`);
   return a;
+}
+
+/** The adapter Herdr starts as `--kind <herdrKind>` (a spawn job knows only that). */
+export function adapterForHerdrKind(kind: string): AgentAdapter | undefined {
+  return Object.values(ADAPTERS).find((a) => a.herdrKind === kind);
 }
 
 const BIN_ENV: Record<AgentKind, string> = {

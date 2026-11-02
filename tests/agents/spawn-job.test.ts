@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
-import { closeSync, existsSync, fstatSync, mkdtempSync, openSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { decodeJob, encodeJob, launchSpawnJob, reportWithRetry, runSpawnJob, type SpawnJob } from "../../src/agents/spawn-job.ts";
+import { decodeJob, encodeJob, launchSpawnJob, reportWithRetry, runSpawnJob, spawnTrustPolls, type SpawnJob } from "../../src/agents/spawn-job.ts";
 import { HerdrError, type HerdrBridge } from "../../src/herdr/bridge.ts";
 import { waitFor } from "../helpers.ts";
 
@@ -250,4 +250,115 @@ test("a pane job exports its process env in that pane before the agent starts; a
   calls.length = 0;
   await runSpawnJob({ ...JOB, bootstrap: "" }, { herdr: b, report: async () => true });
   expect(calls).toEqual([`split w1:p2 {"AGT_SESSION":"s-1"}`, "start w1:p3"]);
+});
+
+// ---------- Claude Code's workspace-trust dialog in folders agt created ----------
+
+const TRUST_SCREEN = "Accessing workspace:\n\n Quick safety check: Is this a project you created or one you trust?\n ❯ 1. No, exit\n   2. Yes, I trust this folder";
+
+/** A root with a thread folder under `.worktrees/`, at its unresolved tmpdir path (macOS: /var, really /private/var). */
+function trustRoot(): { root: string; thread: string } {
+  const root = mkdtempSync(join(tmpdir(), "agt-trust-"));
+  const thread = join(root, ".worktrees", "001-task");
+  mkdirSync(thread, { recursive: true });
+  return { root, thread };
+}
+
+/** A fake pane screen: `screens` are what successive reads return (the last one repeats). */
+function screen(screens: string[], events: string[] = []) {
+  let reads = 0;
+  return {
+    events,
+    reads: () => reads,
+    paneReadAsync: async (pane: string) => (events.push(`read ${pane}`), screens[Math.min(reads++, screens.length - 1)] ?? ""),
+    paneSendKeysAsync: async (pane: string, key: string) => void events.push(`keys ${pane} ${key}`),
+  };
+}
+
+const noSleep = async () => {};
+
+test("a trust dialog in a pane under <root>/.worktrees/ is answered once with down then enter, and logged", async () => {
+  const { root, thread } = trustRoot();
+  const { b } = bridge("not_ready");
+  const s = screen(["", TRUST_SCREEN, TRUST_SCREEN, "Welcome to Claude Code"]);
+  const logs: string[] = [];
+  await runSpawnJob(
+    { ...JOB, root, split: { ...JOB.split!, cwd: thread } },
+    { herdr: b, screen: s, report: async () => true, sleep: noSleep, log: (m) => void logs.push(m) },
+  );
+  expect(s.events.filter((e) => e.startsWith("keys"))).toEqual(["keys w1:p3 down", "keys w1:p3 enter"]);
+  expect(logs).toEqual([`trusted ${thread} for Claude Code (a folder agt created)`]);
+});
+
+test("a root pane job's cwd decides as well: its thread folder under .worktrees/ is answered", async () => {
+  const { root, thread } = trustRoot();
+  const { b } = bridge("not_ready");
+  const s = screen([TRUST_SCREEN]);
+  await runSpawnJob({ ...JOB, root, split: undefined, pane: "w1:p1", cwd: thread }, { herdr: b, screen: s, report: async () => true, sleep: noSleep, log: () => {} });
+  expect(s.events.filter((e) => e.startsWith("keys"))).toEqual(["keys w1:p1 down", "keys w1:p1 enter"]);
+});
+
+test("a pane outside <root>/.worktrees/ is never answered or even read: that trust is the user's choice", async () => {
+  const { root } = trustRoot();
+  for (const cwd of [root, join(root, "api"), `${root}/.worktrees-other/x`]) {
+    const { b } = bridge("not_ready");
+    const s = screen([TRUST_SCREEN]);
+    await runSpawnJob({ ...JOB, root, split: { ...JOB.split!, cwd } }, { herdr: b, screen: s, report: async () => true, sleep: noSleep, log: () => {} });
+    expect(s.events).toEqual([]);
+  }
+});
+
+test("no trust dialog within the watch (about 60s) sends no keys, and the watch ends", async () => {
+  const { root, thread } = trustRoot();
+  const { b } = bridge();
+  const s = screen(["Welcome to Claude Code"]);
+  await runSpawnJob({ ...JOB, root, split: { ...JOB.split!, cwd: thread } }, { herdr: b, screen: s, report: async () => true, sleep: noSleep, log: () => {} });
+  expect(s.reads()).toBe(60);
+  expect(s.events.filter((e) => e.startsWith("keys"))).toEqual([]);
+});
+
+test("another agent kind is never answered (adapters opt in through trustPrompt)", async () => {
+  const { root, thread } = trustRoot();
+  const { b } = bridge("not_ready");
+  const s = screen([TRUST_SCREEN]);
+  await runSpawnJob({ ...JOB, kind: "opencode", root, split: { ...JOB.split!, cwd: thread } }, { herdr: b, screen: s, report: async () => true, sleep: noSleep, log: () => {} });
+  expect(s.events).toEqual([]);
+});
+
+test("the trust watch never delays the spawn report", async () => {
+  const { root, thread } = trustRoot();
+  const { b } = bridge("not_ready");
+  const events: string[] = [];
+  // The dialog shows only from the fifth read: the report must already be in by then.
+  const s = screen(["", "", "", "", TRUST_SCREEN], events);
+  await runSpawnJob(
+    { ...JOB, root, split: { ...JOB.split!, cwd: thread } },
+    { herdr: b, screen: s, report: async (c) => (events.push(`report ${(c as { cmd: string }).cmd}`), true), sleep: async () => void (await Promise.resolve()), log: () => {} },
+  );
+  const reported = events.indexOf("report session.attached");
+  expect(reported).toBeGreaterThanOrEqual(0);
+  expect(reported).toBeLessThan(events.indexOf("keys w1:p3 down"));
+});
+
+test("a failed start or a refused report ends the trust watch without keys", async () => {
+  const { root, thread } = trustRoot();
+  const failed = bridge("start");
+  const s1 = screen([TRUST_SCREEN]);
+  await runSpawnJob({ ...JOB, root, split: { ...JOB.split!, cwd: thread } }, { herdr: failed.b, screen: s1, report: async () => true, sleep: noSleep, log: () => {} });
+  expect(s1.events).toEqual([]);
+  const refused = bridge("not_ready");
+  const s2 = screen(["", "", TRUST_SCREEN]);
+  await runSpawnJob({ ...JOB, root, split: { ...JOB.split!, cwd: thread } }, { herdr: refused.b, screen: s2, report: async () => false, sleep: noSleep, log: () => {} });
+  expect(s2.events.filter((e) => e.startsWith("keys"))).toEqual([]);
+});
+
+test("the trust watch's length is overridable from the environment, and 0 turns it off (tests keep jobs short-lived)", async () => {
+  expect(spawnTrustPolls({})).toBe(60);
+  expect(spawnTrustPolls({ AGT_SPAWN_TRUST_POLLS: "0" })).toBe(0);
+  expect(spawnTrustPolls({ AGT_SPAWN_TRUST_POLLS: "-1" })).toBe(60);
+  const { root, thread } = trustRoot();
+  const { b } = bridge("not_ready");
+  const s = screen([TRUST_SCREEN]);
+  await runSpawnJob({ ...JOB, root, split: { ...JOB.split!, cwd: thread } }, { herdr: b, screen: s, trustPolls: 0, report: async () => true, sleep: noSleep, log: () => {} });
+  expect(s.events).toEqual([]);
 });

@@ -740,6 +740,8 @@ describe("effect runner", () => {
       const spawn = { kind: "agent.spawn", session: `s-${agent}`, role: "coordinator", run: { agent }, name: "coord", thread: "001", cwd: wt } as const;
       expect(await run({ ...spawn, pane: "p2" })).toEqual([]);
       expect(jobs.at(-1)?.exportEnv).toEqual({ AGT_AGENT_PROCESS: "1" });
+      // The spawn job answers a trust dialog by the agent's cwd, so a root pane job carries it too.
+      expect(jobs.at(-1)?.cwd).toBe(wt);
       expect(await run({ ...spawn, role: "worker", ticket: "T1", splitFrom: "p2", direction: "down" })).toEqual([]);
       expect(jobs.at(-1)?.split?.env.AGT_AGENT_PROCESS).toBe("1");
       expect(jobs.at(-1)?.exportEnv).toBeUndefined();

@@ -457,52 +457,77 @@ export async function say(herdr: Herdr, pane: string, text: string): Promise<voi
 
 const TRUST = /trust this folder|Do you trust the files/i;
 
+/** How long a coordinator/worker trust dialog may show before it fails the row: agt answers it first (Plan 13 Task 5). */
+export const TRUST_GRACE_MS = 30_000;
+
 /**
- * Answers Claude Code's one-time workspace-trust dialog in main's pane, as the user would once per project. A trust
- * dialog in any other pane (a coordinator or worker) is a product failure: `foreign` is told once per pane and the
- * dialog is left in place, so the row fails on its own (by that check or by timeout) instead of the harness masking
- * it. Every other dialog is left alone (a blocked worker is a scenario's subject). Returns the panes it answered.
+ * Answers Claude Code's one-time workspace-trust dialog in main's pane, as the user would once per project. In any
+ * other pane (a coordinator or worker) agt answers it itself, for the folders it created: the harness never does, and
+ * `foreign` is told once per pane when a dialog is still showing after `graceMs`, so the row fails instead of the
+ * harness masking a product failure. A dialog that goes away within the grace is noted as answered by agt. Every other
+ * dialog is left alone (a blocked worker is a scenario's subject). Returns the panes it answered.
  */
 export function watchTrustDialogs(
   herdr: Pick<Herdr, "agents" | "run">,
   mainPane: () => string,
   log: (m: string) => void,
   foreign: (pane: string) => void,
-): { stop(): void; answered: string[] } {
+  o: { graceMs?: number; pollMs?: number; now?: () => number; sleep?: (ms: number) => Promise<void> } = {},
+): { stop(): void; answered: string[]; done: Promise<void> } {
+  const graceMs = o.graceMs ?? TRUST_GRACE_MS;
+  const now = o.now ?? Date.now;
+  const sleep = o.sleep ?? ((ms: number) => Bun.sleep(ms));
   const answered: string[] = [];
   const reported = new Set<string>();
+  /** Coordinator/worker panes showing the dialog, with when it was first seen. */
+  const showing = new Map<string, number>();
   let stopped = false;
-  void (async () => {
+  const done = (async () => {
     while (!stopped) {
       try {
+        const seen = new Set<string>();
         for (const a of await herdr.agents()) {
           if (a.agent !== "claude" || a.agent_status !== "blocked") continue;
           if (a.pane_id !== mainPane() && reported.has(a.pane_id)) continue;
           const screen = (await herdr.run(["pane", "read", a.pane_id, "--source", "visible"])).stdout;
           if (!TRUST.test(screen)) continue;
           if (a.pane_id !== mainPane()) {
+            seen.add(a.pane_id);
+            const since = showing.get(a.pane_id) ?? now();
+            showing.set(a.pane_id, since);
+            if (now() - since < graceMs) continue;
             reported.add(a.pane_id);
+            showing.delete(a.pane_id);
             foreign(a.pane_id);
-            log(`left the Claude Code workspace-trust dialog in ${a.pane_id} unanswered: only main's pane is answered`);
+            log(`the Claude Code workspace-trust dialog in ${a.pane_id} was still showing after ${Math.round(graceMs / 1000)}s: agt did not answer it`);
             continue;
           }
           // The dialog's cursor starts on "No, exit"; the second option trusts the folder.
           await herdr.run(["pane", "send-keys", a.pane_id, "down"]);
-          await Bun.sleep(300);
+          await sleep(300);
           await herdr.run(["pane", "send-keys", a.pane_id, "enter"]);
           answered.push(a.pane_id);
           log(`answered the Claude Code workspace-trust dialog in ${a.pane_id}`);
         }
+        for (const pane of [...showing.keys()].filter((p) => !seen.has(p))) {
+          showing.delete(pane);
+          log(`agt answered the Claude Code workspace-trust dialog in ${pane}`);
+        }
       } catch {}
-      await Bun.sleep(1_500);
+      if (!stopped) await sleep(o.pollMs ?? 1_500);
     }
   })();
-  return { stop: () => void (stopped = true), answered };
+  return { stop: () => void (stopped = true), answered, done };
+}
+
+/** The folders agt trusted for Claude Code, from its spawn jobs' lines in the daemon log (src/agents/spawn-job.ts). */
+export function agtTrustedFolders(daemonLog: string): string[] {
+  return [...daemonLog.matchAll(/trusted (.+) for Claude Code \(a folder agt created\)$/gm)].map((m) => m[1]!);
 }
 
 /**
- * Ends a row as soon as the trust watcher sees a coordinator/worker trust dialog: it is left unanswered, so waiting on
- * would only burn the row's timeout. `promise` never resolves; `fail` rejects it once.
+ * Ends a row as soon as the trust watcher gives up on a coordinator/worker trust dialog (agt did not answer it within
+ * the grace): nobody else will, so waiting on would only burn the row's timeout. `promise` never resolves; `fail` rejects it once.
  */
 export function trustGate(): { promise: Promise<never>; fail(pane: string, check: string): void } {
   let reject!: (e: Error) => void;

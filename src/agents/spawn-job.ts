@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
-import { appendFileSync } from "node:fs";
-import { HerdrError, shellQuote, type HerdrBridge } from "../herdr/bridge.ts";
+import { appendFileSync, realpathSync } from "node:fs";
+import { join, relative, resolve, sep } from "node:path";
+import { HerdrError, shellQuote, type HerdrBridge, type PaneScreen } from "../herdr/bridge.ts";
+import { adapterForHerdrKind } from "./adapters.ts";
 import { AGT_BIN } from "./claude.ts";
 
 export interface SpawnJob {
@@ -16,6 +18,8 @@ export interface SpawnJob {
    * agent from the pane's shell, and that pane's env is the tab's). A split carries it in `split.env` instead.
    */
   exportEnv?: Record<string, string>;
+  /** The agent's working directory (a split's is also `split.cwd`): it decides whether agt answers a trust dialog. */
+  cwd?: string;
   /** `fallbacks` are split from in order when `pane` is gone. */
   split?: { pane: string; fallbacks?: string[]; direction: "right" | "down"; cwd: string; env: Record<string, string> };
   args: string[];
@@ -36,6 +40,13 @@ export function spawnReportRetry(env: Record<string, string | undefined>): { att
     return Number.isInteger(n) && n >= min ? n : fallback;
   };
   return { attempts: int(env.AGT_SPAWN_REPORT_ATTEMPTS, 1, REPORT_ATTEMPTS), delayMs: int(env.AGT_SPAWN_REPORT_DELAY_MS, 0, REPORT_DELAY_MS) };
+}
+
+/** How many trust-dialog reads a spawn job makes (about 1s apart), with an AGT_SPAWN_TRUST_POLLS override (tests: 0). */
+export function spawnTrustPolls(env: Record<string, string | undefined>): number {
+  const v = env.AGT_SPAWN_TRUST_POLLS;
+  const n = v === undefined || v.trim() === "" ? NaN : Number(v);
+  return Number.isInteger(n) && n >= 0 ? n : TRUST_POLLS;
 }
 
 /**
@@ -75,11 +86,22 @@ const BUSY_RETRY_MS = 500;
 
 export async function runSpawnJob(
   job: SpawnJob,
-  deps: { herdr: HerdrBridge; report: (command: object) => Promise<boolean>; sleep?: (ms: number) => Promise<void>; busyRetries?: number },
+  deps: {
+    herdr: HerdrBridge;
+    report: (command: object) => Promise<boolean>;
+    /** Without it, no trust dialog is answered. */
+    screen?: PaneScreen;
+    sleep?: (ms: number) => Promise<void>;
+    log?: (message: string) => void;
+    busyRetries?: number;
+    /** Reads of the trust watch (default TRUST_POLLS); 0 turns it off. */
+    trustPolls?: number;
+  },
 ): Promise<void> {
   const sleep = deps.sleep ?? ((ms: number) => Bun.sleep(ms));
   let created: string | undefined;
   let attached: { pane: string; pending?: string };
+  let trust: { stop(): void; done: Promise<void> } | undefined;
   try {
     const pane = job.pane ?? (created = splitWithFallbacks(deps.herdr, job.split!));
     // A leading space keeps the line out of shell history (HISTCONTROL=ignorespace, zsh's HIST_IGNORE_SPACE).
@@ -100,6 +122,9 @@ export async function runSpawnJob(
         throw e;
       }
     }
+    // Runs beside the bootstrap and the report, never before them: the daemon hears of the agent at once, and a
+    // bootstrap the dialog blocks is queued for the agent's first idle as usual.
+    trust = watchTrust(job, pane, deps.screen, deps.trustPolls ?? TRUST_POLLS, sleep, deps.log ?? ((m) => console.error(`agt __spawn: ${m}`)));
     let pending: string | undefined;
     if (job.bootstrap) {
       try {
@@ -110,16 +135,71 @@ export async function runSpawnJob(
     }
     attached = { pane, ...(pending ? { pending } : {}) };
   } catch (e) {
+    trust?.stop();
     if (created) closeQuietly(deps.herdr, created);
     await deps.report({ cmd: "session.failed", session: job.session, reason: e instanceof Error ? e.message : String(e) });
     return;
   }
-  if (await deps.report({ cmd: "session.attached", session: job.session, ...attached })) return;
+  if (await deps.report({ cmd: "session.attached", session: job.session, ...attached })) {
+    await trust?.done; // the job process outlives its report by the watch at most
+    return;
+  }
+  trust?.stop();
   // The daemon refused the report (it failed the session: its spawn report was lost, and a replacement may be running),
   // or never got it (its sweep will fail the session). Either way nobody tracks this agent: stop it. Its pane is the
   // split this job made, or the thread root pane it was given (the daemon never hands a job main's pane).
   closeQuietly(deps.herdr, attached.pane);
   console.error(`agt __spawn: session ${job.session} was failed by the daemon; stopped its agent`);
+}
+
+/** The trust watch lasts about 60s: TRUST_POLLS reads, TRUST_POLL_MS apart. */
+const TRUST_POLLS = 60;
+const TRUST_POLL_MS = 1_000;
+/** Between the keys of an answer, so the dialog has moved its cursor before `enter`. */
+const TRUST_KEY_GAP_MS = 300;
+
+/** Whether `cwd` is inside `<root>/.worktrees/`, the folders agt creates. Symlinks are resolved (macOS: /var). */
+export function agtCreatedFolder(root: string, cwd: string): boolean {
+  const real = (p: string) => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return resolve(p);
+    }
+  };
+  const rel = relative(real(join(root, ".worktrees")), real(cwd));
+  return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !rel.startsWith(sep);
+}
+
+/**
+ * Answers the agent's one-time folder-trust dialog, once, when its adapter has one and the agent runs in a folder agt
+ * created. A non-git thread folder in a workspace does not inherit the trust the user gave the workspace root, so
+ * without this every coordinator would stop at the dialog. The user's own folders are never answered for, and Claude's
+ * config is never touched: agt answers the dialog on screen as the user would. Read errors are retried until the end.
+ */
+function watchTrust(job: SpawnJob, pane: string, screen: PaneScreen | undefined, polls: number, sleep: (ms: number) => Promise<void>, log: (m: string) => void) {
+  const prompt = adapterForHerdrKind(job.kind)?.trustPrompt;
+  const cwd = job.cwd ?? job.split?.cwd;
+  if (!screen || !prompt || polls === 0 || cwd === undefined || !agtCreatedFolder(job.root, cwd)) return undefined;
+  let stopped = false;
+  const done = (async () => {
+    for (let i = 0; i < polls && !stopped; i++) {
+      if (i > 0) await sleep(TRUST_POLL_MS);
+      if (stopped) return;
+      try {
+        if (!prompt.screen.test(await screen.paneReadAsync(pane))) continue;
+        for (const [k, key] of prompt.keys.entries()) {
+          if (k > 0) await sleep(TRUST_KEY_GAP_MS);
+          await screen.paneSendKeysAsync(pane, key);
+        }
+        log(`trusted ${cwd} for Claude Code (a folder agt created)`);
+        return;
+      } catch {
+        // the pane may be busy or gone; read again until the watch ends
+      }
+    }
+  })();
+  return { stop: () => void (stopped = true), done };
 }
 
 function closeQuietly(herdr: HerdrBridge, pane: string): void {
