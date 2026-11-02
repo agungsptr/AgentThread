@@ -183,3 +183,39 @@ Added after the first heavy run. All five heavy rows stopped at Claude Code's wo
 - [ ] **Step 3: Implement.** The spawn job is its own process, not the daemon, so polling with sleeps is fine there.
 - [ ] **Step 4: Run the full suite and typecheck.** Commit `feat: agt trusts the folders it creates for Claude Code`.
 - [ ] **Step 5: Rerun the heavy rows** (controller).
+
+### Task 6: a worker that ends before claiming never strands its ticket; failed rows keep screen evidence
+
+Added after heavy rerun 2 (report `.agentthread/e2e-reports/2026-11-02T08-03-53-733Z.md`).
+- **What happened.** `ws-edge-return` passed, but in `ws-happy-claude-code`, `ws-cleanup` and `ws-stack-lock` the second of two workers spawned together (the `web` ticket) ended 4–8s after `session.created`, without ever claiming its ticket.
+- **Effect.** After that nothing happened for 40 minutes: no notice and no respawn. The coordinator sat idle and the ticket stayed `open`.
+- **Unknown.** The reason the worker exited is not known. The daemon log and the event log carry no screen.
+
+**Files:**
+- Modify:
+  - `src/orchestration/reactor.ts` (and `sessions.ts` if the spawn helpers live there)
+  - `src/state/projection.ts` if a counter is needed
+  - `tests/release/harness.ts`, `tests/release/run.ts`, `tests/release/scenarios/workspace.ts`
+- Test: `tests/orchestration/*.test.ts`, `tests/release-harness/*`
+
+**Behavior:**
+- **Respawn after an early end.** A worker session that ends, is lost or fails before its ticket is claimed (it is still `open`, or `in_progress` with that worker never having claimed) gets a fresh worker automatically, at most 2 times per ticket. The counter is rebuilt from events.
+  - Each respawn notifies the coordinator: `The worker for ticket <T> exited before starting; agt started a fresh one.`
+  - After the second, the ticket stays open, no further worker is started, and the coordinator gets: `The worker for ticket <T> exited before starting, twice; check its pane or spawn it again with agt worker spawn <thread> --ticket <T>.`
+  - It never double-spawns while another live worker holds the ticket, and it respects max_workers and file conflicts (it uses the normal queue).
+- **Screen evidence.**
+  - The ws rows set `herdr.close_worker_pane_on_end: false` so panes stay readable.
+  - When a row fails or times out, the harness reads every pane of the isolated Herdr session (`pane read <id> --source visible`) and adds each screen, truncated to its last 40 lines, to the row's notes before it stops the server.
+  - `agt __spawn` writes the visible screen to the daemon log when its agent start fails or the trust watch ends without answering while the agent was blocked.
+- **Startup timeout evidence.** For a `layout.registered` timeout at startup (seen once in `ws-edge-out-of-ticket`), the same screen dump records what main's pane showed.
+
+- [ ] **Step 1: Write the failing tests.**
+  - A worker ended before its claim gets a respawn plus the exact notice, and a second early end gets a second respawn.
+  - A third early end gets no respawn, with the exact notice.
+  - An ended worker that had already claimed the ticket follows the existing flow unchanged.
+  - The respawn waits in the queue at max_workers.
+  - The harness screen dump on failure, tested with a fake Herdr.
+- [ ] **Step 2: Run the tests.** Expected: FAIL.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run the full suite and typecheck.** Commit `fix: a worker that exits before starting is replaced; failed e2e rows keep pane screens`.
+- [ ] **Step 5: Rerun the failed heavy rows** (controller).
