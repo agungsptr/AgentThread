@@ -219,3 +219,37 @@ Added after heavy rerun 2 (report `.agentthread/e2e-reports/2026-11-02T08-03-53-
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run the full suite and typecheck.** Commit `fix: a worker that exits before starting is replaced; failed e2e rows keep pane screens`.
 - [ ] **Step 5: Rerun the failed heavy rows** (controller).
+
+### Task 7: the trust answer never picks "No, exit"; the bootstrap reaches a ready agent
+
+Added after heavy rerun 3 (report `.agentthread/e2e-reports/2026-11-02T10-46-38-747Z.md`). The pane screens show three things:
+- **Claude exits.** In stack-lock (main's pane) and cleanup (the T2 worker), Claude exited because the trust answer's `enter` landed on "No, exit". The screen keeps the dialog with `❯ No, exit` above the shell prompt. The blind `down` went in before the dialog took input.
+- **The bootstrap is lost.** In happy and cleanup, a worker whose dialog was answered correctly sits at an empty Claude prompt. Its bootstrap was delivered while the dialog was still up, and was lost.
+- **Noise for the coordinator.** It is told "worker … is blocked" for a trust dialog that agt answers itself.
+
+**Behavior:**
+- **Confirmed trust answer**, in agt's spawn-job trust watch and in the harness's `answerTrustIn` and `watchTrustDialogs`:
+  - send `down`, then re-read the screen;
+  - press `enter` only when the selected line is "Yes, I trust this folder" (the line with the `❯` marker);
+  - otherwise send `down` again and re-read, up to 5 tries;
+  - never press `enter` while "No, exit" is selected.
+
+  If it gives up, log the screen and leave the dialog for the user.
+- **Bootstrap after the dialog.** The worker or coordinator bootstrap is not delivered while that pane's agent is blocked on the trust dialog. It is delivered once the dialog is gone and the agent is ready (idle).
+  - Trace how the bootstrap is delivered today: the agent-start prompt, or a `notice.queued` delivered on idle or `session.started`.
+  - Fix it at the point where it can reach a dialog.
+  - Prefer that the spawn job, which owns the trust watch, releases delivery only after the watch resolves (answered, or no dialog seen).
+- **Poller.** A session still `starting` is not ended by poll misses. The sweep's spawn_timeout already fails starts that never come up.
+- **No noise.** No "is blocked" notice is sent to the coordinator for a pane whose agt trust watch is still running.
+
+- [ ] **Step 1: Write the failing tests.** Use a fake Herdr whose screen changes per read.
+  - `down` does not move the cursor at first, so agt sends `down` again and presses `enter` only once "Yes" is selected.
+  - "No, exit" stays selected, so `enter` is never pressed and the screen is logged.
+  - The bootstrap is held while the trust dialog is up and delivered after it clears.
+  - A starting session that is missing from the poll is not ended.
+  - No blocked notice is sent during the trust watch.
+  - The harness answer uses the same confirmation.
+- [ ] **Step 2: Run the tests.** Expected: FAIL.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run the full suite and typecheck.** Commit `fix: agt confirms the trust choice before enter and sends the bootstrap after the dialog`.
+- [ ] **Step 5: Rerun happy, cleanup and stack-lock** (controller).
