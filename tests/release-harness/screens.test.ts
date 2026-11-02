@@ -51,3 +51,24 @@ test("a pane that cannot be read is noted and the others are still read; a faile
 test("the workspace rows keep worker panes open so their screens stay readable", () => {
   for (const s of allScenarios().filter((x) => x.workspace)) expect(s.config?.herdr?.close_worker_pane_on_end).toBe(false);
 });
+
+test("the dump has one overall deadline: each call gets what is left (at most 10s), and the panes past it are named", async () => {
+  let t = 0;
+  const timeouts: number[] = [];
+  const herdr = {
+    run: async (args: string[], timeoutMs: number) => {
+      timeouts.push(timeoutMs);
+      t += 12_000; // every call is slow
+      if (args[1] === "list") return { exitCode: 0, stdout: "", stderr: "", result: { panes: ["w1:p1", "w1:p2", "w1:p3", "w1:p4"].map((pane_id) => ({ pane_id })) } };
+      return { exitCode: 0, stdout: `screen ${args[2]}`, stderr: "" };
+    },
+  } as unknown as Parameters<typeof dumpPaneScreens>[0];
+  const notes: string[] = [];
+  await dumpPaneScreens(herdr, (m) => void notes.push(m), { budgetMs: 30_000, now: () => t });
+  expect(timeouts).toEqual([10_000, 10_000, 6_000]);
+  expect(notes).toEqual([
+    "screen of pane w1:p1 (last 40 lines):\nscreen w1:p1",
+    "screen of pane w1:p2 (last 40 lines):\nscreen w1:p2",
+    "pane screens: stopped after 30s; not read: w1:p3, w1:p4",
+  ]);
+});

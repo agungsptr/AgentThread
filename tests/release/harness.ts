@@ -532,19 +532,33 @@ export function watchTrustDialogs(
 /** How much of each pane's screen a failed row keeps in its notes. */
 export const SCREEN_LINES = 40;
 
+/** How long a failed row's screen dump may take in all; each Herdr call gets what is left, at most 10s. */
+export const SCREEN_DUMP_MS = 30_000;
+
 /**
  * A failed or timed-out row's evidence, read before its Herdr server stops: every pane's visible screen (`pane read
- * <id> --source visible`), its last SCREEN_LINES lines, as one note per pane. Never throws; what cannot be read is noted.
+ * <id> --source visible`), its last SCREEN_LINES lines, as one note per pane, within one deadline (`budgetMs`): the
+ * panes left when it passes are named instead. Never throws; what cannot be read is noted.
  */
-export async function dumpPaneScreens(herdr: Pick<Herdr, "run">, note: (m: string) => void): Promise<void> {
+export async function dumpPaneScreens(
+  herdr: Pick<Herdr, "run">,
+  note: (m: string) => void,
+  o: { budgetMs?: number; now?: () => number } = {},
+): Promise<void> {
+  const now = o.now ?? Date.now;
+  const budgetMs = o.budgetMs ?? SCREEN_DUMP_MS;
+  const until = now() + budgetMs;
+  const left = () => Math.min(10_000, until - now());
   const why = (r: { stderr: string; error?: { message: string } }) => r.error?.message ?? r.stderr.trim();
   try {
-    const list = await herdr.run(["pane", "list"], 10_000);
+    const list = await herdr.run(["pane", "list"], left());
     if (list.exitCode !== 0) return note(`pane screens: herdr pane list failed (${why(list)})`);
-    for (const { pane_id } of ((list.result?.panes ?? []) as { pane_id: string }[])) {
-      const r = await herdr.run(["pane", "read", pane_id, "--source", "visible"], 10_000);
-      if (r.exitCode !== 0) note(`screen of pane ${pane_id}: unreadable (${why(r)})`);
-      else note(`screen of pane ${pane_id} (last ${SCREEN_LINES} lines):\n${r.stdout.split("\n").slice(-SCREEN_LINES).join("\n")}`);
+    const panes = ((list.result?.panes ?? []) as { pane_id: string }[]).map((p) => p.pane_id);
+    for (const [i, pane] of panes.entries()) {
+      if (left() <= 0) return note(`pane screens: stopped after ${Math.round(budgetMs / 1000)}s; not read: ${panes.slice(i).join(", ")}`);
+      const r = await herdr.run(["pane", "read", pane, "--source", "visible"], left());
+      if (r.exitCode !== 0) note(`screen of pane ${pane}: unreadable (${why(r)})`);
+      else note(`screen of pane ${pane} (last ${SCREEN_LINES} lines):\n${r.stdout.split("\n").slice(-SCREEN_LINES).join("\n")}`);
     }
   } catch (e) {
     note(`pane screens: ${e instanceof Error ? e.message : String(e)}`);

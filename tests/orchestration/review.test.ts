@@ -564,6 +564,42 @@ describe("a worker that exits before claiming its ticket", () => {
     expect(ticketOf(s, "T1").earlyExits).toBeUndefined();
   });
 
+  test("a worker that claimed, then saw its ticket blocked and reopened, is no early exit when it ends", () => {
+    const s = world();
+    addTicket(s, "T1", ["src/a.ts"]);
+    exec(s, { cmd: "worker.spawn", thread: "001", ticket: "T1" });
+    const w = started(s);
+    expect(exec(s, { cmd: "ticket.claim", thread: "001", ticket: "T1" }, asWorker(w)).ok).toBe(true);
+    apply(s, [
+      { type: "ticket.blocked", thread: "001", payload: { ticket: "T1", reason: "needs input" } },
+      { type: "ticket.reopened", thread: "001", payload: { ticket: "T1" } },
+    ]);
+    expect(isLive(s.sessions.get(w.id)!)).toBe(true);
+    expect(ticketOf(s, "T1").status).toBe("open");
+    effects = [];
+    const before = coordNotices(s).length;
+    exit(s, "ended", w.id);
+    expect(spawnsFor("T1")).toBe(0);
+    expect(ticketOf(s, "T1").earlyExits).toBeUndefined();
+    expect(coordNotices(s).slice(before)).not.toContain(RESPAWN);
+  });
+
+  test("a loss or failure reported after the early end does not repeat the notice or spawn again", () => {
+    for (const late of ["lost", "failed"] as const) {
+      const s = world();
+      addTicket(s, "T1", ["src/a.ts"]);
+      exec(s, { cmd: "worker.spawn", thread: "001", ticket: "T1" });
+      const w = started(s);
+      effects = [];
+      const before = coordNotices(s).length;
+      // one batch: the poller's end, then a late loss or failure of the same session
+      settle(s, apply(s, [exitBody("ended", w.id), exitBody(late, w.id)]));
+      expect(coordNotices(s).slice(before).filter((n) => n === RESPAWN)).toEqual([RESPAWN]);
+      expect(spawnsFor("T1")).toBe(1);
+      expect(ticketOf(s, "T1").earlyExits).toBe(1);
+    }
+  });
+
   test("never on a done thread", () => {
     const s = world();
     addTicket(s, "T1", ["src/a.ts"]);

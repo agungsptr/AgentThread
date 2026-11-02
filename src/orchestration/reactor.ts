@@ -131,13 +131,14 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
     }
   };
   /**
-   * A worker that exited before starting (Session.exitedEarly: its ticket was still open) must not strand its ticket:
-   * fillWorkers gives the ticket a fresh one through the queue (awaitsRespawn: max_workers, file conflicts), and the
-   * coordinator hears it. Past MAX_EARLY_RESPAWNS the ticket stays open and the coordinator decides. Returns whether
+   * A worker that exited before starting (Session.earlyExitSeq: it never claimed, and its ticket was still open) must
+   * not strand its ticket: fillWorkers gives the ticket a fresh one through the queue (awaitsRespawn: max_workers, file
+   * conflicts), and the coordinator hears it. Past MAX_EARLY_RESPAWNS the ticket stays open and the coordinator decides.
+   * Only the event that counted the exit (`seq`) tells it: a later loss or failure is the same exit. Returns whether
    * the coordinator was told.
    */
-  const earlyExitNotice = (s: Session, t: Thread): boolean => {
-    if (!s.exitedEarly || !s.ticket || t.status === "done" || exitedBeforeStart(state, t, s.ticket)?.id !== s.id) return false;
+  const earlyExitNotice = (s: Session, t: Thread, seq: number): boolean => {
+    if (s.earlyExitSeq !== seq || !s.ticket || t.status === "done" || exitedBeforeStart(state, t, s.ticket)?.id !== s.id) return false;
     notify(coordinatorToNotify(t.id), awaitsRespawn(state, t, s.ticket) ? earlyNotice(s.ticket) : earlyTwiceNotice(t.id, s.ticket));
     return true;
   };
@@ -309,7 +310,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
           if (held && (!returned || exiting)) releaseTicket(t.id, k.id, exiting ? KEEPS_EXITING : "worker session lost");
           const w = cap(workerRef(s.ticket, "worker"));
           // One lost before it started is replaced, and the coordinator hears that instead.
-          if (!earlyExitNotice(s, t)) {
+          if (!earlyExitNotice(s, t, ev.seq)) {
             notify(coordinatorToNotify(t.id), exiting ? `${w} was lost; ${EXITING}` : returned ? `${w} was lost; ${FRESH}` : held ? `${w} was lost; the ticket is open again.` : `${w} was lost.`);
           }
           // A released ticket is not open in `state` yet, so this only spawns other queued tickets (and returned ones); the coordinator decides on the released one.
@@ -405,7 +406,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
             releaseTicket(t!.id, k.id, lostSpawn ? "worker spawn report lost" : s.pane || s.turns > 0 ? "worker session failed" : "worker spawn failed");
           }
           notify(coordinatorToNotify(s.thread), text ?? `${cap(workerRef(s.ticket, "worker"))} failed: ${ev.payload.reason}.`);
-          if (t) earlyExitNotice(s, t);
+          if (t) earlyExitNotice(s, t, ev.seq);
         }
         if (s?.role === "coordinator") {
           const main = liveSessions(state, undefined, "main")[0];
@@ -484,7 +485,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
             releaseTicket(t.id, k.id, "worker session ended");
             notify(coordinatorToNotify(t.id), `${cap(workerRef(k.id, "worker"))} ended; the ticket is open again.`);
           } else {
-            earlyExitNotice(s, t);
+            earlyExitNotice(s, t, ev.seq);
           }
         }
         fillWorkers(s?.thread);

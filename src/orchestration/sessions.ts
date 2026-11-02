@@ -67,7 +67,7 @@ export function awaitsWorker(state: State, t: Thread, ticket: string): boolean {
 export const MAX_EARLY_RESPAWNS = 2;
 
 /**
- * The ticket's latest worker when it exited before starting (Session.exitedEarly), the ticket is still open and none
+ * The ticket's latest worker when it exited before starting (Session.earlyExitSeq), the ticket is still open and none
  * of its workers is live; undefined otherwise.
  */
 export function exitedBeforeStart(state: State, t: Thread, ticket: string): Session | undefined {
@@ -75,7 +75,7 @@ export function exitedBeforeStart(state: State, t: Thread, ticket: string): Sess
   const workers = [...state.sessions.values()].filter((s) => s.role === "worker" && s.thread === t.id && s.ticket === ticket);
   if (workers.some(isLive)) return undefined;
   const last = workers.at(-1);
-  return last?.exitedEarly ? last : undefined;
+  return last?.earlyExitSeq !== undefined ? last : undefined;
 }
 
 /**

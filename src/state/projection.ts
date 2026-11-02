@@ -49,8 +49,13 @@ export interface Session {
   hooksSeen?: boolean;
   /** Seq of the agent.blocked event that raised that notice (the only one the reactor notifies for). */
   blockedSeq?: number;
-  /** A worker that ended, was lost or failed while its ticket was still open: it exited before starting (see Ticket.earlyExits). */
-  exitedEarly?: boolean;
+  /** A worker claimed its ticket (ticket.claimed named it the assignee): it started, whatever the ticket's status later. */
+  claimed?: boolean;
+  /**
+   * The seq of the end, loss or failure of a worker that never claimed while its ticket was still open: it exited before
+   * starting (see Ticket.earlyExits). Only that event counts; a later loss or failure of the same session does not.
+   */
+  earlyExitSeq?: number;
   /** When the session was created (session.created ts). */
   createdAt: string;
 }
@@ -400,6 +405,8 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       k.status = "in_progress";
       k.assignee = ev.payload.assignee;
       delete k.earlyExits; // a worker started on it: the next early exit counts from zero
+      const by = state.sessions.get(ev.payload.assignee);
+      if (by) by.claimed = true;
       note(t, ev, `${k.id} claimed by ${k.assignee}`);
       break;
     }
@@ -605,16 +612,17 @@ function reviewNoticeAt(state: State, s: Session, seq: number): void {
 }
 
 /**
- * A live worker leaving while its ticket is still open, with no other live worker for it, exited before starting: it
- * is marked (Session.exitedEarly) and counted on the ticket (Ticket.earlyExits). Called before its status changes.
+ * A live worker that never claimed, leaving while its ticket is still open with no other live worker for it, exited
+ * before starting: it is marked (Session.earlyExitSeq) and counted on the ticket (Ticket.earlyExits). Called before
+ * its status changes.
  */
-function countEarlyExit(state: State, s: Session): void {
-  if (s.role !== "worker" || !isLive(s) || !s.thread || !s.ticket) return;
+function countEarlyExit(state: State, s: Session, seq: number): void {
+  if (s.role !== "worker" || !isLive(s) || s.claimed || !s.thread || !s.ticket) return;
   const t = state.threads.get(s.thread);
   const k = t?.tickets.find((x) => x.id === s.ticket);
   if (!t || t.status === "done" || k?.status !== "open") return;
   if ([...state.sessions.values()].some((o) => o.id !== s.id && o.role === "worker" && o.thread === s.thread && o.ticket === s.ticket && isLive(o))) return;
-  s.exitedEarly = true;
+  s.earlyExitSeq = seq;
   k.earlyExits = (k.earlyExits ?? 0) + 1;
 }
 
@@ -741,7 +749,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
     case "session.lost": {
       const s = sessionOf(state, ev.seq, ev.payload.session);
       reviewNoticeAt(state, s, ev.seq);
-      countEarlyExit(state, s);
+      countEarlyExit(state, s, ev.seq);
       // A coordinator that exited normally is reported lost by `agt start`, so it gets replaced.
       if (isLive(s) || (s.status === "ended" && s.role === "coordinator")) {
         s.status = "lost";
@@ -772,19 +780,21 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
     case "session.ended": {
       const s = sessionOf(state, ev.seq, ev.payload.session);
       reviewNoticeAt(state, s, ev.seq);
-      countEarlyExit(state, s);
+      countEarlyExit(state, s, ev.seq);
       if (isLive(s)) {
         s.status = "ended";
         threadNote(state, ev, `session ${short(ev.payload.session)} ended`);
       }
       return true;
     }
-    case "session.failed":
-      reviewNoticeAt(state, sessionOf(state, ev.seq, ev.payload.session), ev.seq);
-      countEarlyExit(state, sessionOf(state, ev.seq, ev.payload.session));
-      sessionOf(state, ev.seq, ev.payload.session).status = "failed";
+    case "session.failed": {
+      const s = sessionOf(state, ev.seq, ev.payload.session);
+      reviewNoticeAt(state, s, ev.seq);
+      countEarlyExit(state, s, ev.seq);
+      s.status = "failed";
       threadNote(state, ev, `session ${short(ev.payload.session)} failed: ${ev.payload.reason}`);
       return true;
+    }
     case "notice.queued":
       sessionOf(state, ev.seq, ev.payload.session).notices.push(ev.payload.text);
       return true;
