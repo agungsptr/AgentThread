@@ -154,3 +154,32 @@ Not dispatched to an implementer.
 - [ ] **Step 1: Ask the user.** The question: "Run the workspace release rows now (real Herdr in isolated sessions, real Claude Code and the agents you pick, about N minutes)?" Name the agents found by `detectAgents`.
 - [ ] **Step 2: Run, on yes only.** `--agents` must include `claude-code` (a row whose roles name an unlisted agent is dropped). Canary first: `bun run e2e:release --only ws-smoke-worktrees,ws-edge-stage-gates,ws-tab-shell --agents claude-code`. Then the heavy rows: `bun run e2e:release --only ws-happy-claude-code,ws-cleanup,ws-edge-return,ws-edge-out-of-ticket,ws-stack-lock[,ws-happy-worker-<x>] --agents claude-code[,<x>] --timeout 40m`, where `<x>` is each other agent the user picked. Budget up to about 40 minutes per heavy row.
 - [ ] **Step 3: Record the results.** Write the report path and the result of each row into the followups doc. A failing row becomes a fix task, or a ruling with the user.
+
+### Task 5: agt answers Claude Code's trust dialog in folders it created
+
+Added after the first heavy run. All five heavy rows stopped at Claude Code's workspace-trust dialog in the coordinator's pane (cwd `.worktrees/<task>/`), even though main had accepted trust for the workspace root. A non-git workspace root's trust is not inherited by the folders under it. The user wants this automatic, without interruptions, and agt must not edit Claude's config.
+
+**Files:**
+- Modify: the agent spawn path (`src/agents/spawn-job.ts` and/or `src/agents/adapters.ts`), `tests/release/harness.ts` (`watchTrustDialogs`, the trust gate)
+- Test: `tests/agents/spawn-job.test.ts`, `tests/release-harness/*`
+
+**Behavior:**
+- **When agt answers.** After starting a claude-code agent whose cwd is inside `<root>/.worktrees/`, which agt created, the spawn job watches that pane for up to 60s.
+- **How it answers.** If the visible screen matches the trust dialog (`/trust this folder|Do you trust the files/i`), it sends `down` then `enter`, which chooses the "trust" option. It does this once, and logs `trusted <cwd> for Claude Code (a folder agt created)`.
+- **Where it never answers:**
+  - outside `<root>/.worktrees/`, so main's pane in the user's own root stays the user's one-time choice;
+  - for other agent kinds (adapters can opt in later through an optional `trustPrompt` field).
+- **Claude's config.** agt never reads or writes Claude's config files.
+- **Harness gate.** A trust dialog in a coordinator or worker pane fails the row only when it is still showing after 30s, which gives agt its chance first. Each folder agt trusted is recorded as a note.
+
+- [ ] **Step 1: Write the failing tests.** Use a fake Herdr bridge:
+  - a trust screen in a `.worktrees/` pane is answered once with down + enter;
+  - a pane outside `.worktrees/` is not answered;
+  - no dialog within 60s means no keys are sent;
+  - a non-claude agent is not answered.
+
+  The harness gate test: a dialog shown under 30s does not fail the row, and one past 30s does.
+- [ ] **Step 2: Run the tests.** Expected: FAIL.
+- [ ] **Step 3: Implement.** The spawn job is its own process, not the daemon, so polling with sleeps is fine there.
+- [ ] **Step 4: Run the full suite and typecheck.** Commit `feat: agt trusts the folders it creates for Claude Code`.
+- [ ] **Step 5: Rerun the heavy rows** (controller).
