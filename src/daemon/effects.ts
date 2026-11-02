@@ -6,11 +6,11 @@ import { agentEnv, claudeConfigDir } from "../agents/claude.ts";
 import { adapterFor } from "../agents/adapters.ts";
 import { bootstrapPrompt } from "../agents/prompts.ts";
 import { agentsMd, writeAgentsFilesAsync, writeThreadDirFiles } from "../agents/agents-md.ts";
-import { launchSpawnJob, type SpawnJob } from "../agents/spawn-job.ts";
+import { attachDeadline, launchSpawnJob, type SpawnJob } from "../agents/spawn-job.ts";
 import { canonical, cleanupThread, type CleanupOutcome } from "./cleanup-job.ts";
 import type { Effect } from "../commands/handler.ts";
 import type { Command } from "../commands/schema.ts";
-import type { Config } from "../config/config.ts";
+import { durationMs, type Config } from "../config/config.ts";
 import type { EventBody, Layout } from "../domain/types.ts";
 import { HerdrCli, spawnAsync } from "../herdr/bridge.ts";
 import { addWorktreeAsync, addWorktreeFromAsync } from "../project/git.ts";
@@ -257,6 +257,7 @@ export function createEffectRunner(opts: {
               : {}),
             args: launched.args,
             bootstrap: bootstrapPrompt(prompt, effect.bootstrap ?? "start", effect.notice),
+            attachBy: attachDeadline(Date.now(), durationMs(opts.config.session.spawn_timeout)),
           });
           return [];
         } catch (e) {

@@ -279,8 +279,12 @@ test("sweep fails a starting session without a pane after spawn_timeout, workers
   expect(sweep(s, "2026-10-11T10:04:01.000Z", ctx()).events).toEqual([
     { type: "session.failed", thread: "001", payload: { session: W, reason: "spawn report lost after 3m" } },
   ]);
-  // a pane means the spawn reported
+  // a pane means the spawn reported; still starting, the agent itself then has the same 3m to come up
   apply(s, "2026-10-11T10:01:30.000Z", { type: "session.attached", thread: "001", payload: { session: W, pane: "w1:p3" } });
+  expect(sweep(s, "2026-10-11T10:30:00.000Z", ctx()).events).toEqual([
+    { type: "session.failed", thread: "001", payload: { session: W, reason: "agent did not start within 3m" } },
+  ]);
+  apply(s, "2026-10-11T10:02:00.000Z", { type: "session.started", thread: "001", payload: { session: W } });
   expect(sweep(s, "2026-10-11T10:30:00.000Z", ctx()).events).toEqual([]);
   // a coordinator that never got a pane
   const t = stateOf(INIT, threadCreated("001", { status: "in_progress" }), { type: "thread.tab_opened", thread: "001", payload: { tab: "w1:t2", rootPane: "w1:p2" } });

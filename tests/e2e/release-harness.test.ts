@@ -10,11 +10,14 @@ const temp = () => realpathSync(mkdtempSync(join(tmpdir(), "agt-harness-test-"))
 /** A Herdr with one blocked Claude Code agent showing the trust dialog in `pane`; records every send-keys. */
 function fakeHerdr(pane: string) {
   const keys: string[] = [];
+  let yes = false; // `down` moves the cursor to "Yes"
   const herdr = {
     agents: async () => [{ pane_id: pane, agent: "claude", agent_status: "blocked" }],
     run: async (args: string[]) => {
       if (args[1] === "send-keys") keys.push(`${args[2]} ${args[3]}`);
-      return { exitCode: 0, stdout: args[1] === "read" ? "Do you trust the files in this folder?" : "", stderr: "" };
+      if (args[1] === "send-keys" && args[3] === "down") yes = true;
+      const dialog = `Do you trust the files in this folder?\n ${yes ? " " : "❯"} No, exit\n ${yes ? "❯" : " "} Yes, I trust this folder`;
+      return { exitCode: 0, stdout: args[1] === "read" ? dialog : "", stderr: "" };
     },
   } as unknown as Herdr;
   return { herdr, keys };

@@ -40,6 +40,9 @@ export function diffAgentStatus(o: {
       continue;
     }
     live.add(s.pane);
+    // A session still starting is not ended by misses: Herdr may not list an agent yet that sits at a startup dialog or
+    // has just been launched. The sweep fails a start that never comes up (spawn_timeout).
+    if (status === undefined && s.status === "starting") continue;
     if (status === undefined) {
       const n = (o.misses.get(s.pane) ?? 0) + 1;
       if (n >= MISSES_TO_END) {

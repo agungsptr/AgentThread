@@ -4,6 +4,7 @@ import type { Config } from "../config/config.ts";
 import type { AgentKind, SessionRole } from "../domain/types.ts";
 import { allowedTools, hookSettings } from "./claude.ts";
 import type { RoleAgent } from "./roles.ts";
+import { CLAUDE_TRUST_PROMPT, type TrustPrompt } from "./trust.ts";
 
 export interface LaunchInput {
   role: SessionRole;
@@ -42,10 +43,10 @@ export interface AgentAdapter {
   capabilities: { hooks: boolean; contextSize: boolean; preCompact: boolean };
   /**
    * The agent's one-time folder-trust dialog, which agt answers itself when the agent starts in a folder agt created
-   * (under `<root>/.worktrees/`) and Herdr reports it blocked: every `screen` pattern matches the visible dialog (its
-   * question and its options, so a mere mention of trust is not taken for it), and `keys` are typed to choose "trust".
+   * (under `<root>/.worktrees/`) and Herdr reports it blocked (see src/agents/trust.ts: the trusting option is confirmed
+   * selected on screen before it is picked).
    */
-  trustPrompt?: { screen: RegExp[]; keys: string[] };
+  trustPrompt?: TrustPrompt;
 }
 
 const positional = (text: string): string[] => [text];
@@ -81,7 +82,7 @@ const claudeAdapter: AgentAdapter = {
   promptArgs: positional,
   capabilities: { hooks: true, contextSize: true, preCompact: true },
   // The cursor starts on "No, exit"; the second option trusts the folder. Claude's own config is never read or written.
-  trustPrompt: { screen: [/trust this folder|Do you trust the files/i, /No, exit/i], keys: ["down", "enter"] },
+  trustPrompt: CLAUDE_TRUST_PROMPT,
 };
 
 /** The git commands a task-thread role runs without asking in OpenCode's ask mode (§13): workers commit, the coordinator squashes. */

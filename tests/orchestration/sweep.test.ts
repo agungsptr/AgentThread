@@ -106,3 +106,20 @@ test("a starting, pane-less worker with a done ticket past both timeouts gets on
   expect(r.events).toEqual([{ type: "session.failed", thread: "001", payload: { session: W, reason: "spawn report lost after 3m" } }]);
   expect(r.effects).toEqual([]);
 });
+
+test("an attached session still starting past spawn_timeout fails (the poller no longer ends it); one blocked on a dialog is left to its notice", () => {
+  const s = stateOf(INIT, threadCreated("001", { status: "in_progress" }), { type: "thread.tab_opened", thread: "001", payload: { tab: "w1:t2", rootPane: "w1:p2" } });
+  apply(
+    s,
+    T0,
+    { type: "session.created", thread: "001", payload: { session: C, role: "coordinator", agent: "claude-code", name: "c" } },
+    { type: "session.attached", thread: "001", payload: { session: C, pane: "w1:p2" } },
+    { type: "ticket.created", thread: "001", payload: { ticket: "T1", title: "T1", scope: ["T1"] } },
+    { type: "session.created", thread: "001", payload: { session: W, role: "worker", agent: "claude-code", name: "w", ticket: "T1" } },
+    { type: "session.attached", thread: "001", payload: { session: W, pane: "w1:p3" } },
+    { type: "agent.blocked", thread: "001", payload: { session: W } },
+  );
+  expect(sweep(s, "2026-10-11T10:02:59.000Z", ctx()).events).toEqual([]);
+  const r = sweep(s, "2026-10-11T10:03:01.000Z", ctx());
+  expect(r.events).toEqual([{ type: "session.failed", thread: "001", payload: { session: C, reason: "agent did not start within 3m" } }]);
+});

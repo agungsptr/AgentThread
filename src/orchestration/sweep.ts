@@ -14,10 +14,13 @@ export function sweep(state: State, now: string, ctx: ReactorContext): { events:
   // A spawn report the daemon never received (it restarted at that moment) would leave the session `starting` forever.
   const spawnTimeout = ctx.config.session.spawn_timeout;
   const failed = new Set<string>();
+  // An attached agent that never starts (the poller does not end a starting session it misses) fails the same way,
+  // unless it is blocked on a startup dialog: its blocked notice has asked for a person.
   for (const s of liveSessions(state)) {
-    if (s.role === "main" || s.status !== "starting" || s.pane) continue;
+    if (s.role === "main" || s.status !== "starting" || (s.pane && s.blockedNotified)) continue;
     if (Date.parse(now) - Date.parse(s.resumingAt ?? s.createdAt) > durationMs(spawnTimeout)) {
-      events.push({ type: "session.failed", ...(s.thread ? { thread: s.thread } : {}), payload: { session: s.id, reason: `spawn report lost after ${spawnTimeout}` } } as EventBody);
+      const reason = s.pane ? `agent did not start within ${spawnTimeout}` : `spawn report lost after ${spawnTimeout}`;
+      events.push({ type: "session.failed", ...(s.thread ? { thread: s.thread } : {}), payload: { session: s.id, reason } } as EventBody);
       failed.add(s.id);
     }
   }

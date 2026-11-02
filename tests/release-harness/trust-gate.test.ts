@@ -1,15 +1,18 @@
 import { expect, test } from "bun:test";
-import { agtTrustedFolders, watchTrustDialogs } from "../release/harness.ts";
+import { agtTrustedFolders, answerTrustIn, watchTrustDialogs, type Herdr } from "../release/harness.ts";
 
 const TRUST_SCREEN = "Quick safety check: Is this a project you created or one you trust?\n ❯ 1. No, exit\n   2. Yes, I trust this folder";
+const YES_SCREEN = "Quick safety check: Is this a project you created or one you trust?\n   1. No, exit\n ❯ 2. Yes, I trust this folder";
 
 /**
  * A fake Herdr and clock: `screens(t)` says which panes show the trust dialog at time t (ms). Each poll advances the
  * clock by 1.5s; the watch stops itself at `endMs`.
  */
-function fake(screens: (t: number) => Record<string, boolean>, endMs: number) {
+function fake(screens: (t: number) => Record<string, boolean>, endMs: number, cursor: { deaf?: number; stuck?: boolean } = {}) {
   let t = 0;
   const keys: string[] = [];
+  const moved = new Set<string>(); // panes whose cursor is on "Yes"
+  let deaf = cursor.deaf ?? 0;
   const foreign: { pane: string; at: number }[] = [];
   const log: string[] = [];
   let w!: ReturnType<typeof watchTrustDialogs>;
@@ -17,7 +20,8 @@ function fake(screens: (t: number) => Record<string, boolean>, endMs: number) {
     agents: async () => Object.keys(screens(t)).map((pane_id) => ({ pane_id, agent: "claude", agent_status: screens(t)[pane_id] ? "blocked" : "idle" })),
     run: async (args: string[]) => {
       if (args[1] === "send-keys") keys.push(`${args[2]} ${args[3]}`);
-      return { exitCode: 0, stdout: args[1] === "read" && screens(t)[args[2]!] ? TRUST_SCREEN : "", stderr: "" };
+      if (args[1] === "send-keys" && args[3] === "down" && !cursor.stuck && deaf-- <= 0) moved.add(args[2]!);
+      return { exitCode: 0, stdout: args[1] === "read" && screens(t)[args[2]!] ? (moved.has(args[2]!) ? YES_SCREEN : TRUST_SCREEN) : "", stderr: "" };
     },
   } as unknown as Parameters<typeof watchTrustDialogs>[0];
   w = watchTrustDialogs(herdr, () => "main", (m) => void log.push(m), (pane) => void foreign.push({ pane, at: t }), {
@@ -62,6 +66,46 @@ test("main's trust dialog is still answered at once", async () => {
   await f.done();
   expect(f.keys).toEqual(["main down", "main enter"]);
   expect(f.foreign).toEqual([]);
+});
+
+test("main's dialog whose first down is ignored gets a second down, and enter only once 'Yes' is selected", async () => {
+  const f = fake((t) => ({ main: t < 1_000 }), 10_000, { deaf: 1 });
+  await f.done();
+  expect(f.keys).toEqual(["main down", "main down", "main enter"]);
+});
+
+test("main's dialog stuck on 'No, exit' never gets enter: the screen is logged once and the dialog left to the user", async () => {
+  const f = fake(() => ({ main: true }), 30_000, { stuck: true });
+  await f.done();
+  expect(f.keys).toEqual(Array(5).fill("main down"));
+  expect(f.log.filter((m) => m.includes("left it to the user"))).toEqual([
+    `the Claude Code workspace-trust dialog in main still had "No, exit" selected after 5 downs; left it to the user. Its screen:\n${TRUST_SCREEN}`,
+  ]);
+});
+
+test("answerTrustIn confirms the choice the same way: enter only on 'Yes', never on 'No, exit'", async () => {
+  for (const [cursor, keys, answered] of [
+    [{ deaf: 2 }, ["down", "down", "down", "enter"], true],
+    [{ stuck: true }, ["down", "down", "down", "down", "down"], false],
+  ] as const) {
+    let deaf = (cursor as { deaf?: number }).deaf ?? 0;
+    let yes = false;
+    const sent: string[] = [];
+    const log: string[] = [];
+    const herdr = {
+      run: async (args: string[]) => {
+        if (args[1] === "send-keys") {
+          sent.push(args[3]!);
+          if (args[3] === "down" && !(cursor as { stuck?: boolean }).stuck && deaf-- <= 0) yes = true;
+        }
+        return { exitCode: 0, stdout: args[1] === "read" ? (yes ? YES_SCREEN : TRUST_SCREEN) : "", stderr: "" };
+      },
+    } as unknown as Herdr;
+    let t = 0;
+    expect(await answerTrustIn(herdr, "main", 60_000, (m) => void log.push(m), { now: () => t, sleep: async (ms) => void (t += ms) })).toBe(answered);
+    expect(sent).toEqual([...keys]);
+    if (!answered) expect(log[0]).toStartWith('the Claude Code workspace-trust dialog in main still had "No, exit" selected after 5 downs');
+  }
 });
 
 test("the folders agt trusted are read from its daemon log lines", () => {

@@ -21,6 +21,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parse, stringify } from "yaml";
+import { CLAUDE_TRUST_PROMPT, TRUST_TRIES, answerTrustDialog, isTrustDialog } from "../../src/agents/trust.ts";
 import { deepMerge } from "../../src/config/config.ts";
 import { request } from "../../src/daemon/client.ts";
 import type { AgentKind, StoredEvent } from "../../src/domain/types.ts";
@@ -480,6 +481,8 @@ export function watchTrustDialogs(
   const sleep = o.sleep ?? ((ms: number) => Bun.sleep(ms));
   const answered: string[] = [];
   const reported = new Set<string>();
+  /** Main's panes whose dialog would not select "Yes": left to the user, never tried again. */
+  const leftToUser = new Set<string>();
   /** Coordinator/worker panes showing the dialog, with when it was first seen. */
   const showing = new Map<string, number>();
   /** Panes of `showing` missing from the last poll: cleared when missing from two in a row. */
@@ -506,12 +509,10 @@ export function watchTrustDialogs(
             log(`the Claude Code workspace-trust dialog in ${a.pane_id} was still showing after ${Math.round(graceMs / 1000)}s: agt did not answer it`);
             continue;
           }
-          // The dialog's cursor starts on "No, exit"; the second option trusts the folder.
-          await herdr.run(["pane", "send-keys", a.pane_id, "down"]);
-          await sleep(300);
-          await herdr.run(["pane", "send-keys", a.pane_id, "enter"]);
-          answered.push(a.pane_id);
-          log(`answered the Claude Code workspace-trust dialog in ${a.pane_id}`);
+          if (leftToUser.has(a.pane_id) || !isTrustDialog(screen, CLAUDE_TRUST_PROMPT)) continue;
+          // The dialog's cursor starts on "No, exit": `enter` goes only once "Yes, I trust this folder" is selected.
+          if (await answerConfirmed(herdr, a.pane_id, screen, sleep, log)) answered.push(a.pane_id);
+          else leftToUser.add(a.pane_id);
         }
         for (const pane of [...showing.keys()].filter((p) => !seen.has(p))) {
           if (!missed.has(pane)) {
@@ -589,19 +590,42 @@ export async function raceScenario(run: Promise<unknown>, gate: Promise<never>, 
   );
 }
 
+/**
+ * Answers the trust dialog on `screen` in `pane` as agt's spawn job does (src/agents/trust.ts): `enter` only once the
+ * screen shows "Yes, I trust this folder" selected, never while "No, exit" is. Gives up after TRUST_TRIES downs, logging
+ * the screen and leaving the dialog to the user. Returns whether it answered.
+ */
+async function answerConfirmed(herdr: Pick<Herdr, "run">, pane: string, screen: string, sleep: (ms: number) => Promise<void>, log: (m: string) => void): Promise<boolean> {
+  const io = {
+    read: async () => (await herdr.run(["pane", "read", pane, "--source", "visible"])).stdout,
+    send: async (key: string) => void (await herdr.run(["pane", "send-keys", pane, key])),
+    sleep,
+  };
+  const r = await answerTrustDialog(io, CLAUDE_TRUST_PROMPT, screen);
+  if (r.answered) log(`answered the Claude Code workspace-trust dialog in ${pane}`);
+  else
+    log(
+      `the Claude Code workspace-trust dialog in ${pane} still had "No, exit" selected after ${TRUST_TRIES} downs; left it to the user. Its screen:\n${r.screen.split("\n").slice(-SCREEN_LINES).join("\n")}`,
+    );
+  return r.answered;
+}
+
 /** Main's pane may host a bare process Herdr has not recognized yet; the trust dialog there is found by screen. */
-export async function answerTrustIn(herdr: Herdr, pane: string, timeoutMs: number, log: (m: string) => void): Promise<boolean> {
-  const until = Date.now() + timeoutMs;
-  while (Date.now() < until) {
+export async function answerTrustIn(
+  herdr: Pick<Herdr, "run">,
+  pane: string,
+  timeoutMs: number,
+  log: (m: string) => void,
+  o: { now?: () => number; sleep?: (ms: number) => Promise<void> } = {},
+): Promise<boolean> {
+  const now = o.now ?? Date.now;
+  const sleep = o.sleep ?? ((ms: number) => Bun.sleep(ms));
+  const until = now() + timeoutMs;
+  while (now() < until) {
     const screen = (await herdr.run(["pane", "read", pane, "--source", "visible"])).stdout;
-    if (TRUST.test(screen)) {
-      await herdr.run(["pane", "send-keys", pane, "down"]);
-      await Bun.sleep(300);
-      await herdr.run(["pane", "send-keys", pane, "enter"]);
-      log(`answered the Claude Code workspace-trust dialog in ${pane}`);
-      return true;
-    }
-    await Bun.sleep(1_000);
+    // The full dialog (its options too): a screen that only mentions trust is not answered.
+    if (TRUST.test(screen) && isTrustDialog(screen, CLAUDE_TRUST_PROMPT)) return answerConfirmed(herdr, pane, screen, sleep, log);
+    await sleep(1_000);
   }
   return false;
 }

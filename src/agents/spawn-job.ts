@@ -4,6 +4,7 @@ import { join, relative, resolve, sep } from "node:path";
 import { HerdrError, shellQuote, type HerdrBridge, type PaneScreen } from "../herdr/bridge.ts";
 import { adapterForHerdrKind } from "./adapters.ts";
 import { AGT_BIN } from "./claude.ts";
+import { TRUST_TRIES, answerTrustDialog, isTrustDialog } from "./trust.ts";
 
 export interface SpawnJob {
   root: string;
@@ -24,7 +25,18 @@ export interface SpawnJob {
   split?: { pane: string; fallbacks?: string[]; direction: "right" | "down"; cwd: string; env: Record<string, string> };
   args: string[];
   bootstrap: string;
+  /**
+   * When (epoch ms) the attach report must go at the latest, however long the trust watch holds the bootstrap: the
+   * daemon's sweep fails a session not attached within `session.spawn_timeout` (see attachDeadline).
+   */
+  attachBy?: number;
 }
+
+/** What the attach report leaves of `session.spawn_timeout` for its own retries (about 10s) and the sweep's tick. */
+const ATTACH_MARGIN_MS = 20_000;
+
+/** The `attachBy` of a job the daemon makes at `now` (epoch ms), with a `session.spawn_timeout` of `spawnTimeoutMs`. */
+export const attachDeadline = (now: number, spawnTimeoutMs: number): number => now + spawnTimeoutMs - ATTACH_MARGIN_MS;
 
 export const encodeJob = (job: SpawnJob): string => Buffer.from(JSON.stringify(job)).toString("base64");
 export const decodeJob = (s: string): SpawnJob => JSON.parse(Buffer.from(s, "base64").toString("utf8")) as SpawnJob;
@@ -96,6 +108,8 @@ export async function runSpawnJob(
     busyRetries?: number;
     /** Reads of the trust watch (default TRUST_POLLS); 0 turns it off. */
     trustPolls?: number;
+    /** The clock `job.attachBy` is read against (default Date.now). */
+    now?: () => number;
   },
 ): Promise<void> {
   const sleep = deps.sleep ?? ((ms: number) => Bun.sleep(ms));
@@ -113,9 +127,8 @@ export async function runSpawnJob(
     started = pane;
     for (let attempt = 0; ; attempt++) {
       // The trust watch runs beside the start: Herdr's `agent start` waits for the agent to be ready, which a trust
-      // dialog prevents, so the dialog must be answered while it waits. It goes on beside the bootstrap and the report,
-      // never delaying them (a bootstrap the dialog blocks is queued for the agent's first idle as usual).
-      trust ??= watchTrust(job, pane, deps.screen, deps.trustPolls ?? TRUST_POLLS, sleep, log);
+      // dialog prevents, so the dialog must be answered while it waits.
+      trust ??= watchTrust(job, pane, deps.screen, deps.trustPolls ?? TRUST_POLLS, sleep, log, deps.now ?? Date.now);
       try {
         if (deps.herdr.agentStartAsync) await deps.herdr.agentStartAsync(start);
         else deps.herdr.agentStart(start);
@@ -138,6 +151,10 @@ export async function runSpawnJob(
         throw e;
       }
     }
+    // A bootstrap typed while the trust dialog is up is refused or lost, and so would the daemon's later delivery be: the
+    // watch holds it, and the attach report with it (until then the daemon does not poll the pane, so it raises no
+    // blocked notice for a dialog agt answers), until the agent is past the dialog, the watch gives up, or `attachBy`.
+    await trust?.released;
     let pending: string | undefined;
     if (job.bootstrap) {
       try {
@@ -177,8 +194,6 @@ const lastLines = (text: string) => text.split("\n").slice(-SCREEN_LINES).join("
 /** The trust watch lasts about 60s: TRUST_POLLS reads, TRUST_POLL_MS apart. */
 const TRUST_POLLS = 60;
 const TRUST_POLL_MS = 1_000;
-/** Between the keys of an answer, so the dialog has moved its cursor before `enter`. */
-const TRUST_KEY_GAP_MS = 300;
 
 /** Whether `cwd` is inside `<root>/.worktrees/`, the folders agt creates. Symlinks are resolved (macOS: /var). */
 export function agtCreatedFolder(root: string, cwd: string): boolean {
@@ -198,45 +213,70 @@ export function agtCreatedFolder(root: string, cwd: string): boolean {
  * created. A non-git thread folder in a workspace does not inherit the trust the user gave the workspace root, so
  * without this every coordinator would stop at the dialog. The user's own folders are never answered for, and Claude's
  * config is never touched: agt answers the dialog on screen as the user would. Keys go only to an agent Herdr reports
- * `blocked` whose screen shows the whole dialog. Once Herdr has confirmed the launch (its start returned) and lists
- * the agent running (idle, working, done), the agent is past the dialog and the watch ends; before that such a status
- * may be the pane's previous agent. Until then, and on any error, it polls on until its end. A watch that ends unanswered
- * while the agent is blocked (another dialog, or one it did not recognize) writes the screen it last read to the log.
+ * `blocked` whose screen shows the whole dialog, and `confirm` only once the trusting option is seen selected
+ * (answerTrustDialog); a dialog whose cursor will not move there is logged and left to the user. Once Herdr has
+ * confirmed the launch (its start returned) and lists the agent running (idle, working, done), the agent is past the
+ * dialog and the watch ends; before that such a status may be the pane's previous agent. Until then, and on any error,
+ * it polls on until its end. A watch that ends unanswered while the agent is blocked (another dialog, or one it did
+ * not recognize) writes the screen it last read to the log.
+ *
+ * `released` resolves when the bootstrap may go: the watch ended (the agent is ready, or it gave up), or `attachBy`
+ * came first (the watch then goes on beside the report).
  */
-function watchTrust(job: SpawnJob, pane: string, screen: PaneScreen | undefined, polls: number, sleep: (ms: number) => Promise<void>, log: (m: string) => void) {
+function watchTrust(
+  job: SpawnJob,
+  pane: string,
+  screen: PaneScreen | undefined,
+  polls: number,
+  sleep: (ms: number) => Promise<void>,
+  log: (m: string) => void,
+  now: () => number,
+) {
   const prompt = adapterForHerdrKind(job.kind)?.trustPrompt;
   const cwd = job.cwd ?? job.split?.cwd;
   if (!screen || !prompt || polls === 0 || cwd === undefined || !agtCreatedFolder(job.root, cwd)) return undefined;
   let stopped = false;
   let launched = false;
+  let answered = false;
   /** The screen read at the last poll when the agent was blocked; cleared by any other status. */
   let blocked: string | undefined;
+  let release!: () => void;
+  const released = new Promise<void>((r) => (release = r));
   const done = (async () => {
     for (let i = 0; i < polls && !stopped; i++) {
       if (i > 0) await sleep(TRUST_POLL_MS);
       if (stopped) return;
+      if (job.attachBy !== undefined && now() >= job.attachBy) release();
       try {
         const status = (await screen.agentListAsync()).find((a) => a.pane === pane)?.status;
         if (launched && (status === "idle" || status === "working" || status === "done")) return;
         blocked = undefined;
-        if (status !== "blocked") continue;
+        // Answered: Herdr may list the agent blocked a little longer; the watch waits for it to be ready.
+        if (answered || status !== "blocked") continue;
         const text = await screen.paneReadAsync(pane);
         blocked = text;
-        if (!prompt.screen.every((re) => re.test(text))) continue;
+        if (!isTrustDialog(text, prompt)) continue;
         if (stopped) return; // stopped while reading: a busy retry's watch, a failed start or a refused report
-        for (const [k, key] of prompt.keys.entries()) {
-          if (k > 0) await sleep(TRUST_KEY_GAP_MS);
-          await screen.paneSendKeysAsync(pane, key);
+        const io = { read: () => screen.paneReadAsync(pane), send: (key: string) => screen.paneSendKeysAsync(pane, key), sleep };
+        const r = await answerTrustDialog(io, prompt, text);
+        if (r.answered) {
+          answered = true;
+          blocked = undefined;
+          log(`trusted ${cwd} for Claude Code (a folder agt created)`);
+          continue;
         }
-        log(`trusted ${cwd} for Claude Code (a folder agt created)`);
+        if (stopped) return;
+        blocked = r.screen;
+        if (!isTrustDialog(r.screen, prompt)) continue; // the dialog went away meanwhile: look again
+        log(`the trust dialog in pane ${pane} (session ${job.session}) still had "No, exit" selected after ${TRUST_TRIES} ${prompt.move}s; left it to the user. Its screen:\n${lastLines(r.screen)}`);
         return;
       } catch {
         // the pane may be busy or gone; read again until the watch ends
       }
     }
     if (!stopped && blocked !== undefined) log(`the trust watch ended unanswered while the agent in pane ${pane} (session ${job.session}) was blocked; its screen:\n${lastLines(blocked)}`);
-  })();
-  return { stop: () => void (stopped = true), launched: () => void (launched = true), done };
+  })().finally(release);
+  return { stop: () => void (stopped = true), launched: () => void (launched = true), released, done };
 }
 
 function closeQuietly(herdr: HerdrBridge, pane: string): void {

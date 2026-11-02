@@ -80,3 +80,12 @@ test("main is polled for active and idle only when its agent has no hooks", () =
   expect(poll("idle", "working", "claude-code")).toEqual([]);
   expect(poll("idle", "working", "opencode")).toEqual([{ session: "m", signal: "active" }]);
 });
+
+test("a session still starting is never ended by poll misses (the sweep's spawn_timeout fails a start that never comes up)", () => {
+  const m = new Map<string, number>();
+  for (let i = 0; i < 5; i++) expect(run("starting", null, m)).toEqual([]);
+  expect(run("starting", "idle", m)).toEqual([{ session: "s1", signal: "started" }]);
+  // Once started, misses count again.
+  expect(run("idle", null, m)).toEqual([]);
+  expect(run("idle", null, m)).toEqual([{ session: "s1", signal: "ended" }]);
+});

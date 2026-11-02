@@ -273,7 +273,9 @@ type Status = "idle" | "working" | "blocked" | "done" | "unknown" | "absent";
 function screen(polls: { status: Status; text: string }[], events: string[] = []) {
   let i = 0;
   let answered = false;
-  const now = () => (answered ? { status: "working" as Status, text: "Welcome to Claude Code" } : polls[Math.min(i, polls.length - 1)]!);
+  let moved = false; // `down` moves the dialog's cursor to "Yes"
+  const select = (p: { status: Status; text: string }) => (moved ? { ...p, text: p.text.replace("❯ 1. No", "  1. No").replace("  2. Yes", "❯ 2. Yes") } : p);
+  const now = () => (answered ? { status: "working" as Status, text: "Welcome to Claude Code" } : select(polls[Math.min(i, polls.length - 1)]!));
   return {
     events,
     reads: () => events.filter((e) => e.startsWith("read")).length,
@@ -286,6 +288,7 @@ function screen(polls: { status: Status; text: string }[], events: string[] = []
     paneReadAsync: async (pane: string) => (events.push(`read ${pane}`), now().text),
     paneSendKeysAsync: async (pane: string, key: string) => {
       events.push(`keys ${pane} ${key}`);
+      if (key === "down") moved = true;
       if (key === "enter") answered = true;
     },
   } as const;
@@ -369,30 +372,20 @@ test("another agent kind is never answered (adapters opt in through trustPrompt)
   expect(s.events).toEqual([]);
 });
 
-test("the trust watch never delays the spawn report", async () => {
-  const { root, thread } = trustRoot();
-  const { b } = bridge("not_ready");
-  const events: string[] = [];
-  // The dialog shows only from the fifth poll: the report must already be in by then.
-  const s = screen([STARTING, STARTING, STARTING, STARTING, DIALOG], events);
-  await runSpawnJob(
-    { ...JOB, root, split: { ...JOB.split!, cwd: thread } },
-    { herdr: b, screen: s, report: async (c) => (events.push(`report ${(c as { cmd: string }).cmd}`), true), sleep: tick, log: () => {} },
-  );
-  const reported = events.indexOf("report session.attached");
-  expect(reported).toBeGreaterThanOrEqual(0);
-  expect(reported).toBeLessThan(events.indexOf("keys w1:p3 down"));
-});
-
 test("a failed start or a refused report ends the trust watch without keys", async () => {
   const { root, thread } = trustRoot();
   const failed = bridge("start");
   const s1 = screen([STARTING, STARTING, DIALOG]);
   await runSpawnJob({ ...JOB, root, split: { ...JOB.split!, cwd: thread } }, { herdr: failed.b, screen: s1, report: async () => true, sleep: noSleep, log: () => {} });
   expect(s1.keys()).toEqual([]);
+  // A watch still running when the attach deadline releases the report: refused, the report stops it before the dialog.
   const refused = bridge("not_ready");
-  const s2 = screen([STARTING, STARTING, DIALOG]);
-  await runSpawnJob({ ...JOB, root, split: { ...JOB.split!, cwd: thread } }, { herdr: refused.b, screen: s2, report: async () => false, sleep: noSleep, log: () => {} });
+  const s2 = screen([STARTING, STARTING, STARTING, STARTING, DIALOG]);
+  let now = 0;
+  await runSpawnJob(
+    { ...JOB, root, split: { ...JOB.split!, cwd: thread }, attachBy: 1_000 },
+    { herdr: refused.b, screen: s2, report: async () => false, now: () => now, sleep: async (ms) => ((now += ms), tick()), log: () => {} },
+  );
   expect(s2.keys()).toEqual([]);
 });
 
@@ -479,4 +472,133 @@ test("a trust watch that ends with the agent running, or never blocked, logs no 
     await runSpawnJob({ ...JOB, root, split: { ...JOB.split!, cwd: thread } }, { herdr: b, screen: s, report: async () => true, sleep: noSleep, log: (m) => void logs.push(m) });
     expect(logs).toEqual([]);
   }
+});
+
+// ---------- Plan 13 Task 7: a confirmed trust choice, and the bootstrap after the dialog ----------
+
+/** Claude Code's dialog as heavy rerun 3's pane screens show it; the `❯` marks the selected option. */
+const drawDialog = (yes: boolean) =>
+  ` Quick safety check: Is this a project you created or one you trust?\n\n ${yes ? " " : "❯"} No, exit\n ${yes ? "❯" : " "} Yes, I trust this folder\n\n Enter to confirm · Esc to cancel`;
+
+/**
+ * A fake Herdr around one Claude Code start in pane w1:p3, whose screen changes per read. The agent is absent for
+ * `absent` polls, then blocked on the trust dialog. `down` is ignored `deaf` times (the dialog does not take input
+ * yet), then moves the cursor to "Yes"; with `stuck` it never moves. `enter` on "Yes" trusts the folder: Herdr still
+ * lists the agent blocked for `lag` polls, then idle. `enter` on "No, exit" exits Claude (the pane shows a shell).
+ * `agentPrompt` is refused while the agent is not idle, as Herdr does; `events` records keys, prompts and reports.
+ */
+function claudeStart(o: { absent?: number; deaf?: number; stuck?: boolean; lag?: number; blockedText?: string; trusted?: boolean } = {}) {
+  const events: string[] = [];
+  let polls = 0;
+  let deaf = o.deaf ?? 0;
+  let yes = false;
+  let state: "dialog" | "trusted" | "exited" = o.trusted ? "trusted" : "dialog";
+  let lag = o.lag ?? 0;
+  const status = (): Status => (polls <= (o.absent ?? 0) ? "absent" : state === "exited" ? "absent" : state === "trusted" ? (lag > 0 ? "blocked" : "idle") : "blocked");
+  const text = () => (state === "dialog" ? (o.blockedText ?? drawDialog(yes)) : state === "trusted" ? "Welcome to Claude Code\n\n> " : `${drawDialog(false)}\n$ `);
+  const herdr = {
+    splitPane: () => "w1:p3",
+    agentStart: () => {
+      events.push("start");
+      throw new HerdrError("agent_not_ready", "blocked at startup");
+    },
+    agentPrompt: (_name: string, t: string) => {
+      if (status() !== "idle") {
+        events.push("prompt refused");
+        throw new HerdrError("agent_blocked", "herdr agent prompt: agent is blocked and requires interactive input");
+      }
+      events.push(`prompt ${t}`);
+    },
+    closePane: (p: string) => void events.push(`close ${p}`),
+  } as unknown as HerdrBridge;
+  const s = {
+    agentListAsync: async () => {
+      polls++;
+      const st = status();
+      if (state === "trusted" && lag > 0) lag--;
+      return st === "absent" ? [] : [{ pane: "w1:p3", status: st, kind: "claude" }];
+    },
+    paneReadAsync: async () => text(),
+    paneSendKeysAsync: async (_pane: string, key: string) => {
+      events.push(`keys ${key}`);
+      if (key === "down" && !o.stuck && deaf-- <= 0) yes = true;
+      if (key === "enter") state = yes ? "trusted" : "exited";
+    },
+  };
+  return { herdr, screen: s, events, keys: () => events.filter((e) => e.startsWith("keys")) };
+}
+
+const trustJob = (thread: string, root: string) => ({ ...JOB, root, split: { ...JOB.split!, cwd: thread } });
+const report = (events: string[]) => async (c: object) => (events.push(`report ${JSON.stringify(c)}`), true);
+
+test("a down that lands before the dialog takes input is sent again: enter goes only once 'Yes' is selected", async () => {
+  const { root, thread } = trustRoot();
+  const c = claudeStart({ absent: 1, deaf: 1 });
+  const logs: string[] = [];
+  await runSpawnJob(trustJob(thread, root), { herdr: c.herdr, screen: c.screen, report: report(c.events), sleep: noSleep, log: (m) => void logs.push(m) });
+  expect(c.keys()).toEqual(["keys down", "keys down", "keys enter"]);
+  expect(logs).toEqual([`trusted ${thread} for Claude Code (a folder agt created)`]);
+});
+
+test("'No, exit' still selected after 5 downs: enter is never pressed, the screen is logged and the dialog is left to the user", async () => {
+  const { root, thread } = trustRoot();
+  const c = claudeStart({ absent: 1, stuck: true });
+  const logs: string[] = [];
+  await runSpawnJob(trustJob(thread, root), { herdr: c.herdr, screen: c.screen, report: report(c.events), sleep: noSleep, log: (m) => void logs.push(m) });
+  expect(c.keys()).toEqual(Array(5).fill("keys down"));
+  expect(logs).toEqual([
+    `the trust dialog in pane w1:p3 (session s-1) still had "No, exit" selected after 5 downs; left it to the user. Its screen:\n${drawDialog(false)}`,
+  ]);
+  // The agent is still at the dialog: the bootstrap waits in the daemon's queue.
+  expect(c.events.at(-1)).toBe(`report ${JSON.stringify({ cmd: "session.attached", session: "s-1", pane: "w1:p3", pending: JOB.bootstrap })}`);
+});
+
+test("the bootstrap is held while the trust dialog is up and prompted once it is gone and the agent is idle; the attach report follows", async () => {
+  const { root, thread } = trustRoot();
+  // Herdr still lists the agent blocked for two polls after the answer, as in heavy rerun 3.
+  const c = claudeStart({ absent: 1, lag: 2 });
+  await runSpawnJob(trustJob(thread, root), { herdr: c.herdr, screen: c.screen, report: report(c.events), sleep: noSleep, log: () => {} });
+  expect(c.events).toEqual([
+    "start",
+    "keys down",
+    "keys enter",
+    `prompt ${JOB.bootstrap}`,
+    `report ${JSON.stringify({ cmd: "session.attached", session: "s-1", pane: "w1:p3" })}`,
+  ]);
+});
+
+test("no blocked notice while agt's trust watch runs: the daemon gets the pane to poll only once the watch resolves", async () => {
+  const { root, thread } = trustRoot();
+  const c = claudeStart({ absent: 2, deaf: 2, lag: 1 });
+  await runSpawnJob(trustJob(thread, root), { herdr: c.herdr, screen: c.screen, report: report(c.events), sleep: noSleep, log: () => {} });
+  const reported = c.events.findIndex((e) => e.startsWith("report"));
+  expect(reported).toBeGreaterThan(c.events.indexOf("keys enter"));
+  expect(c.events.filter((e) => e.startsWith("report"))).toHaveLength(1);
+});
+
+test("a watch still running at the job's attach deadline releases the report (bootstrap pending) so the sweep does not fail the spawn", async () => {
+  const { root, thread } = trustRoot();
+  // A dialog agt does not recognize: the watch would read for its whole length.
+  const c = claudeStart({ blockedText: "An MCP server needs approval" });
+  let now = 1_000;
+  await runSpawnJob(
+    { ...trustJob(thread, root), attachBy: 11_000 },
+    {
+      herdr: c.herdr, screen: c.screen, log: () => {}, now: () => now,
+      sleep: async (ms) => void (now += ms),
+      report: async (cmd) => (c.events.push(`report at ${now}`), expect(cmd).toEqual({ cmd: "session.attached", session: "s-1", pane: "w1:p3", pending: JOB.bootstrap }), true),
+    },
+  );
+  const at = Number(c.events.find((e) => e.startsWith("report at"))!.slice("report at ".length));
+  expect(at).toBeGreaterThanOrEqual(11_000);
+  expect(at).toBeLessThan(13_000);
+});
+
+test("without a dialog the bootstrap goes as soon as the launched agent is listed running", async () => {
+  const { root, thread } = trustRoot();
+  // Trusted already: the agent comes up idle.
+  const c = claudeStart({ absent: 1, trusted: true });
+  (c.herdr as { agentStart: unknown }).agentStart = () => void c.events.push("start");
+  await runSpawnJob(trustJob(thread, root), { herdr: c.herdr, screen: c.screen, report: report(c.events), sleep: noSleep, log: () => {} });
+  expect(c.events).toEqual(["start", `prompt ${JOB.bootstrap}`, `report ${JSON.stringify({ cmd: "session.attached", session: "s-1", pane: "w1:p3" })}`]);
 });
