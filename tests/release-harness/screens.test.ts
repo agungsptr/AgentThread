@@ -48,8 +48,8 @@ test("a pane that cannot be read is noted and the others are still read; a faile
   expect(more).toEqual(["pane screens: herdr pane list failed (server unavailable)"]);
 });
 
-test("the workspace rows keep worker panes open so their screens stay readable", () => {
-  for (const s of allScenarios().filter((x) => x.workspace)) expect(s.config?.herdr?.close_worker_pane_on_end).toBe(false);
+test("the workspace rows leave close_worker_pane_on_end at its default", () => {
+  for (const s of allScenarios().filter((x) => x.workspace)) expect(s.config?.herdr?.close_worker_pane_on_end).toBeUndefined();
 });
 
 test("the dump has one overall deadline: each call gets what is left (at most 10s), and the panes past it are named", async () => {
