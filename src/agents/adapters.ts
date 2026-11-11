@@ -39,6 +39,7 @@ export interface AgentAdapter {
   /**
    * `env` is the adapter's own env (also merged into a thread tab's env); `processEnv` is set on the agent's own process
    * only (its split pane's env, exported in a root pane's shell, main's spawn env), never in a tab env.
+   * Contract: neither may ever hold credentials: both may be typed onto a pane's screen (an export in a root pane).
    */
   launch(o: LaunchInput): { args: string[]; env: Record<string, string>; processEnv: Record<string, string> };
   promptArgs(text: string): string[];

@@ -8,7 +8,7 @@ import { agentEnv } from "../agents/claude.ts";
 import { adapterFor, agentBin } from "../agents/adapters.ts";
 import { configWarnings, installWarnings, roleAgent, trustWarning } from "../agents/roles.ts";
 import { systemPrompt } from "../agents/prompts.ts";
-import { decodeJob, loggedArgv, placementLock, reportWithRetry, runSpawnJob, spawnReportRetry, spawnTrustPolls } from "../agents/spawn-job.ts";
+import { decodeJob, loggedArgv, placementLock, placementWait, reportWithRetry, runSpawnJob, spawnReportRetry, spawnTrustPolls } from "../agents/spawn-job.ts";
 import { contextTokensFromTranscript } from "../agents/transcript.ts";
 import { isAlive, request } from "../daemon/client.ts";
 import { startDaemon } from "../daemon/server.ts";
@@ -79,7 +79,7 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
         herdr,
         screen: herdr,
         trustPolls: spawnTrustPolls(process.env),
-        lock: (fn) => placementLock(join(paths(job.root).dir, "spawn-placement.lock"), fn),
+        lock: (fn) => placementLock(join(paths(job.root).dir, "spawn-placement.lock"), fn, { waitMs: placementWait(job.attachBy, Date.now()) }),
         report: (command) => reportWithRetry(() => request(socket, { op: "command", command, actor: { role: "user" } }), retry),
       });
       return 0;

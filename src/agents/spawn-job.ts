@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { appendFileSync, mkdirSync, realpathSync, rmSync, statSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { HerdrError, shellQuote, type HerdrBridge, type PaneLayout, type PaneScreen } from "../herdr/bridge.ts";
 import { adapterForHerdrKind } from "./adapters.ts";
@@ -380,7 +380,8 @@ export const MIN_PANE_ROWS = 20;
 
 /**
  * Where a worker splits a tab: the largest pane (by area) that splits into two panes of at least MIN_PANE_COLS x
- * MIN_PANE_ROWS, to the right when it is at least twice MIN_PANE_COLS wide, else down when twice MIN_PANE_ROWS tall.
+ * MIN_PANE_ROWS, to the right when it is at least twice MIN_PANE_COLS wide, else down when twice MIN_PANE_ROWS tall
+ * (plus one cell for the divider either way).
  * Undefined when no pane can (the tab is full), or the tab is zoomed (its rects may not be the real ones).
  */
 export function chooseSplit(layout: PaneLayout): { pane: string; direction: "right" | "down" } | undefined {
@@ -389,7 +390,8 @@ export function chooseSplit(layout: PaneLayout): { pane: string; direction: "rig
     .map(({ paneId, rect }) => ({
       pane: paneId,
       area: rect.width * rect.height,
-      direction: rect.width >= 2 * MIN_PANE_COLS ? ("right" as const) : rect.height >= 2 * MIN_PANE_ROWS ? ("down" as const) : undefined,
+      // A split spends one cell on the divider between its two panes.
+      direction: rect.width >= 2 * MIN_PANE_COLS + 1 ? ("right" as const) : rect.height >= 2 * MIN_PANE_ROWS + 1 ? ("down" as const) : undefined,
     }))
     .filter((p) => p.direction !== undefined);
   const best = fits.reduce<(typeof fits)[number] | undefined>((a, p) => (!a || p.area > a.area ? p : a), undefined);
@@ -431,7 +433,16 @@ function placeWorker(herdr: HerdrBridge, job: SpawnJob, log: (m: string) => void
       return unreadable(e);
     }
   };
-  const splitAt = (at: { pane: string; direction: "right" | "down" }) => ({ pane: herdr.splitPane({ pane: at.pane, direction: at.direction, cwd: split.cwd, env: split.env }) });
+  // The chosen pane may close between the read and the split: then the job splits as before.
+  const splitAt = (at: { pane: string; direction: "right" | "down" }) => {
+    try {
+      return { pane: herdr.splitPane({ pane: at.pane, direction: at.direction, cwd: split.cwd, env: split.env }) };
+    } catch (e) {
+      if (!(e instanceof HerdrError && e.code === "pane_not_found")) throw e;
+      log(`pane ${at.pane} closed before session ${job.session} could split it; splitting as before`);
+      return undefined;
+    }
+  };
   const home = layoutOf(place.threadTab);
   if (!home || home.zoomed) return undefined;
   const at = chooseSplit(home);
@@ -461,21 +472,36 @@ function placeWorker(herdr: HerdrBridge, job: SpawnJob, log: (m: string) => void
 }
 
 /**
- * Runs `fn` holding a lock directory at `dir` (spawn jobs are separate processes). A lock older than STALE_LOCK_MS is
- * taken over (its job died holding it); after LOCK_WAIT_MS of waiting, or when the lock cannot be made at all, `fn`
- * runs anyway.
+ * Runs `fn` holding a lock directory at `dir` (spawn jobs are separate processes), with the holder's pid in `dir/pid`.
+ * A lock whose holder is dead is taken over at once; one older than STALE_LOCK_MS too (a backstop, as for a lock whose
+ * pid was never written). After `waitMs` of waiting (placementWait), or when the lock cannot be made at all, `fn` runs
+ * anyway. The lock is removed afterwards only while it still holds this process's pid.
  */
 export function placementLock<T>(dir: string, fn: () => T, o: { waitMs?: number; staleMs?: number } = {}): T {
   const deadline = Date.now() + (o.waitMs ?? LOCK_WAIT_MS);
+  const pidFile = join(dir, "pid");
+  const holder = (): number | undefined => {
+    try {
+      const n = Number(readFileSync(pidFile, "utf8").trim());
+      return Number.isInteger(n) && n > 0 ? n : undefined;
+    } catch {
+      return undefined;
+    }
+  };
   let held = false;
   while (!held) {
     try {
       mkdirSync(dir);
+      writeFileSync(pidFile, String(process.pid));
       held = true;
     } catch (e) {
       if ((e as { code?: string }).code !== "EEXIST") break; // no place for a lock (no project dir): run unlocked
       try {
-        if (Date.now() - statSync(dir).mtimeMs > (o.staleMs ?? STALE_LOCK_MS)) rmSync(dir, { recursive: true, force: true });
+        const pid = holder();
+        if ((pid !== undefined && !alive(pid)) || Date.now() - statSync(dir).mtimeMs > (o.staleMs ?? STALE_LOCK_MS)) {
+          rmSync(dir, { recursive: true, force: true });
+          continue;
+        }
       } catch {
         // released meanwhile
       }
@@ -486,11 +512,27 @@ export function placementLock<T>(dir: string, fn: () => T, o: { waitMs?: number;
   try {
     return fn();
   } finally {
-    if (held) rmSync(dir, { recursive: true, force: true });
+    if (held && holder() === process.pid) rmSync(dir, { recursive: true, force: true });
   }
 }
 
+/** Whether process `pid` exists (EPERM: it does, as another user's). */
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as { code?: string }).code === "EPERM";
+  }
+}
+
+/** How long a job waits for the placement lock: LOCK_WAIT_MS, cut so the attach report still goes in time (`attachBy`, 5s spare). */
+export function placementWait(attachBy: number | undefined, now: number): number {
+  return attachBy === undefined ? LOCK_WAIT_MS : Math.max(0, Math.min(LOCK_WAIT_MS, attachBy - now - LOCK_SPARE_MS));
+}
+
 const LOCK_WAIT_MS = 30_000;
+const LOCK_SPARE_MS = 5_000;
 const STALE_LOCK_MS = 120_000;
 
 function splitWithFallbacks(herdr: HerdrBridge, split: NonNullable<SpawnJob["split"]>): string {

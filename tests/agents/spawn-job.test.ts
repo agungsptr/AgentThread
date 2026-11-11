@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
-import { closeSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chooseSplit, decodeJob, encodeJob, launchSpawnJob, placementLock, reportWithRetry, runSpawnJob, spawnTrustPolls, workersTabOrder, type SpawnJob } from "../../src/agents/spawn-job.ts";
+import { chooseSplit, decodeJob, encodeJob, launchSpawnJob, placementLock, placementWait, reportWithRetry, runSpawnJob, spawnTrustPolls, workersTabOrder, type SpawnJob } from "../../src/agents/spawn-job.ts";
 import { HerdrError, type HerdrBridge } from "../../src/herdr/bridge.ts";
 import { waitFor } from "../helpers.ts";
 import { P8_DIALOG } from "../fixtures/trust-screens.ts";
@@ -749,8 +749,11 @@ test("the agent start waits at most 60s and never past attachBy (at least 1s), r
 type Rect = { x: number; y: number; width: number; height: number };
 const rect = (width: number, height: number, x = 0, y = 0): Rect => ({ x, y, width, height });
 
-/** A fake Herdr with tabs of panes of known sizes. A split halves the pane it splits; a new tab has one 200x50 pane. */
-function layoutBridge(tabs: Record<string, { label: string; panes: Record<string, Rect> }>, o: { unreadable?: boolean } = {}) {
+/**
+ * A fake Herdr with tabs of panes of known sizes. A split halves the pane it splits less the one-cell divider between
+ * the halves (as Herdr draws it); a new tab has one 200x50 pane.
+ */
+function layoutBridge(tabs: Record<string, { label: string; panes: Record<string, Rect> }>, o: { unreadable?: boolean; gone?: string } = {}) {
   const calls: string[] = [];
   let next = 50;
   const tabOf = (pane: string) => Object.entries(tabs).find(([, t]) => pane in t.panes)?.[0];
@@ -766,13 +769,17 @@ function layoutBridge(tabs: Record<string, { label: string; panes: Record<string
     },
     splitPane: (s: { pane: string; direction: "right" | "down"; env: Record<string, string> }) => {
       calls.push(`split ${s.pane} ${s.direction}`);
+      if (s.pane === o.gone) throw new HerdrError("pane_not_found", "herdr pane split: pane not found");
       const id = `w1:p${next++}`;
       const tab = tabOf(s.pane);
       if (tab) {
         const r = tabs[tab]!.panes[s.pane]!;
-        const half = s.direction === "right" ? rect(Math.floor(r.width / 2), r.height) : rect(r.width, Math.floor(r.height / 2));
-        tabs[tab]!.panes[s.pane] = half;
-        tabs[tab]!.panes[id] = half;
+        const right = s.direction === "right";
+        const size = right ? r.width : r.height;
+        const first = Math.floor((size - 1) / 2);
+        const second = size - 1 - first;
+        tabs[tab]!.panes[s.pane] = right ? rect(first, r.height) : rect(r.width, first);
+        tabs[tab]!.panes[id] = right ? rect(second, r.height) : rect(r.width, second);
       }
       return id;
     },
@@ -822,13 +829,22 @@ test("a narrow, tall pane is split down", async () => {
   expect(calls).toContain("split w1:p2 down");
 });
 
-test("repeated workers never make a pane under 80 x 20", async () => {
-  const { b, tabs } = layoutBridge({ "w1:t2": { label: "001-x", panes: { "w1:p2": rect(200, 50) } } });
-  for (let i = 0; i < 6; i++) await attachedPane(PLACED, b);
-  for (const r of Object.values(tabs["w1:t2"]!.panes)) {
-    expect(r.width).toBeGreaterThanOrEqual(80);
-    expect(r.height).toBeGreaterThanOrEqual(20);
+test("repeated workers never make a pane under 80 x 20, the divider counted", async () => {
+  for (const start of [rect(200, 50), rect(160, 40), rect(161, 41), rect(321, 81)]) {
+    const { b, tabs } = layoutBridge({ "w1:t2": { label: "001-x", panes: { "w1:p2": start } } });
+    for (let i = 0; i < 8; i++) await attachedPane(PLACED, b);
+    for (const tab of Object.values(tabs))
+      for (const r of Object.values(tab.panes)) {
+        expect(r.width).toBeGreaterThanOrEqual(80);
+        expect(r.height).toBeGreaterThanOrEqual(20);
+      }
   }
+});
+
+test("a chosen pane that closes before its split falls back to today's split", async () => {
+  const { b, calls } = layoutBridge({ "w1:t2": { label: "001-x", panes: { "w1:p2": rect(100, 30), "w1:p7": rect(180, 50, 101) } } }, { gone: "w1:p7" });
+  expect(await attachedPane(PLACED, b)).toBe("w1:p50");
+  expect(calls).toEqual(["pane list w1", "layout w1:p2", "split w1:p7 right", "split w1:p2 down", "start w1:p50"]);
 });
 
 test("a full tab puts the worker in the thread's workers tab, created with the thread tab's env; the worker's env is exported there", async () => {
@@ -854,10 +870,10 @@ test("the workers tab is split by the same rule; when it is full too, another wo
   await attachedPane(PLACED, b);
   expect(calls).toContain("split w1:p6 right");
   calls.length = 0;
-  await attachedPane(PLACED, b); // halves are 100 x 50: down
-  expect(calls).toContain("split w1:p6 down");
-  await attachedPane(PLACED, b); // the other 100 x 50 half goes down too
-  // now w1:t5 holds four 100 x 25 panes: full
+  await attachedPane(PLACED, b); // halves are 99 x 50 and 100 x 50: down
+  expect(calls.some((c) => /^split w1:p\d+ down$/.test(c))).toBe(true);
+  await attachedPane(PLACED, b); // the other half goes down too
+  // now w1:t5 holds four panes of 24 or 25 rows: full
   calls.length = 0;
   await attachedPane(PLACED, b);
   expect(calls.find((c) => c.startsWith("tab create"))).toStartWith("tab create w1 001-x-workers-2 ");
@@ -886,12 +902,12 @@ test("a bridge without layout calls, or a job without placement, splits as today
   expect(calls).toEqual(["split w1:p2 down", "start w1:p51"]);
 });
 
-test("chooseSplit: the largest pane that allows a split; right from 160 columns, else down from 40 rows", () => {
+test("chooseSplit: the largest pane that allows a split; right from 161 columns, else down from 41 rows (a divider each)", () => {
   const l = (...panes: [string, Rect][]) => ({ tabId: "w1:t1", zoomed: false, panes: panes.map(([paneId, rect]) => ({ paneId, rect })) });
-  expect(chooseSplit(l(["a", rect(160, 20)]))).toEqual({ pane: "a", direction: "right" });
-  expect(chooseSplit(l(["a", rect(159, 40)]))).toEqual({ pane: "a", direction: "down" });
-  expect(chooseSplit(l(["a", rect(159, 39)]))).toBeUndefined();
-  expect(chooseSplit(l(["a", rect(150, 39)], ["b", rect(90, 45)]))).toEqual({ pane: "b", direction: "down" });
+  expect(chooseSplit(l(["a", rect(161, 20)]))).toEqual({ pane: "a", direction: "right" });
+  expect(chooseSplit(l(["a", rect(160, 41)]))).toEqual({ pane: "a", direction: "down" });
+  expect(chooseSplit(l(["a", rect(160, 40)]))).toBeUndefined();
+  expect(chooseSplit(l(["a", rect(150, 40)], ["b", rect(90, 45)]))).toEqual({ pane: "b", direction: "down" });
   expect(chooseSplit(l(["a", rect(160, 50)], ["b", rect(200, 50)]))).toEqual({ pane: "b", direction: "right" });
   expect(chooseSplit({ ...l(["a", rect(200, 50)]), zoomed: true })).toBeUndefined();
 });
@@ -910,13 +926,34 @@ test("placementLock runs one holder at a time, frees the lock, and takes over a 
   expect(existsSync(dir)).toBe(false);
   expect(() => placementLock(dir, () => { throw new Error("boom"); })).toThrow("boom");
   expect(existsSync(dir)).toBe(false);
-  mkdirSync(dir); // held by a job that died
+  mkdirSync(dir); // no pid written, and old: the mtime backstop takes it over
   expect(placementLock(dir, () => 7, { staleMs: 0 })).toBe(7);
-  mkdirSync(dir); // held and fresh: waits, then runs anyway
+  expect(existsSync(dir)).toBe(false);
+  // held by a job that died: taken over at once, however fresh
+  const dead = Bun.spawnSync(["true"]).pid;
+  mkdirSync(dir);
+  writeFileSync(join(dir, "pid"), String(dead));
+  const t0 = Date.now();
+  expect(placementLock(dir, () => readFileSync(join(dir, "pid"), "utf8"), { waitMs: 5_000 })).toBe(String(process.pid));
+  expect(Date.now() - t0).toBeLessThan(1_000);
+  // held by a live process and fresh: waits, then runs anyway, and leaves that lock alone
+  mkdirSync(dir);
+  writeFileSync(join(dir, "pid"), String(process.ppid));
   expect(placementLock(dir, () => 8, { waitMs: 50 })).toBe(8);
-  expect(existsSync(dir)).toBe(true); // not its lock: left alone
+  expect(readFileSync(join(dir, "pid"), "utf8")).toBe(String(process.ppid));
+  rmSync(dir, { recursive: true });
+  // a lock taken over by another job while this one held it is not removed
+  expect(placementLock(dir, () => (rmSync(dir, { recursive: true }), mkdirSync(dir), writeFileSync(join(dir, "pid"), String(process.ppid)), 9))).toBe(9);
+  expect(existsSync(dir)).toBe(true);
   // no directory to make the lock in: runs at once, unlocked
   const started = Date.now();
   expect(placementLock(join(dir, "missing", "place.lock"), () => 9)).toBe(9);
   expect(Date.now() - started).toBeLessThan(1_000);
+});
+
+test("placementWait: the lock wait never outlasts the attach report's time (5s spare)", () => {
+  expect(placementWait(undefined, 1_000)).toBe(30_000);
+  expect(placementWait(1_000_000, 0)).toBe(30_000);
+  expect(placementWait(20_000, 0)).toBe(15_000);
+  expect(placementWait(3_000, 0)).toBe(0);
 });
