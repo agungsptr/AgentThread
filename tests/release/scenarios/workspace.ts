@@ -680,10 +680,14 @@ export function workspaceScenarios(): Scenario[] {
   // The user creates these threads, so the task text reaches the coordinator as written. Main still runs: its pane
   // answers Claude Code's trust dialog for the scratch root (thread dirs and worktrees under it inherit the trust), so
   // each run waits for main to go idle first. Only the rows without agents pass `manager: false`.
-  const asUser = (id: string, run: (h: H) => Promise<void>, extra: Partial<Scenario> = {}): Scenario => ({ id, agents: cc, workspace: true, config: { agents: tiers(cc) }, run, ...extra });
+  const asUser = (id: string, run: (h: H) => Promise<void>, extra: Partial<Scenario> = {}, agents: RoleAgents = cc): Scenario => ({ id, agents, workspace: true, config: { agents: tiers(agents) }, run, ...extra });
+  const ocWorker: RoleAgents = { ...cc, worker: "opencode" };
   for (const s of [
     asUser("ws-edge-out-of-ticket", edgeOutOfTicket, { wsHints: { api: [OUT_OF_TICKET_HINT] } }),
     asUser("ws-edge-return", edgeReturn),
+    // The same flows with an OpenCode worker (needs AGT_E2E_MODEL_OPENCODE); listed only when --agents has opencode.
+    asUser("ws-edge-out-of-ticket-worker-opencode", edgeOutOfTicket, { wsHints: { api: [OUT_OF_TICKET_HINT] } }, ocWorker),
+    asUser("ws-edge-return-worker-opencode", edgeReturn, {}, ocWorker),
     // A browser URL, so stage 8 is not na by agt and its gate can be exercised; the tier waits an hour (no coordinator).
     asUser("ws-edge-stage-gates", edgeStageGates, { manager: false, config: { agents: tiers(cc, "1h"), workflow: { browser: { urls: ["http://localhost:5173"] } } } }),
     asUser("ws-stack-lock", stackLock),

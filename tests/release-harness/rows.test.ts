@@ -32,6 +32,8 @@ test("--list includes the workspace rows", () => {
     "ws-happy-worker-omp",
     "ws-edge-out-of-ticket",
     "ws-edge-return",
+    "ws-edge-out-of-ticket-worker-opencode",
+    "ws-edge-return-worker-opencode",
     "ws-edge-stage-gates",
     "ws-stack-lock",
     "ws-cleanup",
@@ -40,6 +42,15 @@ test("--list includes the workspace rows", () => {
     expect(lines.some((l) => l.startsWith(`${id} `))).toBe(true);
   }
   expect(lines).toHaveLength(allScenarios().length);
+});
+
+test("the OpenCode-worker edge rows: Claude Code main and coordinator, opencode worker, same hint", () => {
+  for (const id of ["ws-edge-return-worker-opencode", "ws-edge-out-of-ticket-worker-opencode"]) {
+    expect(row(id).agents).toEqual({ main: "claude-code", coordinator: "claude-code", worker: "opencode" });
+    expect(row(id).workspace).toBe(true);
+    expect(row(id).manager).toBeUndefined();
+  }
+  expect(row("ws-edge-out-of-ticket-worker-opencode").wsHints).toEqual({ api: [OUT_OF_TICKET_HINT] });
 });
 
 test("row ids are unique", () => {
@@ -149,7 +160,7 @@ test("ws-edge-out-of-ticket keeps CHANGELOG.md out of the tickets in its task te
 test("ws-edge-out-of-ticket puts the CHANGELOG hint in api's AGENTS.md only", () => {
   expect(OUT_OF_TICKET_HINT).toBe("Whenever you change src/slugify.ts, also add a line to CHANGELOG.md.");
   expect(row("ws-edge-out-of-ticket").wsHints).toEqual({ api: [OUT_OF_TICKET_HINT] });
-  expect(allScenarios().filter((s) => s.wsHints).map((s) => s.id)).toEqual(["ws-edge-out-of-ticket"]);
+  expect(allScenarios().filter((s) => s.wsHints).map((s) => s.id)).toEqual(["ws-edge-out-of-ticket", "ws-edge-out-of-ticket-worker-opencode"]);
 });
 
 test("the return and restart lines are the brief's", () => {
