@@ -186,13 +186,15 @@ test("a held notice is delivered again by the sweep once 10s have passed since t
   const s = heldNotice();
   expect(s.sessions.get(C)!.noticeHeldAt).toBe(T0);
   expect(sweep(s, "2026-10-11T10:00:09.000Z", ctx()).effects).toEqual([]);
-  expect(sweep(s, "2026-10-11T10:00:11.000Z", ctx()).effects).toEqual([DELIVER]);
+  expect(sweep(s, "2026-10-11T10:00:11.000Z", ctx()).effects).toEqual([{ ...DELIVER, held: 1 }]);
   // held again: the clock restarts from that attempt
   apply(s, "2026-10-11T10:00:11.000Z", { type: "notice.held", thread: "001", payload: { session: C, reason: "slow read" } });
   expect(sweep(s, "2026-10-11T10:00:20.000Z", ctx()).effects).toEqual([]);
-  expect(sweep(s, "2026-10-11T10:00:22.000Z", ctx()).effects).toEqual([DELIVER]);
+  const D2: Effect = { ...DELIVER, held: 2 };
+  expect(sweep(s, "2026-10-11T10:00:30.000Z", ctx()).effects).toEqual([]);
+  expect(sweep(s, "2026-10-11T10:00:32.000Z", ctx()).effects).toEqual([D2]);
   // delivered: nothing is left to retry
-  apply(s, "2026-10-11T10:00:22.000Z", { type: "notice.delivered", thread: "001", payload: { session: C, count: 1 } });
+  apply(s, "2026-10-11T10:00:32.000Z", { type: "notice.delivered", thread: "001", payload: { session: C, count: 1 } });
   expect(s.sessions.get(C)!.noticeHeldAt).toBeUndefined();
   apply(s, "2026-10-11T10:00:40.000Z", { type: "agent.idle", thread: "001", payload: { session: C } });
   expect(sweep(s, "2026-10-11T10:01:40.000Z", ctx()).effects).toEqual([]);
@@ -208,4 +210,78 @@ test("the sweep retries no delivery into a session that is working, blocked on a
   const gone = heldNotice();
   apply(gone, T0, { type: "session.lost", thread: "001", payload: { session: C, reason: "x" } });
   expect(sweep(gone, "2026-10-11T10:01:00.000Z", ctx()).effects.filter((e) => e.kind === "notice.deliver")).toEqual([]);
+});
+
+const at = (sec: number) => new Date(Date.parse(T0) + sec * 1000).toISOString();
+const hold = (s: State, sec: number, reason = "trust dialog") => apply(s, at(sec), { type: "notice.held", thread: "001", payload: { session: C, reason } });
+
+test("held notices back off 10s, 20s, 40s … up to 5 minutes, derived from the events", () => {
+  const s = heldNotice();
+  const waits: number[] = [];
+  let t = 0;
+  for (let n = 1; n <= 8; n++) {
+    const want = Math.min(10 * 2 ** (n - 1), 300);
+    expect(s.sessions.get(C)!.noticeHeldCount).toBe(n);
+    expect(sweep(s, at(t + want - 1), ctx()).effects).toEqual([]);
+    expect(sweep(s, at(t + want + 1), ctx()).effects.length).toBe(1);
+    waits.push(want);
+    t += want + 1;
+    hold(s, t);
+  }
+  expect(waits).toEqual([10, 20, 40, 80, 160, 300, 300, 300]);
+});
+
+test("the backoff resets on a delivery, and on an active or started session; replaying the events gives the same state", () => {
+  const s = heldNotice();
+  const evs: StoredEvent[] = [];
+  const step = (...e: StoredEvent[]) => evs.push(...e);
+  step(...hold(s, 11), ...hold(s, 32));
+  expect(s.sessions.get(C)!.noticeHeldCount).toBe(3);
+  expect(s.sessions.get(C)!.noticeHeldReason).toBe("trust dialog");
+  step(...apply(s, at(40), { type: "session.active", thread: "001", payload: { session: C } }));
+  expect(s.sessions.get(C)!.noticeHeldCount).toBeUndefined();
+  step(...hold(s, 50));
+  expect(s.sessions.get(C)!.noticeHeldCount).toBe(1);
+  step(...apply(s, at(51), { type: "notice.delivered", thread: "001", payload: { session: C, count: 1 } }));
+  expect(s.sessions.get(C)!.noticeHeldCount).toBeUndefined();
+  expect(s.sessions.get(C)!.noticeHeldReported).toBeUndefined();
+  // replay: a fresh state fed the same events, stopped after two holds, matches the live state at that point
+  const live = heldNotice();
+  hold(live, 11);
+  const replayed = heldNotice();
+  for (const ev of evs.slice(0, 1)) applyEvent(replayed, { ...ev, seq: replayed.lastSeq + 1 });
+  expect(replayed.sessions.get(C)!.noticeHeldCount).toBe(live.sessions.get(C)!.noticeHeldCount);
+  expect(replayed.sessions.get(C)!.noticeHeldAt).toBe(live.sessions.get(C)!.noticeHeldAt);
+});
+
+test("a session held three times in a row has its coordinator told once per stretch, outside its own queue", () => {
+  const s = stateOf(INIT, threadCreated("001", { status: "in_progress" }));
+  apply(
+    s,
+    T0,
+    { type: "session.created", thread: "001", payload: { session: C, role: "coordinator", agent: "claude-code", name: "c" } },
+    { type: "session.attached", thread: "001", payload: { session: C, pane: "w1:p2" } },
+    { type: "session.started", thread: "001", payload: { session: C } },
+    { type: "ticket.created", thread: "001", payload: { ticket: "T1", title: "T1", scope: ["T1"] } },
+    { type: "session.created", thread: "001", payload: { session: W, role: "worker", agent: "claude-code", name: "w", ticket: "T1" } },
+    { type: "session.attached", thread: "001", payload: { session: W, pane: "w1:p3" } },
+    { type: "session.started", thread: "001", payload: { session: W } },
+    { type: "agent.idle", thread: "001", payload: { session: W } },
+    { type: "notice.queued", thread: "001", payload: { session: W, text: "Hi." } },
+  );
+  const wHold = (sec: number) => apply(s, at(sec), { type: "notice.held", thread: "001", payload: { session: W, reason: "slow read" } });
+  wHold(1);
+  wHold(12);
+  expect(sweep(s, at(100), ctx()).events.filter((e) => e.type === "notice.held_reported")).toEqual([]);
+  wHold(100);
+  const r = sweep(s, at(100 + 41), ctx());
+  expect(r.events).toEqual([
+    { type: "notice.held_reported", thread: "001", payload: { session: W } },
+    { type: "notice.queued", thread: "001", payload: { session: C, text: "Messages to worker ticket T1 keep being held (slow read); check its pane." } },
+  ]);
+  expect(r.effects.map((e) => e.kind)).toEqual(["notice.deliver"]);
+  apply(s, at(141), ...(r.events as EventBody[]));
+  wHold(141);
+  expect(sweep(s, at(141 + 81), ctx()).events.filter((e) => e.type === "notice.queued")).toEqual([]);
+  expect(s.sessions.get(W)!.notices).toEqual(["Hi."]);
 });

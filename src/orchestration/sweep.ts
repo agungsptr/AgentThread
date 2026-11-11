@@ -3,11 +3,9 @@ import { durationMs } from "../config/config.ts";
 import type { EventBody } from "../domain/types.ts";
 import { isLive, type Session, type State } from "../state/projection.ts";
 import { generateHandoff } from "./handoff.ts";
-import { noticeDelivery, type ReactorContext } from "./reactor.ts";
+import { NOTICE_HELD_REPORT_AFTER, noticeDelivery, noticeRetryMs, type ReactorContext } from "./reactor.ts";
 import { liveSessions, rotateCoordinator } from "./sessions.ts";
 
-/** How long after a held or failed notice delivery (notice.held) the sweep tries again. */
-export const NOTICE_RETRY_MS = 10_000;
 /**
  * How long a worker must sit idle with its ticket unfinished before the coordinator hears of it: a hookless agent's
  * poll flickers to idle mid-turn, and a real stop lasts.
@@ -96,7 +94,14 @@ export function sweep(state: State, now: string, ctx: ReactorContext): { events:
   for (const s of state.sessions.values()) {
     if (!isLive(s) || failed.has(s.id) || s.blockedNotified) continue;
     const since = s.noticeHeldAt ?? s.idleAt ?? s.lastActiveAt ?? s.createdAt;
-    if (Date.parse(now) - Date.parse(since) <= NOTICE_RETRY_MS) continue;
+    if (Date.parse(now) - Date.parse(since) <= noticeRetryMs(s.noticeHeldCount ?? 1)) continue;
+    // Held again and again: the coordinator hears once per stretch (never through the held session's own queue).
+    if ((s.noticeHeldCount ?? 0) >= NOTICE_HELD_REPORT_AFTER && !s.noticeHeldReported && s.notices.length > 0) {
+      const reason = s.noticeHeldReason;
+      const target = s.role === "worker" && s.thread ? coordinatorTarget(state, s.thread) : s.role === "coordinator" ? liveSessions(state, undefined, "main")[0] : undefined;
+      events.push({ type: "notice.held_reported", ...(s.thread ? { thread: s.thread } : {}), payload: { session: s.id } });
+      if (target && target.id !== s.id) events.push({ type: "notice.queued", ...(target.thread ? { thread: target.thread } : {}), payload: { session: target.id, text: `Messages to ${s.role} ${s.role === "worker" && s.ticket ? `ticket ${s.ticket}` : s.id.slice(0, 8)} keep being held${reason ? ` (${reason})` : ""}; check its pane.` } });
+    }
     const e = noticeDelivery(s);
     if (e) effects.push(e);
   }

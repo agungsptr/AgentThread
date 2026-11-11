@@ -49,6 +49,12 @@ export interface Session {
   idleReported?: boolean;
   /** When a delivery of its queued notices was last held or failed (notice.held): the sweep retries after that. */
   noticeHeldAt?: string;
+  /** Consecutive notice.held in this stretch (reset by a delivery or an active/started session): the sweep backs off by it. */
+  noticeHeldCount?: number;
+  /** Why the latest of them was held. */
+  noticeHeldReason?: string;
+  /** The coordinator was told the notices stay held (notice.held_reported; cleared with the stretch). */
+  noticeHeldReported?: boolean;
   /** The message of the session's latest progress or note. */
   lastReport?: string;
   /** Herdr reported it blocked before it finished any turn (it got a blocked notice instead). */
@@ -697,6 +703,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
         delete s.blockedNotified;
         delete s.blockedSeq;
         endIdleStretch(s);
+        endHeldStretch(s);
         if (ev.type === "session.active" && ev.actor.role !== "user") s.hooksSeen = true;
         s.status = atPrompt ? "idle" : "active";
         s.lastActiveAt = ev.ts;
@@ -823,6 +830,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
       const s = sessionOf(state, ev.seq, ev.payload.session);
       s.notices.splice(0, ev.payload.count);
       delete s.noticeHeldAt;
+      endHeldStretch(s);
       if (isLive(s)) {
         delete s.polledStart;
         endIdleStretch(s);
@@ -831,8 +839,15 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
       }
       return true;
     }
-    case "notice.held":
-      sessionOf(state, ev.seq, ev.payload.session).noticeHeldAt = ev.ts;
+    case "notice.held": {
+      const s = sessionOf(state, ev.seq, ev.payload.session);
+      s.noticeHeldAt = ev.ts;
+      s.noticeHeldCount = (s.noticeHeldCount ?? 0) + 1;
+      s.noticeHeldReason = ev.payload.reason;
+      return true;
+    }
+    case "notice.held_reported":
+      sessionOf(state, ev.seq, ev.payload.session).noticeHeldReported = true;
       return true;
     case "worker.idle_reported": {
       const s = sessionOf(state, ev.seq, ev.payload.session);
@@ -847,6 +862,12 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
 }
 
 /** The session is active again: its idle stretch (and whether it was reported) is over. */
+function endHeldStretch(s: Session): void {
+  delete s.noticeHeldCount;
+  delete s.noticeHeldReason;
+  delete s.noticeHeldReported;
+}
+
 function endIdleStretch(s: Session): void {
   delete s.idleSeq;
   delete s.idleAt;

@@ -50,6 +50,16 @@ const doneNotice = (ticket: string, summary: string | undefined) => `Ticket ${ti
 const reviewNotice = (thread: string, ticket: string, summary: string | undefined) =>
   `Ticket ${ticket} is ready for review: ${summary ?? ""}. Review its commits, then agt ticket accept ${thread}/${ticket} or agt ticket return ${thread}/${ticket} "<what to fix>".`;
 
+/** How long after a held or failed notice delivery (notice.held) the sweep tries again: it doubles with each hold in a row. */
+export const NOTICE_RETRY_MS = 10_000;
+/** The longest wait between retries of a held stretch; a stuck session keeps being retried at this pace. */
+export const NOTICE_RETRY_MAX_MS = 300_000;
+/** Holds in a stretch after which the session's coordinator hears of it (once). */
+export const NOTICE_HELD_REPORT_AFTER = 3;
+export const noticeRetryMs = (held: number): number => Math.min(NOTICE_RETRY_MS * 2 ** Math.max(0, held - 1), NOTICE_RETRY_MAX_MS);
+/** The hold count at which the backoff first reaches its cap. */
+export const NOTICE_HELD_CAPPED_AT = Math.ceil(Math.log2(NOTICE_RETRY_MAX_MS / NOTICE_RETRY_MS)) + 1;
+
 /** The delivery of a live idle session's queued notices to its pane, or undefined when there is nothing to deliver now. */
 export function noticeDelivery(s: Session): Extract<Effect, { kind: "notice.deliver" }> | undefined {
   if (!isLive(s) || s.status !== "idle" || !s.pane || s.notices.length === 0) return undefined;
@@ -62,6 +72,7 @@ export function noticeDelivery(s: Session): Extract<Effect, { kind: "notice.deli
     text: s.notices.join("\n"),
     count: s.notices.length,
     ...(s.polledStart ? { unconfirmed: true as const } : {}),
+    ...(s.noticeHeldCount ? { held: s.noticeHeldCount } : {}),
   };
 }
 

@@ -41,7 +41,7 @@ export type Effect =
     }
   /** `unconfirmed`: only Herdr's poll says the agent started (it may list an agent at a startup dialog idle). */
   /** `agent` is the session's: only its adapter's trust dialog holds the delivery. */
-  | { kind: "notice.deliver"; session: string; thread?: string; agent: AgentKind; pane: string; text: string; count: number; unconfirmed?: true }
+  | { kind: "notice.deliver"; session: string; thread?: string; agent: AgentKind; pane: string; text: string; count: number; unconfirmed?: true; /** Holds so far in this stretch (the session's noticeHeldCount), when any. */ held?: number }
   | { kind: "pane.close"; pane: string }
   | { kind: "session.probe"; session: string; thread?: string; pane: string };
 

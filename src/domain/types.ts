@@ -139,7 +139,8 @@ export type EventBody =
   /** A notice delivery that did not type (a trust dialog, an unread screen, a Herdr error): the sweep retries it. */
   | { type: "notice.held"; thread?: string; payload: { session: string; reason: string } }
   /** The sweep told the coordinator that a worker sits idle with its ticket unfinished (once per idle stretch). */
-  | { type: "worker.idle_reported"; thread: string; payload: { session: string } };
+  | { type: "worker.idle_reported"; thread: string; payload: { session: string } }
+  | { type: "notice.held_reported"; thread?: string; payload: { session: string } };
 
 export type EventType = EventBody["type"];
 

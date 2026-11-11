@@ -80,3 +80,14 @@ test("only the session's own agent's trust dialog holds a notice: an agent witho
   // a Claude Code session in the same state is held
   expect(await r.run({ ...DELIVER, unconfirmed: true })).toEqual(HELD(DIALOG));
 });
+
+test("only the first hold of a stretch and the hold that first caps the backoff are logged", async () => {
+  const lines = async (held?: number) => {
+    const r = runner(NARROW_DIALOG);
+    await r.run({ ...DELIVER, ...(held ? { held } : {}) });
+    return r.logs;
+  };
+  expect(await lines()).toHaveLength(1);
+  for (const held of [1, 2, 3, 4, 6, 7, 20]) expect(await lines(held)).toEqual([]);
+  expect(await lines(5)).toEqual(["notice delivery to s-1 keeps being held (pane w1:p5 shows a trust dialog); retrying every 5m"]);
+});

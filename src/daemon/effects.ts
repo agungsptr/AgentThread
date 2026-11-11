@@ -16,6 +16,7 @@ import type { EventBody, Layout } from "../domain/types.ts";
 import { HerdrCli, HerdrError, spawnAsync } from "../herdr/bridge.ts";
 import { addWorktreeAsync, addWorktreeFromAsync } from "../project/git.ts";
 import { paths } from "../project/paths.ts";
+import { NOTICE_HELD_CAPPED_AT, NOTICE_RETRY_MAX_MS } from "../orchestration/reactor.ts";
 import { threadGitEnv } from "../orchestration/sessions.ts";
 import type { Thread } from "../state/projection.ts";
 
@@ -280,7 +281,10 @@ export function createEffectRunner(opts: {
         // started (typingUnsafe), and a screen not read in time holds it too. Held or failed, the notice stays queued and
         // notice.held lets the sweep retry it: an agent that is already idle may never go idle again.
         const held = (why: string): EventBody[] => {
-          log(`notice delivery to session ${effect.session} held: ${why}; agt retries it shortly`);
+          // One line when a stretch starts and one when its backoff first caps: a session stuck for hours must not flood the log.
+          const holds = (effect.held ?? 0) + 1;
+          if (holds === 1) log(`notice delivery to session ${effect.session} held: ${why}; agt retries it shortly`);
+          else if (holds === NOTICE_HELD_CAPPED_AT) log(`notice delivery to ${effect.session} keeps being held (${why}); retrying every ${NOTICE_RETRY_MAX_MS / 60_000}m`);
           return [{ type: "notice.held", ...(effect.thread ? { thread: effect.thread } : {}), payload: { session: effect.session, reason: why } }];
         };
         const prompt = adapterFor(effect.agent).trustPrompt;
