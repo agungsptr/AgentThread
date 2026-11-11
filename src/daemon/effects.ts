@@ -3,10 +3,11 @@ import { existsSync } from "node:fs";
 import { mkdir, readdir, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { agentEnv, claudeConfigDir } from "../agents/claude.ts";
-import { adapterFor } from "../agents/adapters.ts";
+import { adapterFor, trustPrompts } from "../agents/adapters.ts";
 import { bootstrapPrompt } from "../agents/prompts.ts";
 import { agentsMd, writeAgentsFilesAsync, writeThreadDirFiles } from "../agents/agents-md.ts";
 import { attachDeadline, launchSpawnJob, type SpawnJob } from "../agents/spawn-job.ts";
+import { trustDialogLive } from "../agents/trust.ts";
 import { canonical, cleanupThread, type CleanupOutcome } from "./cleanup-job.ts";
 import type { Effect } from "../commands/handler.ts";
 import type { Command } from "../commands/schema.ts";
@@ -28,6 +29,8 @@ export interface EffectBridge {
   agentPrompt(target: string, text: string): Promise<void> | void;
   closePane(pane: string): Promise<void> | void;
   agentExists(target: string): Promise<boolean> | boolean;
+  /** The pane's visible screen: a notice is not typed into an agent's trust dialog. Without it, nothing is checked. */
+  paneRead?(pane: string): Promise<string> | string;
 }
 
 /** HerdrCli through its non-blocking calls: the daemon never runs a synchronous child process after startup. */
@@ -39,6 +42,7 @@ export function asyncHerdr(cli: HerdrCli): EffectBridge {
     agentPrompt: (target, text) => cli.agentPromptAsync(target, text),
     closePane: (pane) => cli.closePaneAsync(pane),
     agentExists: (target) => cli.agentExistsAsync(target),
+    paneRead: (pane) => cli.paneReadAsync(pane),
   };
 }
 
@@ -267,8 +271,16 @@ export function createEffectRunner(opts: {
       case "notice.deliver": {
         const layout = opts.layout();
         if (!layout) return [];
+        const bridge = bridgeFor(layout);
+        // Herdr may list an agent at its trust dialog idle (a narrow pane wraps the dialog's footer), and a prompt's
+        // Enter would pick "No, exit". Not delivered, the notice stays queued for the agent's next idle.
+        const screen = bridge.paneRead ? await Promise.resolve(bridge.paneRead(effect.pane)).catch(() => undefined) : undefined;
+        if (screen !== undefined && trustPrompts().some((p) => trustDialogLive(screen, p))) {
+          log(`notice delivery to session ${effect.session} held: pane ${effect.pane} shows a trust dialog; it goes at the agent's next idle`);
+          return [];
+        }
         try {
-          await bridgeFor(layout).agentPrompt(effect.pane, effect.text);
+          await bridge.agentPrompt(effect.pane, effect.text);
           return [{ type: "notice.delivered", ...(effect.thread ? { thread: effect.thread } : {}), payload: { session: effect.session, count: effect.count } }];
         } catch (e) {
           log(`notice delivery to session ${effect.session} failed: ${e instanceof Error ? e.message : String(e)}`);

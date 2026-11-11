@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { CLAUDE_TRUST_PROMPT, answerTrustDialog, trustChoiceSelected } from "../../src/agents/trust.ts";
+import { CLAUDE_TRUST_PROMPT, answerTrustDialog, isTrustDialog, trustChoiceSelected, trustDialogLive } from "../../src/agents/trust.ts";
 
 // As Claude Code draws it (heavy rerun 3's pane screens); the `❯` marks the selected option.
 const dialog = (yes: boolean) =>
@@ -85,4 +85,79 @@ test("Yes already selected is confirmed without a move; a dialog gone from the s
   const g = fake({});
   expect((await answerTrustDialog(g.io, CLAUDE_TRUST_PROMPT, "Welcome to Claude Code\n❯ ")).answered).toBe(false);
   expect(g.keys).toEqual([]);
+});
+
+// ---------- Plan 13 Task 8: the dialog in a pane narrower than its lines ----------
+
+/** Pane w1:p5 of heavy rerun 4 (ws-cleanup), about 27 columns: the footer is wrapped. */
+const narrow = (yes: boolean) =>
+  [
+    " Quick safety check: Is",
+    " this a project you",
+    " created or one you trust?",
+    "",
+    " Claude Code'll be able to",
+    " read, edit, and execute",
+    " files here.",
+    "",
+    " Security guide",
+    "",
+    ` ${yes ? " " : "❯"} No, exit`,
+    ` ${yes ? "❯" : " "} Yes, I trust this folder`,
+    "",
+    " Enter to confirm · Esc to",
+    " cancel",
+  ].join("\n");
+
+/** Pane w1:p6, about 13 columns: the trusting option itself is wrapped over four lines. */
+const narrower = (yes: boolean) =>
+  [
+    " Claude",
+    " Code'll be",
+    " able to",
+    " read,",
+    " edit, and",
+    " execute",
+    " files",
+    " here.",
+    "",
+    " Security",
+    " guide",
+    "",
+    ` ${yes ? " " : "❯"} No, exit`,
+    ` ${yes ? "❯" : " "} Yes, I`,
+    "   trust",
+    "   this",
+    "   folder",
+    " Enter to",
+    " confirm ·",
+    " Esc to",
+    " cancel",
+  ].join("\n");
+
+test("a dialog wrapped by a narrow pane is still the dialog, and its selected option is still read", () => {
+  for (const draw of [narrow, narrower]) {
+    expect(isTrustDialog(draw(false), CLAUDE_TRUST_PROMPT)).toBe(true);
+    expect(trustChoiceSelected(draw(false), CLAUDE_TRUST_PROMPT)).toBe(false);
+    expect(trustChoiceSelected(draw(true), CLAUDE_TRUST_PROMPT)).toBe(true);
+  }
+});
+
+test("the dialog is live only while its footer is the last thing on screen: an exited Claude's leftover dialog is not", () => {
+  for (const draw of [dialog, narrow, narrower]) {
+    expect(trustDialogLive(`${draw(false)}\n\n`, CLAUDE_TRUST_PROMPT)).toBe(true);
+    // heavy rerun 4: Claude exited on "No, exit"; its dialog stays above the shell's prompt.
+    expect(trustDialogLive(`${draw(false)}\n\nweb on  wip/add-slugify-to\nvia  v24.19.0 took 5s\n❯`, CLAUDE_TRUST_PROMPT)).toBe(false);
+  }
+  expect(trustDialogLive("Welcome to Claude Code\n❯ ", CLAUDE_TRUST_PROMPT)).toBe(false);
+  // The footer alone (another form) is not the trust dialog.
+  expect(trustDialogLive("Allow this tool?\n❯ Yes\n  No\n\n Enter to confirm · Esc to cancel", CLAUDE_TRUST_PROMPT)).toBe(false);
+});
+
+test("a wrapped dialog is answered as a whole one is: down until 'Yes' shows selected, then enter", async () => {
+  let yes = false;
+  const keys: string[] = [];
+  const io = { read: async () => narrower(yes), send: async (k: string) => void (keys.push(k), k === "down" && (yes = true)), sleep: async () => {} };
+  expect((await answerTrustDialog(io, CLAUDE_TRUST_PROMPT, narrower(false))).answered).toBe(true);
+  expect(keys).toEqual(["down", "enter"]);
 });

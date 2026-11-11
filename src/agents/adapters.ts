@@ -195,6 +195,11 @@ export function adapterFor(agent: AgentKind): AgentAdapter {
   return a;
 }
 
+/** Every adapter's trust dialog: the daemon, which delivers notices by pane, checks a screen against them all. */
+export function trustPrompts(): TrustPrompt[] {
+  return Object.values(ADAPTERS).flatMap((a) => (a.trustPrompt ? [a.trustPrompt] : []));
+}
+
 /** The adapter Herdr starts as `--kind <herdrKind>` (a spawn job knows only that). */
 export function adapterForHerdrKind(kind: string): AgentAdapter | undefined {
   return Object.values(ADAPTERS).find((a) => a.herdrKind === kind);

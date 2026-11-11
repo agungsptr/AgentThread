@@ -4,7 +4,7 @@ import { join, relative, resolve, sep } from "node:path";
 import { HerdrError, shellQuote, type HerdrBridge, type PaneScreen } from "../herdr/bridge.ts";
 import { adapterForHerdrKind } from "./adapters.ts";
 import { AGT_BIN } from "./claude.ts";
-import { TRUST_TRIES, answerTrustDialog, isTrustDialog } from "./trust.ts";
+import { TRUST_TRIES, answerTrustDialog, isTrustDialog, trustDialogLive } from "./trust.ts";
 
 export interface SpawnJob {
   root: string;
@@ -156,7 +156,10 @@ export async function runSpawnJob(
     // blocked notice for a dialog agt answers), until the agent is past the dialog, the watch gives up, or `attachBy`.
     await trust?.released;
     let pending: string | undefined;
-    if (job.bootstrap) {
+    // Herdr types the prompt and Enter, and may take a trust dialog's agent for idle: Enter would pick "No, exit".
+    // Unless the watch saw the agent past the dialog, the screen is checked first.
+    if (job.bootstrap && !trust?.ready && (await trustDialogUp(job.kind, pane, deps.screen))) pending = job.bootstrap;
+    else if (job.bootstrap) {
       try {
         deps.herdr.agentPrompt(job.name, job.bootstrap);
       } catch {
@@ -191,6 +194,14 @@ export async function runSpawnJob(
 const SCREEN_LINES = 40;
 const lastLines = (text: string) => text.split("\n").slice(-SCREEN_LINES).join("\n");
 
+/** Whether `pane` shows its agent kind's trust dialog waiting for input. A screen that cannot be read is taken as no. */
+async function trustDialogUp(kind: string, pane: string, screen: PaneScreen | undefined): Promise<boolean> {
+  const prompt = adapterForHerdrKind(kind)?.trustPrompt;
+  if (!prompt || !screen) return false;
+  const text = await screen.paneReadAsync(pane).catch(() => undefined);
+  return text !== undefined && trustDialogLive(text, prompt);
+}
+
 /** The trust watch lasts about 60s: TRUST_POLLS reads, TRUST_POLL_MS apart. */
 const TRUST_POLLS = 60;
 const TRUST_POLL_MS = 1_000;
@@ -213,12 +224,13 @@ export function agtCreatedFolder(root: string, cwd: string): boolean {
  * created. A non-git thread folder in a workspace does not inherit the trust the user gave the workspace root, so
  * without this every coordinator would stop at the dialog. The user's own folders are never answered for, and Claude's
  * config is never touched: agt answers the dialog on screen as the user would. Keys go only to an agent Herdr reports
- * `blocked` whose screen shows the whole dialog, and `confirm` only once the trusting option is seen selected
- * (answerTrustDialog); a dialog whose cursor will not move there is logged and left to the user. Once Herdr has
- * confirmed the launch (its start returned) and lists the agent running (idle, working, done), the agent is past the
- * dialog and the watch ends; before that such a status may be the pane's previous agent. Until then, and on any error,
- * it polls on until its end. A watch that ends unanswered while the agent is blocked (another dialog, or one it did
- * not recognize) writes the screen it last read to the log.
+ * `blocked` whose screen shows the whole dialog, or to one it lists running whose screen shows the dialog waiting
+ * (trustDialogLive: Herdr misses a dialog wrapped by a narrow pane), and `confirm` only once the trusting option is
+ * seen selected (answerTrustDialog); a dialog whose cursor will not move there is logged and left to the user. Once
+ * Herdr has confirmed the launch (its start returned) and lists the agent running (idle, working, done) with no dialog
+ * on its screen, the agent is past the dialog (`ready`) and the watch ends; before the launch such a status may be the
+ * pane's previous agent. Until then, and on any error, it polls on until its end. A watch that ends unanswered while
+ * the agent is blocked (another dialog, or one it did not recognize) writes the screen it last read to the log.
  *
  * `released` resolves when the bootstrap may go: the watch ended (the agent is ready, or it gave up), or `attachBy`
  * came first (the watch then goes on beside the report).
@@ -238,6 +250,8 @@ function watchTrust(
   let stopped = false;
   let launched = false;
   let answered = false;
+  /** Set when the watch saw the launched agent running with no dialog on its screen. */
+  let ready = false;
   /** The screen read at the last poll when the agent was blocked; cleared by any other status. */
   let blocked: string | undefined;
   let release!: () => void;
@@ -249,10 +263,16 @@ function watchTrust(
       if (job.attachBy !== undefined && now() >= job.attachBy) release();
       try {
         const status = (await screen.agentListAsync()).find((a) => a.pane === pane)?.status;
-        if (launched && (status === "idle" || status === "working" || status === "done")) return;
+        const running = status === "idle" || status === "working" || status === "done";
         blocked = undefined;
-        if (status !== "blocked") continue;
+        if (!(status === "blocked" || (launched && running))) continue;
         const text = await screen.paneReadAsync(pane);
+        // Herdr lists an agent idle at a dialog it does not see (heavy rerun 4: the second split's narrow pane wrapped
+        // the footer). Running with no dialog waiting on screen is past it.
+        if (running && !trustDialogLive(text, prompt)) {
+          ready = true;
+          return;
+        }
         blocked = text;
         // Answered: Herdr may list the agent blocked a little longer, or a second startup dialog follows. The watch waits
         // for the agent to be ready, keeping the screen so a watch that ends with the agent still blocked logs it.
@@ -277,7 +297,15 @@ function watchTrust(
     }
     if (!stopped && blocked !== undefined) log(`the trust watch ended unanswered while the agent in pane ${pane} (session ${job.session}) was blocked; its screen:\n${lastLines(blocked)}`);
   })().finally(release);
-  return { stop: () => void (stopped = true), launched: () => void (launched = true), released, done };
+  return {
+    stop: () => void (stopped = true),
+    launched: () => void (launched = true),
+    released,
+    done,
+    get ready() {
+      return ready;
+    },
+  };
 }
 
 function closeQuietly(herdr: HerdrBridge, pane: string): void {

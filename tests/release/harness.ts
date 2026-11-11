@@ -21,7 +21,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parse, stringify } from "yaml";
-import { CLAUDE_TRUST_PROMPT, TRUST_TRIES, answerTrustDialog, isTrustDialog } from "../../src/agents/trust.ts";
+import { CLAUDE_TRUST_PROMPT, TRUST_TRIES, answerTrustDialog, isTrustDialog, trustDialogLive } from "../../src/agents/trust.ts";
 import { deepMerge } from "../../src/config/config.ts";
 import { request } from "../../src/daemon/client.ts";
 import type { AgentKind, StoredEvent } from "../../src/domain/types.ts";
@@ -493,10 +493,11 @@ export function watchTrustDialogs(
       try {
         const seen = new Set<string>();
         for (const a of await herdr.agents()) {
-          if (a.agent !== "claude" || a.agent_status !== "blocked") continue;
+          // Herdr lists an agent idle at a dialog wrapped by a narrow pane (heavy rerun 4): an idle one is read too.
+          if (a.agent !== "claude" || (a.agent_status !== "blocked" && a.agent_status !== "idle")) continue;
           if (a.pane_id !== mainPane() && reported.has(a.pane_id)) continue;
           const screen = (await herdr.run(["pane", "read", a.pane_id, "--source", "visible"])).stdout;
-          if (!TRUST.test(screen)) continue;
+          if (a.agent_status === "idle" ? !trustDialogLive(screen, CLAUDE_TRUST_PROMPT) : !TRUST.test(screen.replace(/\s+/g, " "))) continue;
           if (a.pane_id !== mainPane()) {
             seen.add(a.pane_id);
             missed.delete(a.pane_id);

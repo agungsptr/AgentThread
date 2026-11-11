@@ -116,3 +116,21 @@ test("the folders agt trusted are read from its daemon log lines", () => {
   ].join("\n");
   expect(agtTrustedFolders(log)).toEqual(["/private/var/x/.worktrees/001-task", "/r/.worktrees/002 b"]);
 });
+
+test("heavy rerun 4: a worker Herdr lists idle at a wrapped trust dialog is seen too; still showing after 30s it fails the row", async () => {
+  // Pane w1:p5's footer is wrapped, so Herdr's blocked rule misses it and lists the agent idle. The idle pane w1:p4 runs.
+  const narrow = " ❯ No, exit\n   Yes, I trust this folder\n\n Enter to confirm · Esc to\n cancel";
+  let t = 0;
+  const foreign: string[] = [];
+  let w!: ReturnType<typeof watchTrustDialogs>;
+  const herdr = {
+    agents: async () => ["w1:p4", "w1:p5"].map((pane_id) => ({ pane_id, agent: "claude", agent_status: "idle" })),
+    run: async (args: string[]) => ({ exitCode: 0, stdout: args[2] === "w1:p5" ? narrow : "Welcome to Claude Code\n❯ ", stderr: "" }),
+  } as unknown as Parameters<typeof watchTrustDialogs>[0];
+  w = watchTrustDialogs(herdr, () => "main", () => {}, (pane) => void foreign.push(pane), {
+    now: () => t,
+    sleep: async (ms) => void ((t += ms) >= 60_000 && w.stop()),
+  });
+  await w.done;
+  expect(foreign).toEqual(["w1:p5"]);
+});
