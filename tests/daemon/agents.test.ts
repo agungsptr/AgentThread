@@ -75,6 +75,8 @@ test("worker capacity: queue, finish, review, accept, next worker spawns; coordi
   expect(await cmd({ cmd: "worker.spawn", thread: "001", ticket: "T2" }, coord)).toMatchObject({ ok: true, result: { queued: true } });
   const w1 = (await sessionOf("worker", "T1"))!.session;
   expect(jobs.at(-1)).toMatchObject({ name: expect.stringMatching(/-w001-t1-[0-9a-f]{4}$/), split: { pane: "w1:p1", direction: "right", env: expect.objectContaining({ AGT_SESSION: w1, AGT_TICKET: "T1" }) } });
+  // the worker is placed by the thread tab's layout, with the thread's workers tab (opened with the tab's env) for when it is full
+  expect(jobs.at(-1)!.place).toMatchObject({ workspace: "w1", threadTab: "w1:t1", workersLabel: "001-x-workers", tabEnv: expect.objectContaining({ AGT_ROLE: "coordinator", AGT_THREAD: "001" }) });
   // attach the worker pane in the fake so pane.close can find it; the coordinator's agent (launched by nobody here) is in w1:p1
   fake.update((s) => ({ panes: [...s.panes, "w1:p7"], agentPanes: [...(s.agentPanes ?? []), "w1:p1"] }));
   await cmd({ cmd: "session.attached", session: w1, pane: "w1:p7" });

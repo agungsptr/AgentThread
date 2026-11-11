@@ -105,6 +105,21 @@ export interface AgentListing {
   kind: string;
 }
 
+/** A pane's place in its tab, in terminal cells. */
+export interface PaneRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** What `herdr pane layout` tells of the tab around a pane (Herdr's PaneLayoutSnapshot; splits are left out). */
+export interface PaneLayout {
+  tabId: string;
+  zoomed: boolean;
+  panes: { paneId: string; rect: PaneRect }[];
+}
+
 export interface HerdrBridge {
   createTab(o: { workspace: string; cwd: string; label: string; env: Record<string, string> }): { tabId: string; rootPaneId: string };
   renameTab(tabId: string, label: string): void;
@@ -120,6 +135,11 @@ export interface HerdrBridge {
   closePane(pane: string): void;
   agentExists(target: string): boolean;
   agentList(): AgentListing[];
+  // Optional: without them a worker is split as before, never placed by layout.
+  /** The layout of the tab `pane` is in. */
+  paneLayout?(pane: string): PaneLayout;
+  tabList?(workspace: string): { tabId: string; label: string }[];
+  paneList?(workspace: string): { paneId: string; tabId: string }[];
 }
 
 /**
@@ -218,6 +238,21 @@ export class HerdrCli implements HerdrBridge, PaneScreen {
     return parseAgents(this.call(["agent", "list"]));
   }
 
+  paneLayout(pane: string): PaneLayout {
+    const layout = parsePaneLayout(this.call(["pane", "layout", "--pane", pane]));
+    if (!layout) throw new HerdrError("bad_output", "herdr pane layout: response missing layout");
+    return layout;
+  }
+
+  tabList(workspace: string): { tabId: string; label: string }[] {
+    return parseTabs(this.call(["tab", "list", "--workspace", workspace]));
+  }
+
+  paneList(workspace: string): { paneId: string; tabId: string }[] {
+    const panes = list(this.call(["pane", "list", "--workspace", workspace]), "panes", "herdr pane list");
+    return panes.flatMap((p) => (typeof p.pane_id === "string" && typeof p.tab_id === "string" ? [{ paneId: p.pane_id, tabId: p.tab_id }] : []));
+  }
+
   // The async twins below never block the daemon's event loop; the daemon uses them for all its effects and polls.
 
   async agentListAsync(): Promise<AgentListing[]> {
@@ -242,6 +277,10 @@ export class HerdrCli implements HerdrBridge, PaneScreen {
       if (e instanceof HerdrError && (e.code === "tab_not_found" || e.code === "not_found")) return false;
       throw e;
     }
+  }
+
+  async tabListAsync(workspace: string): Promise<{ tabId: string; label: string }[]> {
+    return parseTabs(await this.callAsync(["tab", "list", "--workspace", workspace]));
   }
 
   async agentPromptAsync(target: string, text: string): Promise<void> {
@@ -316,6 +355,42 @@ function field(args: string[], value: unknown, ...keys: string[]): string {
   for (const k of keys) cur = typeof cur === "object" && cur !== null ? (cur as Record<string, unknown>)[k] : undefined;
   if (typeof cur !== "string") throw new HerdrError("bad_output", `herdr ${args.slice(0, 2).join(" ")}: response missing ${keys.join(".")}`);
   return cur;
+}
+
+const record = (v: unknown): Record<string, unknown> | undefined => (typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined);
+
+function list(result: unknown, key: string, what: string): Record<string, unknown>[] {
+  const items = record(result)?.[key];
+  if (!Array.isArray(items)) throw new HerdrError("bad_output", `${what}: response missing ${key}`);
+  return items.flatMap((i: unknown) => {
+    const r = record(i);
+    return r ? [r] : [];
+  });
+}
+
+function parseTabs(result: unknown): { tabId: string; label: string }[] {
+  return list(result, "tabs", "herdr tab list").flatMap((t) => (typeof t.tab_id === "string" ? [{ tabId: t.tab_id, label: typeof t.label === "string" ? t.label : "" }] : []));
+}
+
+const cells = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 0;
+
+/**
+ * Reads the `result` of `herdr pane layout`, as Herdr's API schema gives it (docs/next/api/herdr-api.schema.json,
+ * herdr 0.9.5): `{type: "pane_layout", layout: PaneLayoutSnapshot}`, where the snapshot has `workspace_id`, `tab_id`,
+ * `zoomed`, `area`, `focused_pane_id`, `panes: [{pane_id, focused, rect: {x, y, width, height}}]` and `splits`.
+ * Undefined when the shape is anything else: a layout agt cannot read is never guessed at.
+ */
+export function parsePaneLayout(result: unknown): PaneLayout | undefined {
+  const layout = record(record(result)?.layout);
+  if (!layout || typeof layout.tab_id !== "string" || !Array.isArray(layout.panes) || layout.panes.length === 0) return undefined;
+  const panes: PaneLayout["panes"] = [];
+  for (const p of layout.panes) {
+    const rect = record(record(p)?.rect);
+    const paneId = record(p)?.pane_id;
+    if (typeof paneId !== "string" || !rect || !cells(rect.x) || !cells(rect.y) || !cells(rect.width) || !cells(rect.height)) return undefined;
+    panes.push({ paneId, rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } });
+  }
+  return { tabId: layout.tab_id, zoomed: layout.zoomed === true, panes };
 }
 
 function parseAgents(result: unknown): AgentListing[] {

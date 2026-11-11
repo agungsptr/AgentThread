@@ -50,7 +50,7 @@ describe("thread.status done", () => {
       thread: "001",
       status: "done",
     });
-    expect(r.ok && r.effects).toEqual([{ kind: "herdr.tab.close", thread: "001", tab: "w7:t3" }]);
+    expect(r.ok && r.effects).toEqual([{ kind: "herdr.tab.close", thread: "001", tab: "w7:t3", workers: true }]);
   });
 
   test("keeps the tab when close_tab_on_done is false", () => {
@@ -101,7 +101,7 @@ describe("layout.reconcile", () => {
     const r = run(bodies, { cmd: "layout.reconcile" });
     expect(r.ok && r.result).toEqual({ threads: 1 });
     expect(r.ok && r.effects.map((e) => e.kind)).toEqual(["herdr.tab.ensure", "herdr.tab.close"]);
-    expect(r.ok && r.effects[1]).toEqual({ kind: "herdr.tab.close", thread: "002", tab: "w7:t4" });
+    expect(r.ok && r.effects[1]).toEqual({ kind: "herdr.tab.close", thread: "002", tab: "w7:t4", workers: true });
     const config = { ...DEFAULT_CONFIG, herdr: { ...DEFAULT_CONFIG.herdr, close_tab_on_done: false } };
     const off = run(bodies, { cmd: "layout.reconcile" }, USER, config);
     expect(off.ok && off.effects.map((e) => e.kind)).toEqual(["herdr.tab.ensure"]);

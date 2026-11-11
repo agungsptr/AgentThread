@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
-import { appendFileSync, realpathSync } from "node:fs";
+import { appendFileSync, mkdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
-import { HerdrError, shellQuote, type HerdrBridge, type PaneScreen } from "../herdr/bridge.ts";
+import { HerdrError, shellQuote, type HerdrBridge, type PaneLayout, type PaneScreen } from "../herdr/bridge.ts";
 import { adapterForHerdrKind } from "./adapters.ts";
 import { AGT_BIN } from "./claude.ts";
 import { TRUST_TRIES, answerTrustDialog, isTrustDialog, trustDialogLive, trustDialogMaybe, typingUnsafe } from "./trust.ts";
@@ -23,6 +23,13 @@ export interface SpawnJob {
   cwd?: string;
   /** `fallbacks` are split from in order when `pane` is gone. */
   split?: { pane: string; fallbacks?: string[]; direction: "right" | "down"; cwd: string; env: Record<string, string> };
+  /**
+   * A worker's split placed by layout (placeWorker): the largest pane of the thread tab `threadTab` that still splits
+   * into two of at least MIN_PANE_COLS x MIN_PANE_ROWS, else a workers tab labelled `workersLabel` (then
+   * `<workersLabel>-2`, …) opened with the thread tab's env `tabEnv`. Without it, or when the layout cannot be read,
+   * the job splits `split.pane` in `split.direction`.
+   */
+  place?: { workspace: string; threadTab: string; workersLabel: string; tabEnv: Record<string, string> };
   args: string[];
   bootstrap: string;
   /**
@@ -114,6 +121,8 @@ export async function runSpawnJob(
     trustPolls?: number;
     /** The clock `job.attachBy` is read against (default Date.now). */
     now?: () => number;
+    /** Runs the pane's creation alone among concurrent spawn jobs (placementLock); default: unlocked. */
+    lock?: <T>(fn: () => T) => T;
   },
 ): Promise<void> {
   const sleep = deps.sleep ?? ((ms: number) => Bun.sleep(ms));
@@ -123,9 +132,17 @@ export async function runSpawnJob(
   let attached: { pane: string; pending?: string };
   let trust: ReturnType<typeof watchTrust>;
   try {
-    const pane = job.pane ?? (created = splitWithFallbacks(deps.herdr, job.split!));
+    let pane: string;
+    let exportEnv = job.exportEnv;
+    if (job.pane) pane = job.pane;
+    else {
+      // Two jobs reading one layout at once would both split its largest pane: the read and the split go together.
+      const placed = (deps.lock ?? ((fn) => fn()))(() => placeWorker(deps.herdr, job, log) ?? { pane: splitWithFallbacks(deps.herdr, job.split!) });
+      pane = created = placed.pane;
+      exportEnv = placed.exportEnv;
+    }
     // A leading space keeps the line out of shell history (HISTCONTROL=ignorespace, zsh's HIST_IGNORE_SPACE).
-    const exported = job.pane ? Object.entries(job.exportEnv ?? {}) : [];
+    const exported = Object.entries(exportEnv ?? {});
     if (exported.length) deps.herdr.runInPane(pane, ` export ${exported.map(([k, v]) => `${k}=${shellQuote(v)}`).join(" ")}`);
     started = pane;
     const now = deps.now ?? Date.now;
@@ -356,6 +373,125 @@ function closeQuietly(herdr: HerdrBridge, pane: string): void {
     // best effort: the pane may already be gone
   }
 }
+
+/** No worker pane is made narrower or shorter than this; a split needs twice as much. */
+export const MIN_PANE_COLS = 80;
+export const MIN_PANE_ROWS = 20;
+
+/**
+ * Where a worker splits a tab: the largest pane (by area) that splits into two panes of at least MIN_PANE_COLS x
+ * MIN_PANE_ROWS, to the right when it is at least twice MIN_PANE_COLS wide, else down when twice MIN_PANE_ROWS tall.
+ * Undefined when no pane can (the tab is full), or the tab is zoomed (its rects may not be the real ones).
+ */
+export function chooseSplit(layout: PaneLayout): { pane: string; direction: "right" | "down" } | undefined {
+  if (layout.zoomed) return undefined;
+  const fits = layout.panes
+    .map(({ paneId, rect }) => ({
+      pane: paneId,
+      area: rect.width * rect.height,
+      direction: rect.width >= 2 * MIN_PANE_COLS ? ("right" as const) : rect.height >= 2 * MIN_PANE_ROWS ? ("down" as const) : undefined,
+    }))
+    .filter((p) => p.direction !== undefined);
+  const best = fits.reduce<(typeof fits)[number] | undefined>((a, p) => (!a || p.area > a.area ? p : a), undefined);
+  return best && { pane: best.pane, direction: best.direction! };
+}
+
+/** A workers tab's place in its thread's row: `<base>` is 1, `<base>-N` is N (N ≥ 2); undefined for any other label. */
+export function workersTabOrder(label: string, base: string): number | undefined {
+  if (label === base) return 1;
+  const m = label.startsWith(`${base}-`) ? /^[1-9][0-9]*$/.exec(label.slice(base.length + 1)) : null;
+  const n = m ? Number(m[0]) : NaN;
+  return n >= 2 ? n : undefined;
+}
+
+/**
+ * Places a worker by layout (see SpawnJob.place): a split of the thread tab, else of a workers tab, else a new workers
+ * tab, whose root pane the worker takes (with its env exported there, since the tab has the thread tab's env).
+ * Undefined, for the job's plain split, when the job has no placement, the bridge cannot read layouts, or the thread
+ * tab's layout cannot be read. Closing the worker's pane closes a workers tab with it once it is its last (Herdr
+ * closes a tab with its last pane), as `herdr.close_worker_pane_on_end` and the thread tab's close do.
+ */
+function placeWorker(herdr: HerdrBridge, job: SpawnJob, log: (m: string) => void): { pane: string; exportEnv?: Record<string, string> } | undefined {
+  const place = job.place;
+  const split = job.split!;
+  if (!place || !herdr.paneLayout || !herdr.paneList || !herdr.tabList) return undefined;
+  const unreadable = (e: unknown) => void log(`cannot read the layout for session ${job.session}, splitting as before: ${e instanceof Error ? e.message : String(e)}`);
+  let panes: { paneId: string; tabId: string }[];
+  try {
+    panes = herdr.paneList(place.workspace);
+  } catch (e) {
+    return unreadable(e);
+  }
+  const layoutOf = (tab: string): PaneLayout | undefined => {
+    const any = panes.find((p) => p.tabId === tab);
+    if (!any) return undefined;
+    try {
+      return herdr.paneLayout!(any.paneId);
+    } catch (e) {
+      return unreadable(e);
+    }
+  };
+  const splitAt = (at: { pane: string; direction: "right" | "down" }) => ({ pane: herdr.splitPane({ pane: at.pane, direction: at.direction, cwd: split.cwd, env: split.env }) });
+  const home = layoutOf(place.threadTab);
+  if (!home || home.zoomed) return undefined;
+  const at = chooseSplit(home);
+  if (at) return splitAt(at);
+  let tabs: { tabId: string; label: string }[];
+  try {
+    tabs = herdr.tabList(place.workspace);
+  } catch (e) {
+    return unreadable(e);
+  }
+  const ours = tabs
+    .flatMap((t) => {
+      const n = workersTabOrder(t.label, place.workersLabel);
+      return n === undefined ? [] : [{ ...t, n }];
+    })
+    .sort((a, b) => a.n - b.n);
+  for (const t of ours) {
+    const l = layoutOf(t.tabId);
+    const there = l && chooseSplit(l);
+    if (there) return splitAt(there);
+  }
+  let n = 1;
+  while (ours.some((t) => t.n === n)) n++;
+  const label = n === 1 ? place.workersLabel : `${place.workersLabel}-${n}`;
+  const { rootPaneId } = herdr.createTab({ workspace: place.workspace, cwd: split.cwd, label, env: place.tabEnv });
+  return { pane: rootPaneId, exportEnv: split.env };
+}
+
+/**
+ * Runs `fn` holding a lock directory at `dir` (spawn jobs are separate processes). A lock older than STALE_LOCK_MS is
+ * taken over (its job died holding it); after LOCK_WAIT_MS of waiting, or when the lock cannot be made at all, `fn`
+ * runs anyway.
+ */
+export function placementLock<T>(dir: string, fn: () => T, o: { waitMs?: number; staleMs?: number } = {}): T {
+  const deadline = Date.now() + (o.waitMs ?? LOCK_WAIT_MS);
+  let held = false;
+  while (!held) {
+    try {
+      mkdirSync(dir);
+      held = true;
+    } catch (e) {
+      if ((e as { code?: string }).code !== "EEXIST") break; // no place for a lock (no project dir): run unlocked
+      try {
+        if (Date.now() - statSync(dir).mtimeMs > (o.staleMs ?? STALE_LOCK_MS)) rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // released meanwhile
+      }
+      if (Date.now() >= deadline) break;
+      Bun.sleepSync(25);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    if (held) rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const LOCK_WAIT_MS = 30_000;
+const STALE_LOCK_MS = 120_000;
 
 function splitWithFallbacks(herdr: HerdrBridge, split: NonNullable<SpawnJob["split"]>): string {
   const { fallbacks = [], ...o } = split;

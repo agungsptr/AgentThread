@@ -20,7 +20,8 @@ export type Effect =
   | { kind: "git.thread.cleanup"; thread: string; task: string; dir: string; repos: { repo: string; repoPath: string; path: string }[] }
   | { kind: "thread.dir.ensure"; thread: { id: string; title: string; slug: string; task: string; dir: string } }
   | { kind: "herdr.tab.ensure"; thread: string; label: string; cwd: string; env: Record<string, string>; tab?: string }
-  | { kind: "herdr.tab.close"; thread: string; tab: string }
+  /** `workers`: the thread is done, so its workers tabs close too (a tab closed only to be reopened keeps them). */
+  | { kind: "herdr.tab.close"; thread: string; tab: string; workers?: true }
   | {
       kind: "agent.spawn";
       session: string;
@@ -183,7 +184,7 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
     // A thread waiting for its tier gets no tab yet: the tab's env is fixed when it is created.
     const open = all.filter((t) => t.status !== "done" && !t.tierProposal);
     const closes: Effect[] = (ctx.config ?? DEFAULT_CONFIG).herdr.close_tab_on_done
-      ? all.flatMap((t) => (t.status === "done" && t.tab ? [{ kind: "herdr.tab.close" as const, thread: t.id, tab: t.tab }] : []))
+      ? all.flatMap((t) => (t.status === "done" && t.tab ? [{ kind: "herdr.tab.close" as const, thread: t.id, tab: t.tab, workers: true as const }] : []))
       : [];
     const probes: Effect[] = [...state.sessions.values()]
       .filter((s) => isLive(s) && (s.role === "coordinator" || s.role === "worker") && s.pane)
@@ -654,7 +655,7 @@ function threadStatus(state: State, t: Thread, to: ThreadStatus, reason: string 
     }
   }
   const config = ctx.config ?? DEFAULT_CONFIG;
-  const effects: Effect[] = to === "done" && t.tab && config.herdr.close_tab_on_done ? [{ kind: "herdr.tab.close", thread: t.id, tab: t.tab }] : [];
+  const effects: Effect[] = to === "done" && t.tab && config.herdr.close_tab_on_done ? [{ kind: "herdr.tab.close", thread: t.id, tab: t.tab, workers: true }] : [];
   return { events, effects };
 }
 

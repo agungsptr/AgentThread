@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { HerdrCli, HerdrError, shellQuote, spawnAsync, spawnRunner, type AsyncRunner, type Runner } from "../../src/herdr/bridge.ts";
+import { HerdrCli, HerdrError, parsePaneLayout, shellQuote, spawnAsync, spawnRunner, type AsyncRunner, type Runner } from "../../src/herdr/bridge.ts";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -233,5 +233,74 @@ describe("agentExists", () => {
     expect(h.agentExists("w1:p2")).toBe(true);
     h.closePane("w1:p2");
     expect(h.agentExists("w1:p2")).toBe(false);
+  });
+});
+
+// The documented shape of `herdr pane layout` (herdr 0.9.5, docs/next/api/herdr-api.schema.json: the `pane_layout`
+// success result carrying a PaneLayoutSnapshot).
+const LAYOUT_RESULT = {
+  type: "pane_layout",
+  layout: {
+    workspace_id: "w1",
+    tab_id: "w1:t2",
+    zoomed: false,
+    area: { x: 0, y: 0, width: 200, height: 50 },
+    focused_pane_id: "w1:p3",
+    panes: [
+      { pane_id: "w1:p3", focused: true, rect: { x: 0, y: 0, width: 100, height: 50 } },
+      { pane_id: "w1:p4", focused: false, rect: { x: 101, y: 0, width: 99, height: 50 } },
+    ],
+    splits: [{ id: "s0", direction: "right", ratio: 0.5, rect: { x: 0, y: 0, width: 200, height: 50 } }],
+  },
+};
+
+describe("pane layout, tab list and pane list", () => {
+  test("parsePaneLayout reads the documented PaneLayoutSnapshot", () => {
+    expect(parsePaneLayout(LAYOUT_RESULT)).toEqual({
+      tabId: "w1:t2",
+      zoomed: false,
+      panes: [
+        { paneId: "w1:p3", rect: { x: 0, y: 0, width: 100, height: 50 } },
+        { paneId: "w1:p4", rect: { x: 101, y: 0, width: 99, height: 50 } },
+      ],
+    });
+    expect(parsePaneLayout({ ...LAYOUT_RESULT, layout: { ...LAYOUT_RESULT.layout, zoomed: true } })?.zoomed).toBe(true);
+  });
+
+  test("parsePaneLayout gives undefined for any other shape", () => {
+    expect(parsePaneLayout({ type: "ok" })).toBeUndefined();
+    expect(parsePaneLayout(undefined)).toBeUndefined();
+    expect(parsePaneLayout({ layout: { ...LAYOUT_RESULT.layout, panes: [] } })).toBeUndefined();
+    expect(parsePaneLayout({ layout: { ...LAYOUT_RESULT.layout, panes: [{ pane_id: "w1:p3", rect: { x: 0, y: 0, cols: 80, rows: 20 } }] } })).toBeUndefined();
+    expect(parsePaneLayout({ layout: { ...LAYOUT_RESULT.layout, panes: [{ pane_id: "w1:p3", rect: { x: 0, y: 0, width: -1, height: 20 } }] } })).toBeUndefined();
+  });
+
+  test("argv and parsing of pane layout, tab list and pane list", async () => {
+    const replies: Record<string, unknown> = {
+      "pane layout": LAYOUT_RESULT,
+      "tab list": { type: "tab_list", tabs: [{ tab_id: "w1:t1", workspace_id: "w1", number: 1, label: "main", focused: true, pane_count: 2, agent_status: "idle" }, { tab_id: "w1:t2", label: "001-x" }] },
+      "pane list": { type: "pane_list", panes: [{ pane_id: "w1:p3", tab_id: "w1:t2", workspace_id: "w1" }, { pane_id: "bad" }] },
+    };
+    const calls: string[][] = [];
+    const runner: Runner = (_bin, args) => (calls.push(args), { exitCode: 0, stdout: JSON.stringify({ result: replies[args.slice(0, 2).join(" ")] }), stderr: "" });
+    const asyncRunner: AsyncRunner = async (bin, args, env, t) => runner(bin, args, env, t);
+    const h = new HerdrCli({ bin: "herdr", runner, asyncRunner });
+    expect(h.paneLayout("w1:p3").panes.map((p) => p.paneId)).toEqual(["w1:p3", "w1:p4"]);
+    expect(h.tabList("w1")).toEqual([{ tabId: "w1:t1", label: "main" }, { tabId: "w1:t2", label: "001-x" }]);
+    expect(await h.tabListAsync("w1")).toEqual([{ tabId: "w1:t1", label: "main" }, { tabId: "w1:t2", label: "001-x" }]);
+    expect(h.paneList("w1")).toEqual([{ paneId: "w1:p3", tabId: "w1:t2" }]);
+    expect(calls).toEqual([
+      ["pane", "layout", "--pane", "w1:p3"],
+      ["tab", "list", "--workspace", "w1"],
+      ["tab", "list", "--workspace", "w1"],
+      ["pane", "list", "--workspace", "w1"],
+    ]);
+  });
+
+  test("a layout in any other shape is a bad_output error", () => {
+    const { runner } = recording({ stdout: '{"result":{"type":"ok"}}' });
+    const h = new HerdrCli({ bin: "herdr", runner });
+    expect(() => h.paneLayout("w1:p3")).toThrow("herdr pane layout: response missing layout");
+    expect(() => h.tabList("w1")).toThrow("herdr tab list: response missing tabs");
   });
 });
