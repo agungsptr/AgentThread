@@ -1,14 +1,15 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { adapterFor } from "../../src/agents/adapters.ts";
+import { adapterFor, prepareLaunch } from "../../src/agents/adapters.ts";
 import { hookSettings } from "../../src/agents/claude.ts";
 import { DEFAULT_CONFIG } from "../../src/config/config.ts";
 import { AGENT_KINDS } from "../../src/domain/types.ts";
 import { tabEnv } from "../../src/orchestration/sessions.ts";
 
 const base = { role: "worker", config: DEFAULT_CONFIG, root: "/r" } as const;
+const OMP_OVERLAY = "/r/.agentthread/omp-compaction.yml";
 const nonAuto = { ...DEFAULT_CONFIG, agents: { ...DEFAULT_CONFIG.agents, autonomous: false } };
 
 test("adapterFor covers every agent kind with its herdr kind and bin", () => {
@@ -108,9 +109,9 @@ test("codex: exact sandbox args; only the coordinator may write the git dir", ()
 
 test("omp: model, thinking and yolo", () => {
   expect(adapterFor("omp").launch({ ...base, run: { agent: "omp", model: "opus", effort: "high" } }).args).toEqual([
-    "--model", "opus", "--thinking", "high", "--approval-mode", "yolo",
+    "--config", OMP_OVERLAY, "--model", "opus", "--thinking", "high", "--approval-mode", "yolo",
   ]);
-  expect(adapterFor("omp").launch({ ...base, run: { agent: "omp" } }).args).toEqual(["--approval-mode", "yolo"]);
+  expect(adapterFor("omp").launch({ ...base, run: { agent: "omp" } }).args).toEqual(["--config", OMP_OVERLAY, "--approval-mode", "yolo"]);
 });
 
 test("autonomous false: every adapter keeps its approval prompts", () => {
@@ -130,7 +131,7 @@ test("autonomous false: every adapter keeps its approval prompts", () => {
   expect(codex).not.toContain("never");
 
   const omp = adapterFor("omp").launch({ ...base, config: nonAuto, run: { agent: "omp", effort: "low" } }).args;
-  expect(omp).toEqual(["--thinking", "low"]);
+  expect(omp).toEqual(["--config", OMP_OVERLAY, "--thinking", "low"]);
 });
 
 // Codex asks once per project whether to trust it, keyed by the main checkout (a worktree resolves to it). A `-c`
@@ -205,44 +206,53 @@ test("§13: codex and omp have no per-command allow list; their task-thread args
 });
 
 test("every agent kind's launch marks the agent's own process, never its tab env", () => {
+  const root = mkdtempSync(join(tmpdir(), "agt-launch-"));
   for (const agent of AGENT_KINDS) {
     for (const role of ["main", "coordinator", "worker"] as const) {
-      const launched = adapterFor(agent).launch({ ...base, role, run: { agent } });
+      const launched = adapterFor(agent).launch({ ...base, root, role, run: { agent } });
       expect(launched.processEnv).toEqual({ AGT_AGENT_PROCESS: "1" });
       expect(launched.env.AGT_AGENT_PROCESS).toBeUndefined();
     }
     const config = { ...DEFAULT_CONFIG, agents: { ...DEFAULT_CONFIG.agents, roles: { ...DEFAULT_CONFIG.agents.roles, coordinator: { agent } } } };
     for (const t of [{ id: "001" }, { id: "002", dir: "/r/.worktrees/t1", task: "t1" }]) {
-      const env = tabEnv(t, { root: "/r", config });
+      const env = tabEnv(t, { root, config });
       expect(env.AGT_ROLE).toBe("coordinator");
       expect(env.AGT_AGENT_PROCESS).toBeUndefined();
     }
   }
+  rmSync(root, { recursive: true, force: true });
 });
 
 test("every adapter has a display name for log lines", () => {
   expect((["claude-code", "opencode", "codex", "omp"] as const).map((a) => adapterFor(a).displayName)).toEqual(["Claude Code", "OpenCode", "Codex", "omp"]);
 });
 
-test("omp passes a compaction overlay at context_threshold x context_window tokens, regenerated when the config changes", () => {
+test("omp launch is pure: it names the overlay and writes nothing; prepare writes and refreshes it", () => {
   const root = mkdtempSync(join(tmpdir(), "agt-omp-"));
   try {
-    const launch = (config = DEFAULT_CONFIG) => adapterFor("omp").launch({ ...base, root, config, run: { agent: "omp" } }).args;
+    const adapter = adapterFor("omp");
+    const input = { ...base, root, run: { agent: "omp" } } as const;
     const { context_threshold: th, context_window: win } = DEFAULT_CONFIG.session.rotation;
-    const args = launch();
-    const i = args.indexOf("--config");
-    expect(i).toBeGreaterThanOrEqual(0);
-    const file = args[i + 1]!;
-    expect(file.startsWith(join(root, ".agentthread"))).toBe(true);
+    const args = adapter.launch(input).args;
+    const file = args[args.indexOf("--config") + 1]!;
+    expect(file).toBe(join(root, ".agentthread", "omp-compaction.yml"));
+    expect(existsSync(join(root, ".agentthread"))).toBe(false);
+    expect(adapter.prepare!(input)).toBe(true);
     expect(readFileSync(file, "utf8")).toBe(`compaction:\n  thresholdTokens: ${Math.floor(th * win)}\n`);
-    const changed = { ...DEFAULT_CONFIG, session: { ...DEFAULT_CONFIG.session, rotation: { ...DEFAULT_CONFIG.session.rotation, context_window: 100_000 } } };
-    const file2 = launch(changed)[launch(changed).indexOf("--config") + 1]!;
-    expect(readFileSync(file2, "utf8")).toBe(`compaction:\n  thresholdTokens: ${Math.floor(th * 100_000)}\n`);
+    const changed = { ...input, config: { ...DEFAULT_CONFIG, session: { ...DEFAULT_CONFIG.session, rotation: { ...DEFAULT_CONFIG.session.rotation, context_window: 100_000 } } } };
+    expect(adapter.prepare!(changed)).toBe(true);
+    expect(readFileSync(file, "utf8")).toBe(`compaction:\n  thresholdTokens: ${Math.floor(th * 100_000)}\n`);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("omp launches without the overlay when it cannot be written", () => {
-  expect(adapterFor("omp").launch({ ...base, root: "/nonexistent-agt-root/x", run: { agent: "omp" } }).args).not.toContain("--config");
+test("prepareLaunch starts omp without --config (and logs) when the overlay cannot be written", () => {
+  const adapter = adapterFor("omp");
+  const input = { ...base, root: "/nonexistent-agt-root/x", run: { agent: "omp", model: "m" } } as const;
+  const msgs: string[] = [];
+  const launched = prepareLaunch(adapter, input, adapter.launch(input), (m) => msgs.push(m));
+  expect(launched.args).toEqual(["--model", "m", "--approval-mode", "yolo"]);
+  expect(msgs).toHaveLength(1);
+  expect(prepareLaunch(adapterFor("codex"), input, { args: ["a"] }).args).toEqual(["a"]);
 });

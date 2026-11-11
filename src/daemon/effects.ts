@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readdir, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { agentEnv, claudeConfigDir } from "../agents/claude.ts";
-import { adapterFor } from "../agents/adapters.ts";
+import { adapterFor, prepareLaunch } from "../agents/adapters.ts";
 import { bootstrapPrompt } from "../agents/prompts.ts";
 import { agentsMd, writeAgentsFilesAsync, writeThreadDirFiles } from "../agents/agents-md.ts";
 import { attachDeadline, launchSpawnJob, workersTabOrder, type SpawnJob } from "../agents/spawn-job.ts";
@@ -230,7 +230,7 @@ export function createEffectRunner(opts: {
         const common = await gitCommonDir();
         try {
           const adapter = adapterFor(effect.run.agent);
-          const launched = adapter.launch({
+          const input = {
             role: effect.role,
             run: effect.run,
             config: opts.config,
@@ -239,7 +239,8 @@ export function createEffectRunner(opts: {
             legacy,
             ...(ticketDoc !== undefined ? { ticketDoc } : {}),
             ...(common ? { gitCommonDir: common } : {}),
-          });
+          };
+          const launched = prepareLaunch(adapter, input, adapter.launch(input), log);
           launch({
             root: opts.root,
             herdrBin: layout.herdrBin,

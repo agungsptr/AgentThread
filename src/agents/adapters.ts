@@ -43,6 +43,8 @@ export interface AgentAdapter {
    */
   launch(o: LaunchInput): { args: string[]; env: Record<string, string>; processEnv: Record<string, string> };
   promptArgs(text: string): string[];
+  /** Writes files `launch()` names; run it just before the agent starts (launch itself stays pure). False: it failed. */
+  prepare?(o: LaunchInput): boolean;
   capabilities: { hooks: boolean; contextSize: boolean; preCompact: boolean };
   /**
    * The agent's one-time folder-trust dialog, which agt answers itself when the agent starts in a folder agt created
@@ -166,28 +168,45 @@ const codexAdapter: AgentAdapter = {
   capabilities: NO_HOOKS,
 };
 
+const OMP_OVERLAY = "omp-compaction.yml";
+const ompOverlayPath = (root: string) => join(root, ".agentthread", OMP_OVERLAY);
+
 /**
- * omp's `compaction.thresholdTokens` (documented in omp's docs/compaction.md) is a fixed trigger in tokens. The overlay
- * lives under `<root>/.agentthread/` and is rewritten when the config's threshold changes; undefined when it cannot be written.
+ * omp's `compaction.thresholdTokens` (documented in omp's docs/compaction.md) is a fixed trigger in tokens. Writes the
+ * overlay `launch()` names under `<root>/.agentthread/` when its content is missing or stale; false when it cannot be written.
  */
-function ompOverlay(root: string, config: Config): string | undefined {
+function prepareOmp({ root, config }: LaunchInput): boolean {
   const { context_threshold, context_window } = config.session.rotation;
   const text = `compaction:\n  thresholdTokens: ${Math.floor(context_threshold * context_window)}\n`;
-  const dir = join(root, ".agentthread");
-  const file = join(dir, "omp-compaction.yml");
+  const file = ompOverlayPath(root);
   try {
     let current: string | undefined;
     try {
       current = readFileSync(file, "utf8");
-    } catch {}
+    } catch {
+      // Not written yet (or unreadable): treated as stale and rewritten below.
+    }
     if (current !== text) {
-      mkdirSync(dir, { recursive: true });
+      mkdirSync(join(root, ".agentthread"), { recursive: true });
       writeFileSync(file, text);
     }
-    return file;
+    return true;
   } catch {
-    return undefined;
+    return false;
   }
+}
+
+/**
+ * Runs the adapter's prepare step (if any) just before its agent starts, and returns the launch with the files it names
+ * dropped when preparing failed (the agent then starts without them; `onFail` logs once).
+ */
+export function prepareLaunch<L extends { args: string[] }>(adapter: AgentAdapter, input: LaunchInput, launched: L, onFail: (msg: string) => void = () => {}): L {
+  if (!adapter.prepare || adapter.prepare(input)) return launched;
+  onFail(`cannot write the ${adapter.displayName} launch files under ${join(input.root, ".agentthread")}; starting without them`);
+  const args = [...launched.args];
+  const i = args.indexOf("--config");
+  if (i >= 0) args.splice(i, 2);
+  return { ...launched, args };
 }
 
 const ompAdapter: AgentAdapter = {
@@ -197,11 +216,11 @@ const ompAdapter: AgentAdapter = {
   bin: "omp",
   instructionFiles: [],
   prompt: "positional",
+  prepare: prepareOmp,
   launch({ run, config, root }) {
-    const overlay = ompOverlay(root, config);
     return {
       args: [
-        ...(overlay ? ["--config", overlay] : []),
+        "--config", ompOverlayPath(root),
         ...(run.model ? ["--model", run.model] : []),
         ...(run.effort ? ["--thinking", run.effort] : []),
         // Not autonomous: no flag, so omp's own default approval mode applies.

@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { stringify } from "yaml";
 import { agentEnv } from "../agents/claude.ts";
-import { adapterFor, agentBin } from "../agents/adapters.ts";
+import { adapterFor, agentBin, prepareLaunch } from "../agents/adapters.ts";
 import { configWarnings, installWarnings, roleAgent, trustWarning } from "../agents/roles.ts";
 import { systemPrompt } from "../agents/prompts.ts";
 import { decodeJob, loggedArgv, placementLock, placementWait, reportWithRetry, runSpawnJob, spawnReportRetry, spawnTrustPolls } from "../agents/spawn-job.ts";
@@ -450,7 +450,8 @@ async function start(root: string, env: Env, argv: string[]): Promise<number> {
   const bin = agentBin(run.agent, env);
   let code: number;
   try {
-    const launched = adapter.launch({ role: "main", run, config, root, ...gitCommonDir(root) });
+    const input = { role: "main", run, config, root, ...gitCommonDir(root) } as const;
+    const launched = prepareLaunch(adapter, input, adapter.launch(input), (m) => console.error(`agt: ${m}`));
     const proc = Bun.spawn([bin, ...launched.args, ...adapter.promptArgs(systemPrompt({ root, role: "main", config }))], {
       stdio: ["inherit", "inherit", "inherit"],
       cwd: root,
