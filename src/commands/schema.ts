@@ -3,6 +3,11 @@ import { AGENT_KINDS, ROLES, SESSION_SIGNALS, STAGE_STATES, THREAD_STATUSES, THR
 
 const threadId = z.string().regex(/^\d{3,}$/, "thread id must be numeric, like 002");
 const ticketId = z.string().regex(/^T\d+$/, "ticket id must look like T1");
+/** `<thread>/<ticket>`, each part as threadId and ticketId accept it. */
+const ticketTarget = z.string().refine((v) => {
+  const [thread, ticket, ...rest] = v.split("/");
+  return rest.length === 0 && threadId.safeParse(thread).success && ticketId.safeParse(ticket).success;
+}, "target must be <thread>, main or <thread>/<ticket>");
 const herdrId = z.string().regex(/^[\w-]+(:[\w-]+)?$/, "invalid herdr id");
 const sessionId = z.string().uuid("session must be a UUID");
 const text = z.string().trim().min(1);
@@ -88,7 +93,7 @@ export const CommandSchema = z.discriminatedUnion("cmd", [
   /** Internal: the background worktree job's outcome, reported by the daemon itself. */
   z.object({ cmd: z.literal("worktree.report"), thread: threadId, repo: text, ok: z.boolean(), error: z.string().optional() }),
   z.object({ cmd: z.literal("worker.spawn"), thread: threadId, ticket: ticketId, agent: z.enum(AGENT_KINDS).optional() }),
-  z.object({ cmd: z.literal("tell"), target: z.union([threadId, z.literal("main"), z.string().regex(/^\d{3,}\/T\d+$/, "target must be <thread>, main or <thread>/<ticket>")]), message: text }),
+  z.object({ cmd: z.literal("tell"), target: z.union([threadId, z.literal("main"), ticketTarget]), message: text }),
   z.object({
     cmd: z.literal("session.signal"),
     session: sessionId.optional(),

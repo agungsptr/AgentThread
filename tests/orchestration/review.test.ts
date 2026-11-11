@@ -441,7 +441,11 @@ describe("the finished-worker grace sweep", () => {
 
 describe("a worker that exits before claiming its ticket", () => {
   const RESPAWN = "The worker for ticket T1 exited before starting; agt started a fresh one.";
-  const TWICE = "The worker for ticket T1 exited before starting, twice; check its pane or spawn it again with agt worker spawn 001 --ticket T1.";
+  const QUEUED = "The worker for ticket T1 exited before starting; agt queued a fresh one.";
+  /** A failed worker's one notice names the failure. */
+  const lead = (how: "ended" | "lost" | "failed") => `The worker for ticket T1 exited before starting${how === "failed" ? " (failed: boom)" : ""}`;
+  const respawn = (how: "ended" | "lost" | "failed") => `${lead(how)}; agt started a fresh one.`;
+  const giveUp = (how: "ended" | "lost" | "failed") => `${lead(how)}, 3 times; check its pane or spawn it again with agt worker spawn 001 --ticket T1.`;
   const exitBody = (how: "ended" | "lost" | "failed", session: string): EventBody =>
     how === "ended"
       ? { type: "session.ended", thread: "001", payload: { session } }
@@ -473,7 +477,8 @@ describe("a worker that exits before claiming its ticket", () => {
       expect(isLive(w1)).toBe(true);
       expect(spawnsFor("T1")).toBe(1);
       expect(effects.find((e) => e.kind === "agent.spawn")).toMatchObject({ session: w1.id, ticket: "T1", cwd: "/repo/.worktrees/kyc-1/api" });
-      expect(coordNotices(s)).toContain(RESPAWN);
+      // one notice per exit (a failure is not reported twice)
+      expect(coordNotices(s)).toEqual([respawn(how)]);
       expect(ticketOf(s, "T1").status).toBe("open");
 
       const before = coordNotices(s).length;
@@ -481,17 +486,16 @@ describe("a worker that exits before claiming its ticket", () => {
       const w2 = workerOf(s, "T1");
       expect(w2.id).not.toBe(w1.id);
       expect(spawnsFor("T1")).toBe(2);
-      expect(coordNotices(s).slice(before)).toContain(RESPAWN);
+      expect(coordNotices(s).slice(before)).toEqual([respawn(how)]);
 
       const before3 = coordNotices(s).length;
       exit(s, how, started(s, "w1:p5").id);
       expect(spawnsFor("T1")).toBe(2);
       expect(workerOf(s, "T1").id).toBe(w2.id);
-      expect(ticketOf(s, "T1")).toMatchObject({ status: "open" });
+      expect(ticketOf(s, "T1")).toMatchObject({ status: "open", earlyExits: 3 });
       expect(s.threads.get("001")!.workerQueue).toEqual([]);
-      const later = coordNotices(s).slice(before3);
-      expect(later).toContain(TWICE);
-      expect(later).not.toContain(RESPAWN);
+      // the third exit's notice counts three
+      expect(coordNotices(s).slice(before3)).toEqual([giveUp(how)]);
     });
   }
 
@@ -533,9 +537,10 @@ describe("a worker that exits before claiming its ticket", () => {
     exec(s, { cmd: "worker.spawn", thread: "001", ticket: "T3" });
     effects = [];
     exit(s, "ended", w.id);
-    // the freed slot goes to the queue's head; T1 waits behind T3
+    // the freed slot goes to the queue's head; T1 waits behind T3, and the notice says it is queued
     expect(effects.filter((e) => e.kind === "agent.spawn").map((e) => (e as { ticket?: string }).ticket)).toEqual(["T2"]);
-    expect(coordNotices(s)).toContain(RESPAWN);
+    expect(coordNotices(s)).toContain(QUEUED);
+    expect(coordNotices(s)).not.toContain(RESPAWN);
     const finish = (ticket: string) => {
       const x = workerOf(s, ticket);
       expect(exec(s, { cmd: "ticket.claim", thread: "001", ticket }, { ...asWorker(x), ticket }).ok).toBe(true);
@@ -598,6 +603,18 @@ describe("a worker that exits before claiming its ticket", () => {
       expect(spawnsFor("T1")).toBe(1);
       expect(ticketOf(s, "T1").earlyExits).toBe(1);
     }
+  });
+
+  test("the fresh worker keeps a non-default --agent of the one that exited", () => {
+    const s = world();
+    addTicket(s, "T1", ["src/a.ts"]);
+    expect(exec(s, { cmd: "worker.spawn", thread: "001", ticket: "T1", agent: "opencode" }).ok).toBe(true);
+    const w0 = started(s);
+    expect(w0.agent).toBe("opencode");
+    effects = [];
+    exit(s, "ended", w0.id);
+    expect(effects.filter((e) => e.kind === "agent.spawn").map((e) => (e as { run: { agent: string } }).run.agent)).toEqual(["opencode"]);
+    expect(workerOf(s, "T1").agent).toBe("opencode");
   });
 
   test("never on a done thread", () => {

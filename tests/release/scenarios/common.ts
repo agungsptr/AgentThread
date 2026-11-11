@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import type { StoredEvent } from "../../../src/domain/types.ts";
+import type { AgentKind, StoredEvent } from "../../../src/domain/types.ts";
 import type { RunResult } from "../../../src/herdr/bridge.ts";
 import { paths } from "../../../src/project/paths.ts";
 import { git, isSymlinkTo, runFor, type EventOf, type Herdr, type HerdrServer, type RoleAgents } from "../harness.ts";
@@ -203,7 +203,7 @@ export async function newThread(h: H, extra: string[] = []): Promise<string> {
 }
 
 /** The coordinator session currently acting for `thread` (latest attached, not ended/lost/rotated/failed). */
-export function actingCoordinator(all: StoredEvent[], thread: string): { session: string; pane?: string } | undefined {
+export function actingCoordinator(all: StoredEvent[], thread: string): { session: string; agent: AgentKind; pane?: string } | undefined {
   const gone = new Set(
     all
       .filter((e) => ["session.ended", "session.lost", "session.rotated", "session.failed"].includes(e.type))
@@ -212,5 +212,5 @@ export function actingCoordinator(all: StoredEvent[], thread: string): { session
   const c = sessionsOf(all, thread, "coordinator").filter((s) => !gone.has(s.payload.session)).at(-1);
   if (!c) return undefined;
   const pane = all.filter((e): e is EventOf<"session.attached"> => e.type === "session.attached" && e.payload.session === c.payload.session).at(-1)?.payload.pane;
-  return { session: c.payload.session, ...(pane ? { pane } : {}) };
+  return { session: c.payload.session, agent: c.payload.agent, ...(pane ? { pane } : {}) };
 }

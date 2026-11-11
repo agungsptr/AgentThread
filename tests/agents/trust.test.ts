@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { CLAUDE_TRUST_PROMPT, answerTrustDialog, isTrustDialog, trustChoiceSelected, trustDialogLive, trustDialogMaybe } from "../../src/agents/trust.ts";
+import { CLAUDE_TRUST_PROMPT, answerTrustDialog, isTrustDialog, trustChoiceSelected, trustDialogLive, trustDialogMaybe, typingUnsafe } from "../../src/agents/trust.ts";
 import { P8_DIALOG, P8_EXITED, P8_FOOTER, P8_SHELL } from "../fixtures/trust-screens.ts";
 
 // As Claude Code draws it (heavy rerun 3's pane screens); the `❯` marks the selected option.
@@ -184,4 +184,14 @@ test("a dialog chopped mid-word by a 4-column pane is not read whole, but its fr
 test("the report's 40 lines of p8 alone hold none of the dialog's fragments: the footer is chopped past them", () => {
   // The lines above (the options) were cut off by the report, so the check cannot be shown on this dump alone.
   expect(trustDialogMaybe([...P8_FOOTER, ...P8_SHELL].join("\n"), CLAUDE_TRUST_PROMPT)).toBe(false);
+});
+
+test("typingUnsafe: the dialog waiting always; its fragments only until the agent is confirmed past it; never without a dialog", () => {
+  const waiting = dialog(false);
+  expect(typingUnsafe(waiting, CLAUDE_TRUST_PROMPT)).toBe(true);
+  expect(typingUnsafe(waiting, CLAUDE_TRUST_PROMPT, { confirmed: true })).toBe(true);
+  expect(typingUnsafe(P8_DIALOG, CLAUDE_TRUST_PROMPT)).toBe(true);
+  expect(typingUnsafe(P8_DIALOG, CLAUDE_TRUST_PROMPT, { confirmed: true })).toBe(false);
+  expect(typingUnsafe("Welcome to Claude Code\n❯ ", CLAUDE_TRUST_PROMPT)).toBe(false);
+  expect(typingUnsafe(waiting, undefined)).toBe(false);
 });

@@ -325,7 +325,7 @@ async function answeringWaits<T>(h: H, threads: string[], until: (all: StoredEve
         h.note(`thread ${e.thread} waits (${e.payload.what}) but has no coordinator pane to answer in`);
         continue;
       }
-      await say(h.herdr, c.pane, WAITING_ANSWER);
+      await say(h.herdr, c.pane, c.agent, WAITING_ANSWER);
       h.note(`thread ${e.thread} waited for the user (${e.payload.what}); answered in coordinator pane ${c.pane}`);
     }
     if (Date.now() >= end) {

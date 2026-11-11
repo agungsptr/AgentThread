@@ -71,6 +71,16 @@ export const trustDialogMaybe = (screen: string, prompt: TrustPrompt): boolean =
 };
 
 /**
+ * Whether typing into a pane showing `screen` could answer `prompt`'s dialog (a prompt's Enter picks its selected
+ * option, "No, exit"): the dialog waiting there, or, unless the agent is `confirmed` past it (its own hook or a finished
+ * turn said so), any fragment of it (trustDialogMaybe). An agent without a trust dialog (`prompt` undefined) is never
+ * held. The one check for whatever types into an agent's pane: the spawn job's bootstrap, the daemon's notices, the
+ * release e2e harness's `say`.
+ */
+export const typingUnsafe = (screen: string, prompt: TrustPrompt | undefined, o: { confirmed?: boolean } = {}): boolean =>
+  prompt !== undefined && (trustDialogLive(screen, prompt) || (o.confirmed !== true && trustDialogMaybe(screen, prompt)));
+
+/**
  * Whether the dialog on `screen` has the trusting option selected. Only the dialog's own option lines are judged: the
  * last `refuse` line on screen and the first `choice` line after it. The trusting line must carry the marker and the
  * refusing one must not. Other marked lines (a shell prompt drawn with the same glyph, above an inline dialog with the

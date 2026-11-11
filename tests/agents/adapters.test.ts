@@ -218,3 +218,7 @@ test("every agent kind's launch marks the agent's own process, never its tab env
     }
   }
 });
+
+test("every adapter has a display name for log lines", () => {
+  expect((["claude-code", "opencode", "codex", "omp"] as const).map((a) => adapterFor(a).displayName)).toEqual(["Claude Code", "OpenCode", "Codex", "omp"]);
+});

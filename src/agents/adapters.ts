@@ -23,6 +23,8 @@ export interface LaunchInput {
 
 export interface AgentAdapter {
   agent: AgentKind;
+  /** The agent's name as people know it, for log lines (e.g. "Claude Code"). */
+  displayName: string;
   /** The `--kind` Herdr is given, e.g. "claude". */
   herdrKind: "claude" | "opencode" | "codex" | "omp";
   /**
@@ -61,6 +63,7 @@ const NO_HOOKS = { hooks: false, contextSize: false, preCompact: false };
 
 const claudeAdapter: AgentAdapter = {
   agent: "claude-code",
+  displayName: "Claude Code",
   herdrKind: "claude",
   bin: "claude",
   instructionFiles: ["CLAUDE.md"],
@@ -94,6 +97,7 @@ const OPENCODE_GIT: Record<SessionRole, Record<string, "allow">> = {
 
 const opencodeAdapter: AgentAdapter = {
   agent: "opencode",
+  displayName: "OpenCode",
   herdrKind: "opencode",
   bin: "opencode",
   instructionFiles: [],
@@ -128,6 +132,7 @@ function realpathOf(p: string): string[] {
 
 const codexAdapter: AgentAdapter = {
   agent: "codex",
+  displayName: "Codex",
   herdrKind: "codex",
   bin: "codex",
   instructionFiles: [],
@@ -162,6 +167,7 @@ const codexAdapter: AgentAdapter = {
 
 const ompAdapter: AgentAdapter = {
   agent: "omp",
+  displayName: "omp",
   herdrKind: "omp",
   bin: "omp",
   instructionFiles: [],
@@ -195,9 +201,9 @@ export function adapterFor(agent: AgentKind): AgentAdapter {
   return a;
 }
 
-/** Every adapter's trust dialog: the daemon, which delivers notices by pane, checks a screen against them all. */
-export function trustPrompts(): TrustPrompt[] {
-  return Object.values(ADAPTERS).flatMap((a) => (a.trustPrompt ? [a.trustPrompt] : []));
+/** Every adapter's display name: the release e2e harness reads agt's "trusted <folder> for <name>" log lines. */
+export function agentDisplayNames(): string[] {
+  return Object.values(ADAPTERS).map((a) => a.displayName);
 }
 
 /** The adapter Herdr starts as `--kind <herdrKind>` (a spawn job knows only that). */

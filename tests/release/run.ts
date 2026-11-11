@@ -149,7 +149,7 @@ async function runRow(sc: Scenario): Promise<{ status: "PASS" | "FAIL"; reason?:
       watcher?.stop();
       // The trust dialogs agt answered itself, from its spawn jobs' daemon log lines.
       if (root && existsSync(paths(root).daemonLog)) {
-        for (const folder of agtTrustedFolders(readFileSync(paths(root).daemonLog, "utf8"))) note(`agt trusted ${folder} for Claude Code`);
+        for (const folder of agtTrustedFolders(readFileSync(paths(root).daemonLog, "utf8"))) note(`agt trusted ${folder}`);
       }
       // The daemon first (it would react to the agents vanishing), then Herdr with every pane, then any straggler.
       if (root) await cleanupProcesses(root, note, { sweepCwd: false }).catch((e) => note(`cleanup: ${e}`));
@@ -208,7 +208,7 @@ async function runRow(sc: Scenario): Promise<{ status: "PASS" | "FAIL"; reason?:
       },
       events: () => events(r),
       waitFor: (type, pred, ms, what) => waitForEvent(r, type, pred, Math.max(1_000, Math.min(ms ?? 120_000, deadline - Date.now())), what),
-      say: (text) => say(h.herdr, h.mainPane, text),
+      say: (text) => say(h.herdr, h.mainPane, sc.agents.main, text),
       async restartHerdr() {
         await h.server.stop();
         const again = await startHerdr(h.server.session);
@@ -245,7 +245,7 @@ async function runRow(sc: Scenario): Promise<{ status: "PASS" | "FAIL"; reason?:
     const layout = await h.waitFor("layout.registered", () => true, 60_000, "agt start registered the layout");
     h.check("harness: the layout names the isolated Herdr socket", layout.payload.herdrSocket === server.socket, layout.payload.herdrSocket);
     // Main is a bare process in its pane: answer its first-run trust dialog by screen as well.
-    if (manager) void answerTrustIn(server.herdr, h.mainPane, 60_000, note).then((a) => a && note(`answered the trust dialog in main's pane ${h.mainPane}`));
+    if (manager) void answerTrustIn(server.herdr, h.mainPane, sc.agents.main, 60_000, note).then((a) => a && note(`answered the trust dialog in main's pane ${h.mainPane}`));
     await raceScenario(sc.run(h), trustAbort.promise, deadline - Date.now(), `scenario timed out after ${values.timeout ?? "20m"}`);
   } catch (e) {
     failure = e instanceof Error ? e.message : String(e);

@@ -41,12 +41,29 @@ const MAX_FRESH_WORKERS = 2;
 const KEEPS_EXITING = "returned ticket's workers keep exiting";
 /** The coordinator's notice when a returned ticket is released because its fresh workers keep exiting. */
 const EXITING = "the returned ticket's workers keep exiting, so the ticket is open again.";
-const earlyNotice = (ticket: string) => `The worker for ticket ${ticket} exited before starting; agt started a fresh one.`;
-const earlyTwiceNotice = (thread: string, ticket: string) =>
-  `The worker for ticket ${ticket} exited before starting, twice; check its pane or spawn it again with agt worker spawn ${thread} --ticket ${ticket}.`;
+/** `failure`: the reason of a session.failed, kept in the one notice the coordinator gets for the exit. */
+const exitedEarly = (ticket: string, failure: string | undefined) => `The worker for ticket ${ticket} exited before starting${failure ? ` (failed: ${failure})` : ""}`;
+const earlyNotice = (ticket: string, started: boolean, failure?: string) => `${exitedEarly(ticket, failure)}; agt ${started ? "started" : "queued"} a fresh one.`;
+const earlyGiveUpNotice = (thread: string, ticket: string, exits: number, failure?: string) =>
+  `${exitedEarly(ticket, failure)}, ${exits} times; check its pane or spawn it again with agt worker spawn ${thread} --ticket ${ticket}.`;
 const doneNotice = (ticket: string, summary: string | undefined) => `Ticket ${ticket} is done${summary ? `: ${summary}` : ""}.`;
 const reviewNotice = (thread: string, ticket: string, summary: string | undefined) =>
   `Ticket ${ticket} is ready for review: ${summary ?? ""}. Review its commits, then agt ticket accept ${thread}/${ticket} or agt ticket return ${thread}/${ticket} "<what to fix>".`;
+
+/** The delivery of a live idle session's queued notices to its pane, or undefined when there is nothing to deliver now. */
+export function noticeDelivery(s: Session): Extract<Effect, { kind: "notice.deliver" }> | undefined {
+  if (!isLive(s) || s.status !== "idle" || !s.pane || s.notices.length === 0) return undefined;
+  return {
+    kind: "notice.deliver",
+    session: s.id,
+    thread: s.thread,
+    agent: s.agent,
+    pane: s.pane,
+    text: s.notices.join("\n"),
+    count: s.notices.length,
+    ...(s.polledStart ? { unconfirmed: true as const } : {}),
+  };
+}
 
 export function react(state: State, events: StoredEvent[], ctx: ReactorContext): { events: EventBody[]; effects: Effect[] } {
   const out: EventBody[] = [];
@@ -89,17 +106,11 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
     }
   };
   const deliver = (s: Session | undefined) => {
-    if (!s || delivered.has(s.id) || rotated.has(s.id) || !isLive(s) || s.status !== "idle" || !s.pane || s.notices.length === 0) return;
+    if (!s || delivered.has(s.id) || rotated.has(s.id)) return;
+    const e = noticeDelivery(s);
+    if (!e) return;
     delivered.add(s.id);
-    effects.push({
-      kind: "notice.deliver",
-      session: s.id,
-      thread: s.thread,
-      pane: s.pane,
-      text: s.notices.join("\n"),
-      count: s.notices.length,
-      ...(s.polledStart ? { unconfirmed: true as const } : {}),
-    });
+    effects.push(e);
   };
   /** Emits session.ended at most once per session per call; returns whether it did. */
   const end = (s: Session): boolean => {
@@ -145,9 +156,15 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
    * Only the event that counted the exit (`seq`) tells it: a later loss or failure is the same exit. Returns whether
    * the coordinator was told.
    */
-  const earlyExitNotice = (s: Session, t: Thread, seq: number): boolean => {
+  const earlyExitNotice = (s: Session, t: Thread, seq: number, failure?: string): boolean => {
     if (s.earlyExitSeq !== seq || !s.ticket || t.status === "done" || exitedBeforeStart(state, t, s.ticket)?.id !== s.id) return false;
-    notify(coordinatorToNotify(t.id), awaitsRespawn(state, t, s.ticket) ? earlyNotice(s.ticket) : earlyTwiceNotice(t.id, s.ticket));
+    if (awaitsRespawn(state, t, s.ticket)) {
+      // The fresh worker starts now when it can, else it waits in the queue: the notice says which.
+      fillWorkers(t.id);
+      notify(coordinatorToNotify(t.id), earlyNotice(s.ticket, spawnedTickets.has(`${t.id}/${s.ticket}`), failure));
+    } else {
+      notify(coordinatorToNotify(t.id), earlyGiveUpNotice(t.id, s.ticket, t.tickets.find((k) => k.id === s.ticket)?.earlyExits ?? 0, failure));
+    }
     return true;
   };
   /** The coordinator hears a ticket is ready for review at the event the projection picked (Ticket.reviewNoticeSeq). */
@@ -413,8 +430,8 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
             // Released, not respawned: a spawn that keeps failing must not loop. A worker that had run failed as a session.
             releaseTicket(t!.id, k.id, lostSpawn ? "worker spawn report lost" : s.pane || s.turns > 0 ? "worker session failed" : "worker spawn failed");
           }
-          notify(coordinatorToNotify(s.thread), text ?? `${cap(workerRef(s.ticket, "worker"))} failed: ${ev.payload.reason}.`);
-          if (t) earlyExitNotice(s, t, ev.seq);
+          // One that failed before it started is replaced, and the coordinator hears that instead (as for a loss).
+          if (!t || !earlyExitNotice(s, t, ev.seq, ev.payload.reason)) notify(coordinatorToNotify(s.thread), text ?? `${cap(workerRef(s.ticket, "worker"))} failed: ${ev.payload.reason}.`);
         }
         if (s?.role === "coordinator") {
           const main = liveSessions(state, undefined, "main")[0];
@@ -587,15 +604,8 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
           const text = `Session ${s.id} (${s.agent} ${s.model ?? "default"}) finished its first turn without running any agt command; it may be misconfigured (for example a wrong model). Check pane ${s.pane ?? "unknown"}.`;
           notify(s.role === "coordinator" ? liveSessions(state, undefined, "main")[0] : coordinatorToNotify(s.thread), text);
         }
-        // A worker whose turn ended with its ticket still in_progress (no done, no block) would sit silent: tell the
-        // coordinator, once per idle stretch (only the idle that began it, as with blocked). A worker that ran no agt command
-        // yet is the stall watchdog's.
-        if (s && isLive(s) && s.role === "worker" && s.idleSeq === ev.seq && s.authored && s.ticket && s.thread &&
-          state.threads.get(s.thread)?.tickets.find((k) => k.id === s.ticket)?.status === "in_progress") {
-          const line = s.lastReport?.split("\n")[0]?.trim() ?? "";
-          const last = (line.length > 200 ? `${line.slice(0, 199)}…` : line).replace(/[.!?]+$/, "");
-          notify(coordinatorToNotify(s.thread), `The worker for ticket ${s.ticket} went idle without reporting${last ? `: ${last}` : ""}. Tell it what to do with agt tell ${s.thread}/${s.ticket} "<text>", or return or block the ticket.`);
-        }
+        // A worker idle with its ticket unfinished is reported by the sweep once the idle has lasted (see sweep.ts):
+        // a hookless agent's poll flickers to idle mid-turn.
         const ticketStatus = s?.thread ? state.threads.get(s.thread)?.tickets.find((k) => k.id === s.ticket)?.status : undefined;
         // A worker whose ticket is done or blocked has nothing left to do; ending it frees its slot.
         const finished = s && isLive(s) && s.role === "worker" && (ticketStatus === "done" || ticketStatus === "blocked");

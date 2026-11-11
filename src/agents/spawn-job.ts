@@ -4,7 +4,7 @@ import { join, relative, resolve, sep } from "node:path";
 import { HerdrError, shellQuote, type HerdrBridge, type PaneScreen } from "../herdr/bridge.ts";
 import { adapterForHerdrKind } from "./adapters.ts";
 import { AGT_BIN } from "./claude.ts";
-import { TRUST_TRIES, answerTrustDialog, isTrustDialog, trustDialogLive, trustDialogMaybe } from "./trust.ts";
+import { TRUST_TRIES, answerTrustDialog, isTrustDialog, trustDialogLive, trustDialogMaybe, typingUnsafe } from "./trust.ts";
 
 export interface SpawnJob {
   root: string;
@@ -91,11 +91,15 @@ export async function reportWithRetry(
   return false;
 }
 
-/** Runs in the `agt __spawn` child so the daemon never waits for an agent to boot. */
+/** Herdr's own wait for an agent start (`agent start --timeout`), at most; `attachBy` may cut it shorter, never below the minimum. */
+const START_TIMEOUT_MS = 60_000;
+const MIN_START_TIMEOUT_MS = 1_000;
+
 /** How often, every BUSY_RETRY_MS, an agent start is retried while the pane's shell is still starting (about 30s). */
 const BUSY_RETRIES = 60;
 const BUSY_RETRY_MS = 500;
 
+/** Runs in the `agt __spawn` child so the daemon never waits for an agent to boot. */
 export async function runSpawnJob(
   job: SpawnJob,
   deps: {
@@ -123,12 +127,16 @@ export async function runSpawnJob(
     // A leading space keeps the line out of shell history (HISTCONTROL=ignorespace, zsh's HIST_IGNORE_SPACE).
     const exported = job.pane ? Object.entries(job.exportEnv ?? {}) : [];
     if (exported.length) deps.herdr.runInPane(pane, ` export ${exported.map(([k, v]) => `${k}=${shellQuote(v)}`).join(" ")}`);
-    const start = { name: job.name, kind: job.kind, pane, args: job.args };
     started = pane;
+    const now = deps.now ?? Date.now;
     for (let attempt = 0; ; attempt++) {
+      // Herdr's start waits for the agent to be ready: never past `attachBy`, so a slow start cannot outrun the sweep's
+      // spawn_timeout (the attach report must still go in time).
+      const timeoutMs = job.attachBy === undefined ? START_TIMEOUT_MS : Math.max(MIN_START_TIMEOUT_MS, Math.min(START_TIMEOUT_MS, job.attachBy - now()));
+      const start = { name: job.name, kind: job.kind, pane, args: job.args, timeoutMs };
       // The trust watch runs beside the start: Herdr's `agent start` waits for the agent to be ready, which a trust
       // dialog prevents, so the dialog must be answered while it waits.
-      trust ??= watchTrust(job, pane, deps.screen, deps.trustPolls ?? TRUST_POLLS, sleep, log, deps.now ?? Date.now);
+      trust ??= watchTrust(job, pane, deps.screen, deps.trustPolls ?? TRUST_POLLS, sleep, log, now);
       try {
         if (deps.herdr.agentStartAsync) await deps.herdr.agentStartAsync(start);
         else deps.herdr.agentStart(start);
@@ -202,7 +210,7 @@ async function trustDialogUp(kind: string, pane: string, screen: PaneScreen | un
   const prompt = adapterForHerdrKind(kind)?.trustPrompt;
   if (!prompt || !screen) return false;
   const text = await screen.paneReadAsync(pane).catch(() => undefined);
-  return text !== undefined && (trustDialogLive(text, prompt) || trustDialogMaybe(text, prompt));
+  return text !== undefined && typingUnsafe(text, prompt);
 }
 
 /** The trust watch lasts about 60s: TRUST_POLLS reads, TRUST_POLL_MS apart. */
@@ -238,6 +246,20 @@ export function agtCreatedFolder(root: string, cwd: string): boolean {
  *
  * `released` resolves when the bootstrap may go: the watch ended (the agent is ready, or it gave up), or `attachBy`
  * came first (the watch then goes on beside the report).
+ *
+ * Each poll, by Herdr's status of the pane's agent and what its screen shows:
+ *
+ * | status                         | screen                                   | action                                          |
+ * |--------------------------------|------------------------------------------|-------------------------------------------------|
+ * | absent, or running pre-launch  | (not read)                               | poll again (`clear` = 0)                        |
+ * | blocked                        | whole dialog, not yet answered           | answer it (answerTrustDialog); log on give-up   |
+ * | blocked                        | anything else, or answered already       | poll again, keeping the screen for the end log  |
+ * | running (launched)             | dialog waiting (trustDialogLive)         | as blocked                                      |
+ * | running (launched)             | fragments only, not yet answered         | poll again, bootstrap held (`clear` = 0)        |
+ * | running (launched)             | no dialog (or stale fragments, answered) | `clear`++; at 2 the agent is `ready`: end       |
+ * | any read error                 |                                          | poll again                                      |
+ *
+ * The watch also ends on `stop()` (a busy retry, a failed start, a refused report) and after `polls` reads.
  */
 function watchTrust(
   job: SpawnJob,
@@ -248,9 +270,10 @@ function watchTrust(
   log: (m: string) => void,
   now: () => number,
 ) {
-  const prompt = adapterForHerdrKind(job.kind)?.trustPrompt;
+  const adapter = adapterForHerdrKind(job.kind);
   const cwd = job.cwd ?? job.split?.cwd;
-  if (!screen || !prompt || polls === 0 || cwd === undefined || !agtCreatedFolder(job.root, cwd)) return undefined;
+  if (!screen || !adapter?.trustPrompt || polls === 0 || cwd === undefined || !agtCreatedFolder(job.root, cwd)) return undefined;
+  const prompt = adapter.trustPrompt;
   let stopped = false;
   let launched = false;
   let answered = false;
@@ -301,7 +324,7 @@ function watchTrust(
         if (r.answered) {
           answered = true;
           blocked = undefined;
-          log(`trusted ${cwd} for Claude Code (a folder agt created)`);
+          log(`trusted ${cwd} for ${adapter.displayName} (a folder agt created)`);
           continue;
         }
         if (stopped) return;

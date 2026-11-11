@@ -718,3 +718,28 @@ test("after the answer, the answered dialog's stale screen while Herdr still lis
   expect(c.keys()).toEqual(["keys down", "keys enter"]);
   expect(logs).toEqual([`trusted ${thread} for Claude Code (a folder agt created)`]);
 });
+
+// ---------- final review 2 ----------
+
+test("the agent start waits at most 60s and never past attachBy (at least 1s), recomputed on each busy retry", async () => {
+  const timeouts: (number | undefined)[] = [];
+  let busy = 1;
+  let now = 100_000;
+  const { b } = bridge();
+  (b as { agentStart: unknown }).agentStart = (o: { timeoutMs?: number }) => {
+    timeouts.push(o.timeoutMs);
+    if (busy-- > 0) throw new HerdrError("agent_pane_busy", "busy");
+  };
+  const job = (attachBy?: number) => ({ ...JOB, ...(attachBy !== undefined ? { attachBy } : {}) });
+  const deps = { herdr: b, report: async () => true, now: () => now, sleep: async (ms: number) => void (now += ms), log: () => {} };
+  await runSpawnJob(job(), deps);
+  expect(timeouts).toEqual([60_000, 60_000]);
+  timeouts.length = 0;
+  busy = 1;
+  await runSpawnJob(job(now + 30_000), deps);
+  expect(timeouts).toEqual([30_000, 29_500]); // the busy retry slept 500ms
+  timeouts.length = 0;
+  await runSpawnJob(job(now + 500_000), deps);
+  await runSpawnJob(job(now - 5_000), deps);
+  expect(timeouts).toEqual([60_000, 1_000]);
+});

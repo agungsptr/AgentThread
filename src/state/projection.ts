@@ -43,6 +43,12 @@ export interface Session {
   settledTurns?: number;
   /** Seq of the agent.idle that began the current idle stretch (cleared when the session is active again). */
   idleSeq?: number;
+  /** When that agent.idle was (set and cleared with idleSeq). */
+  idleAt?: string;
+  /** The sweep reported this idle stretch to the coordinator (worker.idle_reported; cleared with idleSeq). */
+  idleReported?: boolean;
+  /** When a delivery of its queued notices was last held or failed (notice.held): the sweep retries after that. */
+  noticeHeldAt?: string;
   /** The message of the session's latest progress or note. */
   lastReport?: string;
   /** Herdr reported it blocked before it finished any turn (it got a blocked notice instead). */
@@ -99,6 +105,8 @@ export interface Ticket {
    * latest claim; the reactor gives it a fresh worker for the first MAX_EARLY_RESPAWNS of them (orchestration/sessions.ts).
    */
   earlyExits?: number;
+  /** Idle notices the coordinator got for the ticket's workers (worker.idle_reported); capped (orchestration/sweep.ts). */
+  idleNotices?: number;
 }
 
 export interface Entry {
@@ -688,7 +696,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
         else delete s.polledStart;
         delete s.blockedNotified;
         delete s.blockedSeq;
-        delete s.idleSeq;
+        endIdleStretch(s);
         if (ev.type === "session.active" && ev.actor.role !== "user") s.hooksSeen = true;
         s.status = atPrompt ? "idle" : "active";
         s.lastActiveAt = ev.ts;
@@ -703,7 +711,10 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
         delete s.polledStart;
         delete s.blockedNotified;
         delete s.blockedSeq;
-        s.idleSeq ??= ev.seq;
+        if (s.idleSeq === undefined) {
+          s.idleSeq = ev.seq;
+          s.idleAt = ev.ts;
+        }
         if (ev.actor.role !== "user") s.hooksSeen = true;
         if (s.status === "active") {
           s.turns++;
@@ -811,15 +822,33 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
     case "notice.delivered": {
       const s = sessionOf(state, ev.seq, ev.payload.session);
       s.notices.splice(0, ev.payload.count);
+      delete s.noticeHeldAt;
       if (isLive(s)) {
         delete s.polledStart;
-        delete s.idleSeq;
+        endIdleStretch(s);
         s.status = "active"; // a pasted notice starts a turn
         s.lastActiveAt = ev.ts;
       }
       return true;
     }
+    case "notice.held":
+      sessionOf(state, ev.seq, ev.payload.session).noticeHeldAt = ev.ts;
+      return true;
+    case "worker.idle_reported": {
+      const s = sessionOf(state, ev.seq, ev.payload.session);
+      if (s.idleSeq !== undefined) s.idleReported = true;
+      const k = state.threads.get(ev.thread)?.tickets.find((x) => x.id === s.ticket);
+      if (k) k.idleNotices = (k.idleNotices ?? 0) + 1;
+      return true;
+    }
     default:
       return false;
   }
+}
+
+/** The session is active again: its idle stretch (and whether it was reported) is over. */
+function endIdleStretch(s: Session): void {
+  delete s.idleSeq;
+  delete s.idleAt;
+  delete s.idleReported;
 }

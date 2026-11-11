@@ -203,6 +203,12 @@ describe("sessions", () => {
     expect(err(exec(s, { cmd: "tell", target, message: "x" }, { role: "worker", thread: "001", ticket: "T2", session: "w2" }))).toBe("only the coordinator of thread 001 (or the user) may tell a worker");
   });
 
+  test("the tell target is a thread, main, or <thread>/<ticket> with the same id rules as everywhere else", () => {
+    const ok = (target: string) => CommandSchema.safeParse({ cmd: "tell", target, message: "x" }).success;
+    for (const target of ["001", "main", "001/T1", "1234/T12"]) expect(ok(target)).toBe(true);
+    for (const target of ["01/T1", "001/1", "001/T1/x", "001/", "/T1", "001/t1", "T1"]) expect(ok(target)).toBe(false);
+  });
+
   test("thread.new stores maxWorkers", () => {
     const s = stateOf(INIT);
     const r = exec(s, { cmd: "thread.new", title: "X", type: "bug", maxWorkers: 2 });

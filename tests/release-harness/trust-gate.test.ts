@@ -103,7 +103,7 @@ test("answerTrustIn confirms the choice the same way: enter only on 'Yes', never
       },
     } as unknown as Herdr;
     let t = 0;
-    expect(await answerTrustIn(herdr, "main", 60_000, (m) => void log.push(m), { now: () => t, sleep: async (ms) => void (t += ms) })).toBe(answered);
+    expect(await answerTrustIn(herdr, "main", "claude-code", 60_000, (m) => void log.push(m), { now: () => t, sleep: async (ms) => void (t += ms) })).toBe(answered);
     expect(sent).toEqual([...keys]);
     if (!answered) expect(log[0]).toStartWith('the Claude Code workspace-trust dialog in main did not show "Yes" selected after 5 downs');
   }
@@ -164,10 +164,49 @@ test("say never types into a pane that may show a trust dialog: it waits for it 
   let t = 0;
   const clock = { now: () => t, sleep: async (ms: number) => void (t += ms), waitMs: 5_000 };
   const gone = fakeHerdr([P8_DIALOG, P8_DIALOG, "Welcome to Claude Code\n❯ "]);
-  await say(gone.herdr, "w1:p3", "go on", clock);
+  await say(gone.herdr, "w1:p3", "claude-code", "go on", clock);
   expect(gone.typed).toEqual(["agent prompt w1:p3 go on"]);
   t = 0;
   const stuck = fakeHerdr([P8_DIALOG]);
-  await expect(say(stuck.herdr, "w1:p3", "go on", clock)).rejects.toThrow("not typing into pane w1:p3: it still shows a trust dialog after 5s");
+  await expect(say(stuck.herdr, "w1:p3", "claude-code", "go on", clock)).rejects.toThrow("not typing into pane w1:p3: it still shows a trust dialog after 5s");
   expect(stuck.typed).toEqual([]);
+});
+
+// ---------- final review 2 ----------
+
+test("the folders agt trusted are read for any agent's display name", () => {
+  const log = ["agt __spawn: trusted /r/.worktrees/001-a for Claude Code (a folder agt created)", "agt __spawn: trusted /r/.worktrees/002-b for OpenCode (a folder agt created)"].join("\n");
+  expect(agtTrustedFolders(log)).toEqual(["/r/.worktrees/001-a", "/r/.worktrees/002-b"]);
+});
+
+test("say types into an agent without a trust dialog at once, whatever its screen shows", async () => {
+  const typed: string[] = [];
+  let reads = 0;
+  const herdr = {
+    run: async () => (reads++, { exitCode: 0, stdout: P8_DIALOG, stderr: "" }),
+    ok: async (args: string[]) => void typed.push(args.join(" ")),
+  } as unknown as Herdr;
+  await say(herdr, "w1:p3", "opencode", "go on", { waitMs: 0 });
+  expect(typed).toEqual(["agent prompt w1:p3 go on"]);
+  expect(reads).toBe(0);
+});
+
+test("the trust watcher reads only panes whose agent kind has a trust dialog; answerTrustIn has none to answer for such a main", async () => {
+  let t = 0;
+  const read: string[] = [];
+  const foreign: string[] = [];
+  let w!: ReturnType<typeof watchTrustDialogs>;
+  const herdr = {
+    agents: async () => [{ pane_id: "w1:p4", agent: "opencode", agent_status: "blocked" }],
+    run: async (args: string[]) => (read.push(args[2]!), { exitCode: 0, stdout: TRUST_SCREEN, stderr: "" }),
+  } as unknown as Parameters<typeof watchTrustDialogs>[0];
+  w = watchTrustDialogs(herdr, () => "main", () => {}, (pane) => void foreign.push(pane), {
+    now: () => t,
+    sleep: async (ms) => void ((t += ms) >= 60_000 && w.stop()),
+  });
+  await w.done;
+  expect(read).toEqual([]);
+  expect(foreign).toEqual([]);
+  expect(await answerTrustIn(herdr as unknown as Herdr, "main", "opencode", 60_000, () => {}, { now: () => t, sleep: async (ms) => void (t += ms) })).toBe(false);
+  expect(read).toEqual([]);
 });

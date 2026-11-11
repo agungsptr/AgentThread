@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { DEFAULT_CONFIG, type Config } from "../config/config.ts";
 import { canTransitionThread, canTransitionTicket, scopesOverlap, slugify, validateHandoff } from "../domain/rules.ts";
-import { ROLES, type Actor, type EventBody, type Role, type ThreadStatus, type TicketStatus } from "../domain/types.ts";
+import { ROLES, type Actor, type AgentKind, type EventBody, type Role, type ThreadStatus, type TicketStatus } from "../domain/types.ts";
 import { roleAgent, type RoleAgent } from "../agents/roles.ts";
 import { agentName, awaitsWorker, conflictingTicket, FILE_HOLDING, liveSessions, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure as tabEnsureFor, workerLimit } from "../orchestration/sessions.ts";
 import { stageNa } from "../workflow/project-config.ts";
@@ -40,7 +40,8 @@ export type Effect =
       notice?: string;
     }
   /** `unconfirmed`: only Herdr's poll says the agent started (it may list an agent at a startup dialog idle). */
-  | { kind: "notice.deliver"; session: string; thread?: string; pane: string; text: string; count: number; unconfirmed?: true }
+  /** `agent` is the session's: only its adapter's trust dialog holds the delivery. */
+  | { kind: "notice.deliver"; session: string; thread?: string; agent: AgentKind; pane: string; text: string; count: number; unconfirmed?: true }
   | { kind: "pane.close"; pane: string }
   | { kind: "session.probe"; session: string; thread?: string; pane: string };
 

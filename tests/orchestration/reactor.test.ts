@@ -56,7 +56,7 @@ test("ticket events notify the coordinator; delivery waits for idle and happens 
   apply(s, ...react(s, blocked, ctx()).events);
   const idle = apply(s, { type: "agent.idle", thread: "001", payload: { session: C } });
   expect(react(s, idle, ctx()).effects).toEqual([
-    { kind: "notice.deliver", session: C, thread: "001", pane: "w1:p2", text: "Ticket T1 is done: ok.\nTicket T2 is blocked: no key.", count: 2 },
+    { kind: "notice.deliver", session: C, thread: "001", agent: "claude-code", pane: "w1:p2", text: "Ticket T1 is done: ok.\nTicket T2 is blocked: no key.", count: 2 },
   ]);
   const both = [...idle, ...apply(s, { type: "notice.queued", thread: "001", payload: { session: C, text: "x" } })];
   expect(react(s, both, ctx()).effects).toHaveLength(1);
@@ -67,7 +67,7 @@ test("a fresh session.started delivers the notices queued before it", () => {
   apply(s, { type: "notice.queued", thread: "001", payload: { session: C, text: "Start coordinating." } });
   const started = apply(s, { type: "session.started", thread: "001", payload: { session: C } });
   expect(react(s, started, ctx()).effects).toEqual([
-    { kind: "notice.deliver", session: C, thread: "001", pane: "w1:p2", text: "Start coordinating.", count: 1 },
+    { kind: "notice.deliver", session: C, thread: "001", agent: "claude-code", pane: "w1:p2", text: "Start coordinating.", count: 1 },
   ]);
 });
 
@@ -76,7 +76,7 @@ test("a delivery on a start only Herdr's poll saw is marked unconfirmed (Herdr m
   apply(s, { type: "notice.queued", thread: "001", payload: { session: C, text: "Start coordinating." } });
   const started = apply(s, { type: "session.started", thread: "001", payload: { session: C, source: "poll" } });
   expect(react(s, started, ctx()).effects).toEqual([
-    { kind: "notice.deliver", session: C, thread: "001", pane: "w1:p2", text: "Start coordinating.", count: 1, unconfirmed: true },
+    { kind: "notice.deliver", session: C, thread: "001", agent: "claude-code", pane: "w1:p2", text: "Start coordinating.", count: 1, unconfirmed: true },
   ]);
 });
 
@@ -122,7 +122,11 @@ test("two freed slots in one batch spawn two queued workers, never more", () => 
   const r = react(s, ended, ctx());
   const created = r.events.filter((e) => e.type === "session.created");
   expect(created.map((e) => (e.payload as { ticket?: string }).ticket)).toEqual(["T3", "T4"]);
-  expect(r.events).toContainEqual({ type: "notice.queued", thread: "001", payload: { session: C, text: "Worker for T2 failed: agent_not_ready." } });
+  // Neither worker had claimed: each exit gets one notice (a failure with its reason); their fresh workers wait behind the queue
+  expect(r.events.filter((e) => e.type === "notice.queued")).toEqual([
+    { type: "notice.queued", thread: "001", payload: { session: C, text: "The worker for ticket T1 exited before starting; agt queued a fresh one." } },
+    { type: "notice.queued", thread: "001", payload: { session: C, text: "The worker for ticket T2 exited before starting (failed: agent_not_ready); agt queued a fresh one." } },
+  ]);
 });
 
 test("close_worker_pane_on_end: false ends the worker without closing the pane", () => {

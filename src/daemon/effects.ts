@@ -3,11 +3,11 @@ import { existsSync } from "node:fs";
 import { mkdir, readdir, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { agentEnv, claudeConfigDir } from "../agents/claude.ts";
-import { adapterFor, trustPrompts } from "../agents/adapters.ts";
+import { adapterFor } from "../agents/adapters.ts";
 import { bootstrapPrompt } from "../agents/prompts.ts";
 import { agentsMd, writeAgentsFilesAsync, writeThreadDirFiles } from "../agents/agents-md.ts";
 import { attachDeadline, launchSpawnJob, type SpawnJob } from "../agents/spawn-job.ts";
-import { trustDialogLive, trustDialogMaybe } from "../agents/trust.ts";
+import { typingUnsafe } from "../agents/trust.ts";
 import { canonical, cleanupThread, type CleanupOutcome } from "./cleanup-job.ts";
 import type { Effect } from "../commands/handler.ts";
 import type { Command } from "../commands/schema.ts";
@@ -275,25 +275,25 @@ export function createEffectRunner(opts: {
         if (!layout) return [];
         const bridge = bridgeFor(layout);
         // Herdr may list an agent at its trust dialog idle (a narrow pane wraps or chops the dialog), and a prompt's
-        // Enter would pick "No, exit". The dialog read whole always holds the delivery; its fragments hold it while only
-        // Herdr's poll says the agent started; a screen not read in time holds it too. Not delivered, the notice stays
-        // queued for the agent's next idle.
-        const held = (why: string) => {
-          log(`notice delivery to session ${effect.session} held: ${why}; it goes at the agent's next idle`);
-          return [];
+        // Enter would pick "No, exit". Only the session's own agent's dialog is checked (an agent without one is never
+        // held): read whole it always holds the delivery, its fragments hold it while only Herdr's poll says the agent
+        // started (typingUnsafe), and a screen not read in time holds it too. Held or failed, the notice stays queued and
+        // notice.held lets the sweep retry it: an agent that is already idle may never go idle again.
+        const held = (why: string): EventBody[] => {
+          log(`notice delivery to session ${effect.session} held: ${why}; agt retries it shortly`);
+          return [{ type: "notice.held", ...(effect.thread ? { thread: effect.thread } : {}), payload: { session: effect.session, reason: why } }];
         };
-        if (bridge.paneRead) {
+        const prompt = adapterFor(effect.agent).trustPrompt;
+        if (prompt && bridge.paneRead) {
           const screen = await readWithin(bridge.paneRead(effect.pane), opts.noticeReadMs ?? NOTICE_READ_MS);
           if (screen === "timeout") return held(`pane ${effect.pane}'s screen was not read within ${opts.noticeReadMs ?? NOTICE_READ_MS}ms`);
-          if (screen !== undefined && trustPrompts().some((p) => trustDialogLive(screen, p) || (effect.unconfirmed === true && trustDialogMaybe(screen, p))))
-            return held(`pane ${effect.pane} shows a trust dialog`);
+          if (screen !== undefined && typingUnsafe(screen, prompt, { confirmed: effect.unconfirmed !== true })) return held(`pane ${effect.pane} shows a trust dialog`);
         }
         try {
           await bridge.agentPrompt(effect.pane, effect.text);
           return [{ type: "notice.delivered", ...(effect.thread ? { thread: effect.thread } : {}), payload: { session: effect.session, count: effect.count } }];
         } catch (e) {
-          log(`notice delivery to session ${effect.session} failed: ${e instanceof Error ? e.message : String(e)}`);
-          return [];
+          return held(`delivery failed: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
       case "pane.close": {
@@ -323,7 +323,6 @@ export function createEffectRunner(opts: {
   return Object.assign(run, { stop });
 }
 
-/** Runs an effect; stop() ends the background worktree jobs (the daemon calls it when it stops). */
 /** How long a notice delivery waits for the pane's screen before it holds the notice for the next trigger. */
 const NOTICE_READ_MS = 3_000;
 
@@ -340,6 +339,7 @@ async function readWithin(read: Promise<string> | string, ms: number): Promise<s
   }
 }
 
+/** Runs an effect; stop() ends the background worktree jobs (the daemon calls it when it stops). */
 export type EffectRunner = ((effect: Effect) => Promise<EventBody[]>) & { stop(): Promise<void> };
 
 type RepoWorktreeEffect = Extract<Effect, { kind: "git.worktree.add"; repo: string }>;

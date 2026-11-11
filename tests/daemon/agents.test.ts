@@ -110,7 +110,7 @@ test("spawn failure: session failed, coordinator notified, slot freed", async ()
   await cmd({ cmd: "worker.spawn", thread: "001", ticket: "T2" }, coord);
   await waitFor(async () => (await events()).filter((e) => e.type === "session.failed").length >= 2, 10_000);
   const all = await events();
-  expect(all.some((e) => e.type === "notice.queued" && (e.payload as { text: string }).text.startsWith("Worker for T1 failed:"))).toBe(true);
+  expect(all.some((e) => e.type === "notice.queued" && (e.payload as { text: string }).text.startsWith("The worker for ticket T1 exited before starting (failed:"))).toBe(true);
   // the split pane of the failed worker was closed again
   expect(fake.read().calls.filter((c) => c[0] === "pane" && c[1] === "close").length).toBeGreaterThanOrEqual(1);
 });

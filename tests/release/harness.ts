@@ -21,8 +21,8 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parse, stringify } from "yaml";
-import { trustPrompts } from "../../src/agents/adapters.ts";
-import { CLAUDE_TRUST_PROMPT, TRUST_TRIES, answerTrustDialog, isTrustDialog, trustDialogLive, trustDialogMaybe } from "../../src/agents/trust.ts";
+import { adapterFor, adapterForHerdrKind, agentDisplayNames } from "../../src/agents/adapters.ts";
+import { TRUST_TRIES, answerTrustDialog, isTrustDialog, trustDialogLive, trustDialogMaybe, typingUnsafe, type TrustPrompt } from "../../src/agents/trust.ts";
 import { deepMerge } from "../../src/config/config.ts";
 import { request } from "../../src/daemon/client.ts";
 import type { AgentKind, StoredEvent } from "../../src/domain/types.ts";
@@ -456,30 +456,31 @@ export async function waitForEvent<T extends StoredEvent["type"]>(
 export const SAY_DIALOG_WAIT_MS = 30_000;
 
 /**
- * Acts as the user typing into a pane (main's, or a coordinator's): `herdr agent prompt`, which types the text and
- * Enter. While the pane may show an agent's trust dialog, even chopped by a narrow pane (trustDialogMaybe), Enter would
- * pick its selected option ("No, exit"): `say` waits for it to go, and after `waitMs` throws with the screen instead.
+ * Acts as the user typing into a pane (main's, or a coordinator's) whose agent is `agent`: `herdr agent prompt`, which
+ * types the text and Enter. While the pane may show that agent's trust dialog, even chopped by a narrow pane, Enter would
+ * pick its selected option ("No, exit"): `say` waits for it to go (typingUnsafe, as agt's own deliveries do), and after
+ * `waitMs` throws with the screen instead. An agent without a trust dialog is typed into at once.
  */
 export async function say(
   herdr: Pick<Herdr, "ok" | "run">,
   pane: string,
+  agent: AgentKind,
   text: string,
   o: { waitMs?: number; now?: () => number; sleep?: (ms: number) => Promise<void> } = {},
 ): Promise<void> {
   const now = o.now ?? Date.now;
   const sleep = o.sleep ?? ((ms: number) => Bun.sleep(ms));
   const until = now() + (o.waitMs ?? SAY_DIALOG_WAIT_MS);
-  for (;;) {
+  const prompt = adapterFor(agent).trustPrompt;
+  while (prompt) {
     const screen = (await herdr.run(["pane", "read", pane, "--source", "visible"])).stdout;
-    if (!trustPrompts().some((p) => trustDialogMaybe(screen, p))) break;
+    if (!typingUnsafe(screen, prompt)) break;
     if (now() >= until)
       throw new Error(`not typing into pane ${pane}: it still shows a trust dialog after ${Math.round((o.waitMs ?? SAY_DIALOG_WAIT_MS) / 1000)}s; its screen:\n${screen.split("\n").slice(-SCREEN_LINES).join("\n")}`);
     await sleep(1_000);
   }
   await herdr.ok(["agent", "prompt", pane, text]);
 }
-
-const TRUST = /trust this folder|Do you trust the files/i;
 
 /** How long a coordinator/worker trust dialog may show before it fails the row: agt answers it first (Plan 13 Task 5). */
 export const TRUST_GRACE_MS = 30_000;
@@ -506,8 +507,8 @@ export function watchTrustDialogs(
   const reported = new Set<string>();
   /** Main's panes whose dialog would not select "Yes": left to the user, never tried again. */
   const leftToUser = new Set<string>();
-  /** Coordinator/worker panes showing the dialog, with when it was first seen. */
-  const showing = new Map<string, number>();
+  /** Coordinator/worker panes showing the dialog, with when it was first seen and whose dialog it is. */
+  const showing = new Map<string, { since: number; name: string }>();
   /** Panes of `showing` missing from the last poll: cleared when missing from two in a row. */
   const missed = new Set<string>();
   let stopped = false;
@@ -516,30 +517,33 @@ export function watchTrustDialogs(
       try {
         const seen = new Set<string>();
         for (const a of await herdr.agents()) {
-          // Herdr lists an agent idle at a dialog wrapped by a narrow pane (heavy rerun 4): an idle one is read too.
-          if (a.agent !== "claude" || (a.agent_status !== "blocked" && a.agent_status !== "idle")) continue;
+          // Only an agent kind with a trust dialog (its adapter's trustPrompt) is watched. Herdr lists an agent idle at a
+          // dialog wrapped by a narrow pane (heavy rerun 4): an idle one is read too.
+          const adapter = adapterForHerdrKind(a.agent);
+          const prompt = adapter?.trustPrompt;
+          if (!adapter || !prompt || (a.agent_status !== "blocked" && a.agent_status !== "idle")) continue;
           if (a.pane_id !== mainPane() && reported.has(a.pane_id)) continue;
           const screen = (await herdr.run(["pane", "read", a.pane_id, "--source", "visible"])).stdout;
-          // Idle: the dialog waiting, or its fragments chopped by a narrow pane; a whole dialog that is not waiting is a
-          // leftover above a running agent.
-          const chopped = trustDialogMaybe(screen, CLAUDE_TRUST_PROMPT) && !isTrustDialog(screen, CLAUDE_TRUST_PROMPT);
-          const shown = a.agent_status === "idle" ? trustDialogLive(screen, CLAUDE_TRUST_PROMPT) || chopped : TRUST.test(screen.replace(/\s+/g, " ")) || chopped;
+          // Blocked: any part of the dialog. Idle: the dialog waiting, or its fragments chopped by a narrow pane; a whole
+          // dialog that is not waiting is a leftover above a running agent.
+          const chopped = trustDialogMaybe(screen, prompt) && !isTrustDialog(screen, prompt);
+          const shown = a.agent_status === "idle" ? trustDialogLive(screen, prompt) || chopped : trustDialogMaybe(screen, prompt);
           if (!shown) continue;
           if (a.pane_id !== mainPane()) {
             seen.add(a.pane_id);
             missed.delete(a.pane_id);
-            const since = showing.get(a.pane_id) ?? now();
-            showing.set(a.pane_id, since);
+            const since = showing.get(a.pane_id)?.since ?? now();
+            showing.set(a.pane_id, { since, name: adapter.displayName });
             if (now() - since < graceMs) continue;
             reported.add(a.pane_id);
             showing.delete(a.pane_id);
             foreign(a.pane_id);
-            log(`the Claude Code workspace-trust dialog in ${a.pane_id} was still showing after ${Math.round(graceMs / 1000)}s: agt did not answer it`);
+            log(`the ${adapter.displayName} workspace-trust dialog in ${a.pane_id} was still showing after ${Math.round(graceMs / 1000)}s: agt did not answer it`);
             continue;
           }
-          if (leftToUser.has(a.pane_id) || !isTrustDialog(screen, CLAUDE_TRUST_PROMPT)) continue;
+          if (leftToUser.has(a.pane_id) || !isTrustDialog(screen, prompt)) continue;
           // The dialog's cursor starts on "No, exit": `enter` goes only once "Yes, I trust this folder" is selected.
-          if (await answerConfirmed(herdr, a.pane_id, screen, sleep, log)) answered.push(a.pane_id);
+          if (await answerConfirmed(herdr, a.pane_id, screen, { prompt, name: adapter.displayName }, sleep, log)) answered.push(a.pane_id);
           else leftToUser.add(a.pane_id);
         }
         for (const pane of [...showing.keys()].filter((p) => !seen.has(p))) {
@@ -548,8 +552,8 @@ export function watchTrustDialogs(
             continue;
           }
           missed.delete(pane);
+          log(`${showing.get(pane)!.name} workspace-trust dialog cleared in ${pane}`);
           showing.delete(pane);
-          log(`Claude Code workspace-trust dialog cleared in ${pane}`);
         }
       } catch {}
       if (!stopped) await sleep(o.pollMs ?? 1_500);
@@ -594,9 +598,10 @@ export async function dumpPaneScreens(
   }
 }
 
-/** The folders agt trusted for Claude Code, from its spawn jobs' lines in the daemon log (src/agents/spawn-job.ts). */
+/** The folders agt trusted for an agent (any adapter's display name), from its spawn jobs' lines in the daemon log (src/agents/spawn-job.ts). */
 export function agtTrustedFolders(daemonLog: string): string[] {
-  return [...daemonLog.matchAll(/trusted (.+) for Claude Code \(a folder agt created\)$/gm)].map((m) => m[1]!);
+  const names = agentDisplayNames().map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  return [...daemonLog.matchAll(new RegExp(`trusted (.+) for (?:${names}) \\(a folder agt created\\)$`, "gm"))].map((m) => m[1]!);
 }
 
 /**
@@ -623,36 +628,50 @@ export async function raceScenario(run: Promise<unknown>, gate: Promise<never>, 
  * screen shows "Yes, I trust this folder" selected, never while "No, exit" is. Gives up after TRUST_TRIES downs, logging
  * the screen and leaving the dialog to the user. Returns whether it answered.
  */
-async function answerConfirmed(herdr: Pick<Herdr, "run">, pane: string, screen: string, sleep: (ms: number) => Promise<void>, log: (m: string) => void): Promise<boolean> {
+async function answerConfirmed(
+  herdr: Pick<Herdr, "run">,
+  pane: string,
+  screen: string,
+  dialog: { prompt: TrustPrompt; name: string },
+  sleep: (ms: number) => Promise<void>,
+  log: (m: string) => void,
+): Promise<boolean> {
   const io = {
     read: async () => (await herdr.run(["pane", "read", pane, "--source", "visible"])).stdout,
     send: async (key: string) => void (await herdr.run(["pane", "send-keys", pane, key])),
     sleep,
   };
-  const r = await answerTrustDialog(io, CLAUDE_TRUST_PROMPT, screen);
-  if (r.answered) log(`answered the Claude Code workspace-trust dialog in ${pane}`);
+  const r = await answerTrustDialog(io, dialog.prompt, screen);
+  if (r.answered) log(`answered the ${dialog.name} workspace-trust dialog in ${pane}`);
   else
     log(
-      `the Claude Code workspace-trust dialog in ${pane} did not show "Yes" selected after ${TRUST_TRIES} downs; left it to the user. Its screen:\n${r.screen.split("\n").slice(-SCREEN_LINES).join("\n")}`,
+      `the ${dialog.name} workspace-trust dialog in ${pane} did not show "Yes" selected after ${TRUST_TRIES} ${dialog.prompt.move}s; left it to the user. Its screen:\n${r.screen.split("\n").slice(-SCREEN_LINES).join("\n")}`,
     );
   return r.answered;
 }
 
-/** Main's pane may host a bare process Herdr has not recognized yet; the trust dialog there is found by screen. */
+/**
+ * Main's pane may host a bare process Herdr has not recognized yet; the trust dialog of main's agent (`agent`) is found
+ * there by screen. An agent without a trust dialog has none to answer.
+ */
 export async function answerTrustIn(
   herdr: Pick<Herdr, "run">,
   pane: string,
+  agent: AgentKind,
   timeoutMs: number,
   log: (m: string) => void,
   o: { now?: () => number; sleep?: (ms: number) => Promise<void> } = {},
 ): Promise<boolean> {
+  const adapter = adapterFor(agent);
+  const prompt = adapter.trustPrompt;
+  if (!prompt) return false;
   const now = o.now ?? Date.now;
   const sleep = o.sleep ?? ((ms: number) => Bun.sleep(ms));
   const until = now() + timeoutMs;
   while (now() < until) {
     const screen = (await herdr.run(["pane", "read", pane, "--source", "visible"])).stdout;
     // The full dialog (its options too): a screen that only mentions trust is not answered.
-    if (TRUST.test(screen) && isTrustDialog(screen, CLAUDE_TRUST_PROMPT)) return answerConfirmed(herdr, pane, screen, sleep, log);
+    if (isTrustDialog(screen, prompt)) return answerConfirmed(herdr, pane, screen, { prompt, name: adapter.displayName }, sleep, log);
     await sleep(1_000);
   }
   return false;

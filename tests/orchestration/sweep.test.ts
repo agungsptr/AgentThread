@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import type { Effect } from "../../src/commands/handler.ts";
 import { DEFAULT_CONFIG } from "../../src/config/config.ts";
 import type { EventBody, StoredEvent } from "../../src/domain/types.ts";
 import { react } from "../../src/orchestration/reactor.ts";
@@ -122,4 +123,89 @@ test("an attached session still starting past spawn_timeout fails (the poller no
   expect(sweep(s, "2026-10-11T10:02:59.000Z", ctx()).events).toEqual([]);
   const r = sweep(s, "2026-10-11T10:03:01.000Z", ctx());
   expect(r.events).toEqual([{ type: "session.failed", thread: "001", payload: { session: C, reason: "agent did not start within 3m" } }]);
+});
+
+// ---------- final review 2 ----------
+
+/** An attached worker on open ticket T1 whose agent never started (status starting, never claimed). */
+function neverStarted(): State {
+  const s = stateOf(INIT, threadCreated("001", { status: "in_progress" }), { type: "thread.tab_opened", thread: "001", payload: { tab: "w1:t2", rootPane: "w1:p2" } });
+  apply(
+    s,
+    T0,
+    { type: "session.created", thread: "001", payload: { session: C, role: "coordinator", agent: "claude-code", name: "c" } },
+    { type: "session.attached", thread: "001", payload: { session: C, pane: "w1:p2" } },
+    { type: "session.started", thread: "001", payload: { session: C } },
+    { type: "ticket.created", thread: "001", payload: { ticket: "T1", title: "T1", scope: ["T1"] } },
+    { type: "session.created", thread: "001", payload: { session: W, role: "worker", agent: "claude-code", name: "w", ticket: "T1" } },
+    { type: "session.attached", thread: "001", payload: { session: W, pane: "w1:p3" } },
+  );
+  return s;
+}
+
+test("a worker failed for not starting has its split closed before its early exit's fresh worker is spawned", () => {
+  const s = neverStarted();
+  const now = "2026-10-11T10:03:01.000Z";
+  const r = sweep(s, now, ctx());
+  expect(r.events).toEqual([{ type: "session.failed", thread: "001", payload: { session: W, reason: "agent did not start within 3m" } }]);
+  // the daemon runs the sweep's effects before it applies its events: the pane closes before the reactor respawns
+  expect(r.effects).toEqual([{ kind: "pane.close", pane: "w1:p3" }]);
+  const after = react(s, apply(s, now, ...r.events), ctx());
+  expect(after.effects.filter((e) => e.kind === "agent.spawn")).toHaveLength(1);
+  // the coordinator hears one notice: the early exit, not the failure as well
+  expect(after.events.filter((e) => e.type === "notice.queued").map((e) => (e.type === "notice.queued" ? e.payload.text : ""))).toEqual([
+    "The worker for ticket T1 exited before starting (failed: agent did not start within 3m); agt started a fresh one.",
+  ]);
+});
+
+test("a coordinator failed for not starting keeps its pane (the thread's root pane)", () => {
+  const s = stateOf(INIT, threadCreated("001", { status: "in_progress" }), { type: "thread.tab_opened", thread: "001", payload: { tab: "w1:t2", rootPane: "w1:p2" } });
+  apply(s, T0, { type: "session.created", thread: "001", payload: { session: C, role: "coordinator", agent: "claude-code", name: "c" } }, { type: "session.attached", thread: "001", payload: { session: C, pane: "w1:p2" } });
+  const r = sweep(s, "2026-10-11T10:03:01.000Z", ctx());
+  expect(r.events).toEqual([{ type: "session.failed", thread: "001", payload: { session: C, reason: "agent did not start within 3m" } }]);
+  expect(r.effects).toEqual([]);
+});
+
+/** The coordinator idle at T0 with a notice whose delivery was held (a trust dialog, a slow read). */
+function heldNotice(): State {
+  const s = stateOf(INIT, threadCreated("001", { status: "in_progress" }));
+  apply(
+    s,
+    T0,
+    { type: "session.created", thread: "001", payload: { session: C, role: "coordinator", agent: "claude-code", name: "c" } },
+    { type: "session.attached", thread: "001", payload: { session: C, pane: "w1:p2" } },
+    { type: "session.started", thread: "001", payload: { session: C } },
+    { type: "notice.queued", thread: "001", payload: { session: C, text: "Tell from main." } },
+    { type: "notice.held", thread: "001", payload: { session: C, reason: "pane w1:p2 shows a trust dialog" } },
+  );
+  return s;
+}
+const DELIVER: Effect = { kind: "notice.deliver", session: C, thread: "001", agent: "claude-code", pane: "w1:p2", text: "Tell from main.", count: 1 };
+
+test("a held notice is delivered again by the sweep once 10s have passed since the attempt, until it goes", () => {
+  const s = heldNotice();
+  expect(s.sessions.get(C)!.noticeHeldAt).toBe(T0);
+  expect(sweep(s, "2026-10-11T10:00:09.000Z", ctx()).effects).toEqual([]);
+  expect(sweep(s, "2026-10-11T10:00:11.000Z", ctx()).effects).toEqual([DELIVER]);
+  // held again: the clock restarts from that attempt
+  apply(s, "2026-10-11T10:00:11.000Z", { type: "notice.held", thread: "001", payload: { session: C, reason: "slow read" } });
+  expect(sweep(s, "2026-10-11T10:00:20.000Z", ctx()).effects).toEqual([]);
+  expect(sweep(s, "2026-10-11T10:00:22.000Z", ctx()).effects).toEqual([DELIVER]);
+  // delivered: nothing is left to retry
+  apply(s, "2026-10-11T10:00:22.000Z", { type: "notice.delivered", thread: "001", payload: { session: C, count: 1 } });
+  expect(s.sessions.get(C)!.noticeHeldAt).toBeUndefined();
+  apply(s, "2026-10-11T10:00:40.000Z", { type: "agent.idle", thread: "001", payload: { session: C } });
+  expect(sweep(s, "2026-10-11T10:01:40.000Z", ctx()).effects).toEqual([]);
+});
+
+test("the sweep retries no delivery into a session that is working, blocked on a dialog, or gone", () => {
+  const working = heldNotice();
+  apply(working, T0, { type: "session.active", thread: "001", payload: { session: C } });
+  expect(sweep(working, "2026-10-11T10:01:00.000Z", ctx()).effects).toEqual([]);
+  const blocked = heldNotice();
+  apply(blocked, T0, { type: "agent.blocked", thread: "001", payload: { session: C } });
+  expect(sweep(blocked, "2026-10-11T10:01:00.000Z", ctx()).effects).toEqual([]);
+  const gone = heldNotice();
+  apply(gone, T0, { type: "session.lost", thread: "001", payload: { session: C, reason: "x" } });
+  expect(sweep(gone, "2026-10-11T10:01:00.000Z", ctx()).effects.filter((e) => e.kind === "notice.deliver")).toEqual([]);
 });
