@@ -35,6 +35,27 @@ Checked 2026-10-31 against the installed binaries (`--help` and strings only, no
 4. Add a row to `tests/agents/adapters.test.ts` and a line to the table above, from the agent's own `--help`.
 5. Add a release e2e row (`tests/release/`) and the agent to the login checks, then run `bun run e2e:release --agents <agent>`.
 
+## Behaviours agt adds around every agent
+
+They hold for every adapter; an agent without hooks (OpenCode, Codex, omp) is driven by Herdr's status poll instead.
+
+- **Folder trust.** An adapter with a `trustPrompt` (Claude Code) gets its one-time folder-trust dialog answered by the
+  spawn job, on screen, only in folders agt created (`<root>/.worktrees/…`), and only once the trusting option is seen
+  selected. agt never touches the agent's own config (Claude Code's included). Nothing is typed into a pane that may show
+  its agent's trust dialog (`typingUnsafe`, `src/agents/trust.ts`): a bootstrap or notice held there is retried by the
+  daemon's sweep about every 15s.
+- **Early exits.** A worker that ends, is lost or fails before it claims its ticket gets a fresh worker, with the same
+  `--agent`, at most twice per ticket; the coordinator hears "agt started a fresh one" or, when the fresh worker waits
+  for `max_workers`, a file conflict or a worktree, "agt queued a fresh one". After the third exit the ticket stays open
+  for the coordinator. A worker whose agent did not start within `session.spawn_timeout` has its pane closed first.
+- **Idle notice.** A worker idle for over 20s with its ticket in progress, no open question and nothing queued for it
+  is reported to its coordinator once per idle stretch (a hookless agent's poll flickering to idle mid-turn is not a
+  stop), at most three times per ticket; then once: "keeps stopping without reporting; return or block the ticket."
+- **`agt tell <thread>/<T> "<text>"`** reaches that ticket's live worker (from its coordinator or the user); `agt tell
+  <thread>` reaches the coordinator, `agt tell main` the main manager.
+- **Upgrades.** After upgrading agt, restart what is running (`agt daemon stop`, close the agents' panes, `agt start`):
+  the daemon and agents already running keep the old code, prompts and AGENTS.md rules.
+
 ## Verification notes
 
 ### OpenCode permission keys

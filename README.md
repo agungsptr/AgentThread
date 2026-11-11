@@ -114,13 +114,24 @@ A worker with a question runs `agt question`; the coordinator replies with `agt 
 worker is reported to its coordinator. If a session's first settled turn runs no `agt` command (for example because the
 configured model does not exist), the daemon reports `session.stalled` (coordinators and workers only, not main) instead of waiting forever.
 
+A worker that stops for more than about 20s with its ticket unfinished (no done, no block, no open question) is
+reported to its coordinator, at most three times per ticket, with a fourth notice to return or block it. The
+coordinator (or you) can reach that worker with `agt tell <thread>/<T> "<text>"`. A worker that exits before it claims
+its ticket gets a fresh one (at most twice per ticket; queued when `max_workers` is reached), and the coordinator is told.
+See [docs/agents.md](docs/agents.md#behaviours-agt-adds-around-every-agent).
+
+After upgrading agt, restart what is running: `agt daemon stop`, close the running agents' panes, then `agt start`
+again. A running daemon and the agents it started keep the old code and instructions.
+
 ### Trusting the project
 
 Claude Code asks once per folder whether you trust it. When main is Claude Code it asks in main's pane at `agt start`,
 and the worktrees below the root inherit your answer. When main is another agent but a role or tier uses Claude Code,
 `agt start` warns `claude-code agents will ask to trust <root>; open claude once in <root> and accept, or use
-claude-code for main`: otherwise the first Claude Code coordinator or worker stops at the dialog in its own pane. Codex
-is started with the project root and the worktree marked trusted, so it never asks.
+claude-code for main`. In the folders agt creates itself (thread directories and worktrees under `<root>/.worktrees/`)
+agt answers a coordinator's or worker's trust dialog on screen, as you would; it never answers it in your own folders
+and never reads or writes Claude Code's config. Codex is started with the project root and the worktree marked
+trusted, so it never asks.
 
 ### Notes on instruction files and git config
 
