@@ -592,8 +592,9 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         // yet is the stall watchdog's.
         if (s && isLive(s) && s.role === "worker" && s.idleSeq === ev.seq && s.authored && s.ticket && s.thread &&
           state.threads.get(s.thread)?.tickets.find((k) => k.id === s.ticket)?.status === "in_progress") {
-          const last = s.lastReport?.trim().replace(/\.$/, "");
-          notify(coordinatorToNotify(s.thread), `The worker for ticket ${s.ticket} went idle without reporting${last ? `: ${last}` : "."}${last ? "." : ""} Tell it what to do with agt tell, or return or block the ticket.`);
+          const line = s.lastReport?.split("\n")[0]?.trim() ?? "";
+          const last = (line.length > 200 ? `${line.slice(0, 199)}…` : line).replace(/[.!?]+$/, "");
+          notify(coordinatorToNotify(s.thread), `The worker for ticket ${s.ticket} went idle without reporting${last ? `: ${last}` : ""}. Tell it what to do with agt tell ${s.thread}/${s.ticket} "<text>", or return or block the ticket.`);
         }
         const ticketStatus = s?.thread ? state.threads.get(s.thread)?.tickets.find((k) => k.id === s.ticket)?.status : undefined;
         // A worker whose ticket is done or blocked has nothing left to do; ending it frees its slot.

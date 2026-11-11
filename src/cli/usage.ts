@@ -34,6 +34,7 @@ export const USAGE = `usage: agt <command>
   worker spawn <thread> --ticket <T> [--agent claude-code|opencode|codex|omp]
   worktree add <thread> <repo> [--from <branch>]   a task worktree .worktrees/<task>/<repo> on wip/<task>
   tell <thread|main> <message...>
+  tell <thread>/<ticket> <message...>   a task thread's coordinator: the ticket's live worker hears it
   event started|active|idle|compacting|ended   (used by Claude Code hooks)
   guide [main|coordinator|worker|all]   how to use agt in a role (default: $AGT_ROLE, else all)
   logs [-f]`;

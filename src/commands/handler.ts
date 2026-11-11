@@ -193,6 +193,14 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
 
   if (cmd.cmd === "stack.status") return { events: [], result: state.stack };
 
+  if (cmd.cmd === "tell" && cmd.target.includes("/")) {
+    // <thread>/<ticket>: that ticket's live worker. Only the thread's coordinator (and the user) may speak to it.
+    const [thread, ticket] = cmd.target.split("/") as [string, string];
+    if (actor.role !== "user" && !(actor.role === "coordinator" && actor.thread === thread)) reject(`only the coordinator of thread ${thread} (or the user) may tell a worker`);
+    const worker = liveSessions(state, thread, "worker").find((w) => w.ticket === ticket);
+    if (!worker) reject(`no live worker for ticket ${cmd.target}; return the ticket with agt ticket return ${cmd.target} "<what to fix>" or start one with agt worker spawn ${thread} --ticket ${ticket}`);
+    return { events: [{ type: "notice.queued", thread, payload: { session: worker.id, text: `Message from ${actor.role}: ${cmd.message}` } }] };
+  }
   if (cmd.cmd === "tell") {
     const target =
       cmd.target === "main" ? liveSessions(state, undefined, "main")[0] : liveSessions(state, cmd.target, "coordinator")[0];

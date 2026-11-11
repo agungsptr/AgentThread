@@ -188,6 +188,21 @@ describe("sessions", () => {
     expect(err(exec(s, { cmd: "tell", target: "001", message: "x" }))).toBe("no live coordinator for thread 001");
   });
 
+  test("tell <thread>/<ticket> reaches that ticket's live worker, from its coordinator or the user only", () => {
+    const s = threadWithTab();
+    const target = "001/T1";
+    expect(err(exec(s, { cmd: "tell", target, message: "x" }, COORD))).toBe(
+      `no live worker for ticket ${target}; return the ticket with agt ticket return ${target} "<what to fix>" or start one with agt worker spawn 001 --ticket T1`,
+    );
+    exec(s, { cmd: "worker.spawn", thread: "001", ticket: "T1" }, COORD);
+    const w = [...s.sessions.values()].find((x) => x.role === "worker" && x.ticket === "T1")!.id;
+    const want = { events: [{ type: "notice.queued", thread: "001", payload: { session: w, text: "Message from coordinator: fix it" } }] };
+    expect(exec(s, { cmd: "tell", target, message: "fix it" }, COORD)).toMatchObject(want);
+    expect(exec(s, { cmd: "tell", target, message: "fix it" }, USER)).toMatchObject({ events: [{ payload: { session: w, text: "Message from user: fix it" } }] });
+    expect(err(exec(s, { cmd: "tell", target, message: "x" }, { role: "coordinator", thread: "002", session: "c2" }))).toBe("only the coordinator of thread 001 (or the user) may tell a worker");
+    expect(err(exec(s, { cmd: "tell", target, message: "x" }, { role: "worker", thread: "001", ticket: "T2", session: "w2" }))).toBe("only the coordinator of thread 001 (or the user) may tell a worker");
+  });
+
   test("thread.new stores maxWorkers", () => {
     const s = stateOf(INIT);
     const r = exec(s, { cmd: "thread.new", title: "X", type: "bug", maxWorkers: 2 });

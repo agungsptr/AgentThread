@@ -37,8 +37,9 @@ function base(): State {
 const active = (s: State) => apply(s, WA, { type: "session.active", thread: "001", payload: { session: W } });
 const idle = (s: State) => apply(s, WA, { type: "agent.idle", thread: "001", payload: { session: W } });
 const idleNotices = (events: EventBody[]) => events.filter((e) => e.type === "notice.queued" && e.payload.text.includes("went idle without reporting"));
+const text = (events: EventBody[]) => events.flatMap((e) => (e.type === "notice.queued" ? [e.payload.text] : []));
 const NOTICE = (last: string) =>
-  `The worker for ticket T1 went idle without reporting: ${last}. Tell it what to do with agt tell, or return or block the ticket.`;
+  `The worker for ticket T1 went idle without reporting: ${last}. Tell it what to do with agt tell 001/T1 "<text>", or return or block the ticket.`;
 
 test("a worker that goes idle with its ticket in_progress is reported once per idle stretch", () => {
   const s = base();
@@ -76,9 +77,32 @@ test("no notice once the ticket is in review, blocked or done, or on a first tur
   const s = base();
   apply(s, WA, { type: "ticket.completed", thread: "001", payload: { ticket: "T1", summary: "s" } });
   apply(s, WA, { type: "ticket.reviewed", thread: "001", payload: { ticket: "T1" } } as EventBody);
+  expect(idleNotices(react(s, idle(s), ctx()).events)).toEqual([]);
   // first turn that ran no agt command (the stall watchdog's case)
   const f = base();
   f.sessions.get(W)!.authored = false;
   active(f);
   expect(idleNotices(react(f, idle(f), ctx()).events)).toEqual([]);
+});
+
+test("a delivered notice starts a turn: the next idle opens a new stretch and is reported", () => {
+  const s = base();
+  active(s);
+  expect(idleNotices(react(s, idle(s), ctx()).events)).toHaveLength(1);
+  expect(s.sessions.get(W)!.idleSeq).toBeDefined();
+  apply(s, USER, { type: "notice.queued", thread: "001", payload: { session: W, text: "go on" } }, { type: "notice.delivered", thread: "001", payload: { session: W, count: 1 } });
+  expect(s.sessions.get(W)!.idleSeq).toBeUndefined();
+  expect(idleNotices(react(s, idle(s), ctx()).events)).toHaveLength(1);
+});
+
+test("the spliced last message is one line of at most 200 characters, with no doubled punctuation", () => {
+  const s = base();
+  active(s);
+  apply(s, WA, { type: "note.recorded", thread: "001", payload: { message: `is it done?\nsecond line ${"x".repeat(300)}` } });
+  const [n] = text(idleNotices(react(s, idle(s), ctx()).events));
+  expect(n!).toBe(`The worker for ticket T1 went idle without reporting: is it done. Tell it what to do with agt tell 001/T1 "<text>", or return or block the ticket.`);
+  active(s);
+  apply(s, WA, { type: "note.recorded", thread: "001", payload: { message: "y".repeat(300) } });
+  const [m] = text(idleNotices(react(s, idle(s), ctx()).events));
+  expect(m!).toContain(`reporting: ${"y".repeat(199)}…. Tell it`);
 });

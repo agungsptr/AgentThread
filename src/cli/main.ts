@@ -205,7 +205,7 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
     }
     case "tell": {
       const [target, ...words] = argv.slice(1);
-      if (!target || !words.length) throw new UsageError("tell needs <thread|main> <message>");
+      if (!target || !words.length) throw new UsageError("tell needs <thread|main|thread/ticket> <message>");
       return send(findRoot(cwd, env), env, { cmd: "tell", target, message: words.join(" ") });
     }
     case "event":

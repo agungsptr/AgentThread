@@ -48,7 +48,7 @@ const COMMANDS: Record<SessionRole, string[]> = {
 /** Task threads only: the stage, stack-lock and waiting commands their coordinator runs (§13), and main's cleanup. */
 const COMMANDS_TASK: Partial<Record<SessionRole, string[]>> = {
   main: ["thread cleanup"],
-  coordinator: ["stage", "stack acquire", "stack release", "thread waiting"],
+  coordinator: ["stage", "stack acquire", "stack release", "thread waiting", "tell <thread>/<ticket>"],
 };
 
 /** Where a role's command line differs from the shared USAGE line, keyed by the prefix in COMMANDS. */

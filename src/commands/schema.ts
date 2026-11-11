@@ -88,7 +88,7 @@ export const CommandSchema = z.discriminatedUnion("cmd", [
   /** Internal: the background worktree job's outcome, reported by the daemon itself. */
   z.object({ cmd: z.literal("worktree.report"), thread: threadId, repo: text, ok: z.boolean(), error: z.string().optional() }),
   z.object({ cmd: z.literal("worker.spawn"), thread: threadId, ticket: ticketId, agent: z.enum(AGENT_KINDS).optional() }),
-  z.object({ cmd: z.literal("tell"), target: z.union([threadId, z.literal("main")]), message: text }),
+  z.object({ cmd: z.literal("tell"), target: z.union([threadId, z.literal("main"), z.string().regex(/^\d{3,}\/T\d+$/, "target must be <thread>, main or <thread>/<ticket>")]), message: text }),
   z.object({
     cmd: z.literal("session.signal"),
     session: sessionId.optional(),

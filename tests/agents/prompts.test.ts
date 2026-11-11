@@ -154,11 +154,15 @@ describe("idle and unblock rules (task threads only)", () => {
   const WORKER_RULE =
     'Never end a turn waiting for someone. If your ticket needs another ticket first, run agt ticket block 007/T2 --reason "<what you wait for>" and stop. When the ticket is done, run agt ticket done 007/T2 --summary "<one line>".';
   const COORD_RULE =
-    "- When you accept a ticket that another ticket was blocked on, reopen the blocked one with agt ticket reopen 007/<T> and start a new worker for it with agt worker spawn 007 --ticket <T> (a blocked worker has ended).";
+    "- When you accept a ticket that another ticket was blocked on, reopen the blocked one with agt ticket reopen 007/<T> and start a new worker for it with agt worker spawn 007 --ticket <T> (a blocked worker has ended). To speak to a worker that is still alive, use agt tell 007/<T> \"<message>\".";
 
   test("the worker blocks instead of waiting; the coordinator reopens a ticket whose dependency was accepted", () => {
     expect(worker(DEFAULT_CONFIG).split("\n")).toContain(WORKER_RULE);
     expect(coordinator(DEFAULT_CONFIG).split("\n")).toContain(COORD_RULE);
+  });
+
+  test("a task coordinator's guide lists the ticket form of agt tell", () => {
+    expect(guide({ role: "coordinator", root: "/ws", config: DEFAULT_CONFIG, thread: TASK })).toContain("agt tell <thread>/<ticket> <message...>");
   });
 
   test("legacy threads do not get them", () => {
