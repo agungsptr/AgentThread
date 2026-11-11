@@ -275,3 +275,31 @@ Added after heavy rerun 4 (report `.agentthread/e2e-reports/2026-11-02T12-54-03-
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run the full suite and typecheck.** Commit.
 - [ ] **Step 5: Rerun `ws-cleanup`, plus the OpenCode-worker rows** (controller).
+
+### Task 9: an idle worker with an unfinished ticket is never silent
+
+Added after rerun 5 of `ws-cleanup` (report `.agentthread/e2e-reports/2026-11-11T11-59-12-081Z.md`).
+- **What now works:** trust for both repos and both workers starting.
+- **What still failed:** the T2 worker committed its files, then ended its turn with "waiting for T3 … then ticket done" (seq 77, idle at 82). It never ran `ticket done` or `ticket block`.
+- **The deadlock:** T3 was accepted at 89. The coordinator then waited for T2's done notice, and T2 waited for nobody to wake it. The thread sat for 33 minutes.
+
+**Behavior:**
+- **Idle notice.** When a worker's turn ends (`agent.idle`) and its ticket is still `in_progress` (not `review`, `done` or `blocked`), the coordinator is told once per idle stretch: `The worker for ticket <T> went idle without reporting: <its last progress or note, if any>. Tell it what to do with agt tell, or return or block the ticket.`
+  - The stretch ends when the worker becomes active again.
+  - Use the existing notice path.
+  - No notice during the worker's first turn (the existing stall watchdog covers that).
+- **Worker rule** (task threads):
+  - Never end a turn waiting for someone. If your ticket needs another ticket first, run `agt ticket block <thread>/<T> "<what you wait for>"` and stop.
+  - When it is done, run `agt ticket done`.
+- **Coordinator rule** (task threads): when you accept a ticket that another ticket was blocked on, reopen the blocked one with `agt ticket reopen` and tell its worker.
+  - Check the existing reopen and tell commands, and use their exact names.
+
+- [ ] **Step 1: Write the failing tests.**
+  - A worker going idle with an `in_progress` ticket triggers the exact notice once, and not again on a second idle without activity in between.
+  - The notice fires again after the worker is active and idle again.
+  - There is no notice for tickets in `review`, `blocked` or `done`, or for the first turn.
+  - Prompt tests cover the two rules; legacy prompts stay byte-identical.
+- [ ] **Step 2: Run the tests.** Expected: FAIL.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run the full suite and typecheck.** Commit `fix: a worker that goes idle without reporting is reported to the coordinator`.
+- [ ] **Step 5: Rerun `ws-cleanup`** (controller).
