@@ -253,3 +253,25 @@ Added after heavy rerun 3 (report `.agentthread/e2e-reports/2026-11-02T10-46-38-
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run the full suite and typecheck.** Commit `fix: agt confirms the trust choice before enter and sends the bootstrap after the dialog`.
 - [ ] **Step 5: Rerun happy, cleanup and stack-lock** (controller).
+
+### Task 8: no early "No, exit" in the second worker's pane
+
+Added after heavy rerun 4 (report `.agentthread/e2e-reports/2026-11-02T12-54-03-463Z.md`).
+- **What passed:** `ws-happy-claude-code` and `ws-stack-lock`.
+- **What failed:** in `ws-cleanup`, every worker for T2 (repo `web`) exited about 5s after launch, 4 times. The pane screens show the trust dialog with `❯ No, exit` and then the shell prompt. The daemon log says agt trusted only `api`, never `web`.
+
+**Behavior:**
+- **Find out from the evidence who pressed enter in the `web` pane:**
+  - the kept scratch root `agt-e2e-repo-Bb3TLT`, with its `state.db` events and `daemon.log`;
+  - the run log's screens;
+  - the code paths that type into a pane: notice delivery, the agent-start prompt, the trust watch, the harness.
+
+  Then fix the cause, so nothing types `enter` into a pane whose agent is blocked on the trust dialog unless the confirmed trust answer does it.
+- **If the `web` watch never ran,** find why the second start in the same tab is not watched, and fix it.
+- **Write a regression test** that reproduces the found sequence with a fake Herdr.
+
+- [ ] **Step 1: Read the evidence.** Write the cause into the report, citing event seqs and screen lines.
+- [ ] **Step 2: Write the failing test.**
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run the full suite and typecheck.** Commit.
+- [ ] **Step 5: Rerun `ws-cleanup`, plus the OpenCode-worker rows** (controller).
