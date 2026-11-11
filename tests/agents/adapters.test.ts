@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { adapterFor } from "../../src/agents/adapters.ts";
 import { hookSettings } from "../../src/agents/claude.ts";
@@ -221,4 +222,27 @@ test("every agent kind's launch marks the agent's own process, never its tab env
 
 test("every adapter has a display name for log lines", () => {
   expect((["claude-code", "opencode", "codex", "omp"] as const).map((a) => adapterFor(a).displayName)).toEqual(["Claude Code", "OpenCode", "Codex", "omp"]);
+});
+
+test("omp passes a compaction overlay at context_threshold x context_window tokens, regenerated when the config changes", () => {
+  const root = mkdtempSync(join(tmpdir(), "agt-omp-"));
+  try {
+    const launch = (config = DEFAULT_CONFIG) => adapterFor("omp").launch({ ...base, root, config, run: { agent: "omp" } }).args;
+    const { context_threshold: th, context_window: win } = DEFAULT_CONFIG.session.rotation;
+    const args = launch();
+    const i = args.indexOf("--config");
+    expect(i).toBeGreaterThanOrEqual(0);
+    const file = args[i + 1]!;
+    expect(file.startsWith(join(root, ".agentthread"))).toBe(true);
+    expect(readFileSync(file, "utf8")).toBe(`compaction:\n  thresholdTokens: ${Math.floor(th * win)}\n`);
+    const changed = { ...DEFAULT_CONFIG, session: { ...DEFAULT_CONFIG.session, rotation: { ...DEFAULT_CONFIG.session.rotation, context_window: 100_000 } } };
+    const file2 = launch(changed)[launch(changed).indexOf("--config") + 1]!;
+    expect(readFileSync(file2, "utf8")).toBe(`compaction:\n  thresholdTokens: ${Math.floor(th * 100_000)}\n`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("omp launches without the overlay when it cannot be written", () => {
+  expect(adapterFor("omp").launch({ ...base, root: "/nonexistent-agt-root/x", run: { agent: "omp" } }).args).not.toContain("--config");
 });

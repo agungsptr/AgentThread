@@ -1,4 +1,5 @@
 import { handoffRequestPrompt, returnNotice } from "../agents/prompts.ts";
+import { adapterFor } from "../agents/adapters.ts";
 import { roleAgent } from "../agents/roles.ts";
 import type { Effect } from "../commands/handler.ts";
 import { type Config, durationMs } from "../config/config.ts";
@@ -84,6 +85,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
   const spawnedPerThread = new Map<string, number>();
   const spawnedTickets = new Set<string>();
   const ended = new Set<string>();
+  const contextNoticed = new Set<string>();
 
   const take = (r: { events: EventBody[]; effects: Effect[] }) => {
     out.push(...r.events);
@@ -629,6 +631,14 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
             requestRotation(s, "context");
           } else if (s && s.role === "coordinator" && s.turns >= rotation.max_turns) {
             requestRotation(s, "turns");
+          } else if (s && isLive(s) && s.role === "worker" && s.ticket && s.contextTokens !== undefined && adapterFor(s.agent).capabilities.contextSize && s.contextTokens / rotation.context_window >= rotation.context_threshold) {
+            // Workers are never rotated: the coordinator hears once per ticket and decides whether to return it.
+            const k = state.threads.get(s.thread ?? "")?.tickets.find((x) => x.id === s.ticket);
+            if (k && !k.contextReported && !contextNoticed.has(`${s.thread}/${s.ticket}`)) {
+              contextNoticed.add(`${s.thread}/${s.ticket}`);
+              out.push({ type: "worker.context_reported", thread: s.thread!, payload: { session: s.id, ticket: s.ticket } });
+              notify(coordinatorToNotify(s.thread), `The worker for ticket ${s.ticket} is at ${Math.round((s.contextTokens / rotation.context_window) * 100)}% of its context. If it keeps going, return the ticket so a fresh worker continues: agt ticket return ${s.thread}/${s.ticket} "<what is left>".`);
+            }
           }
           if (s && isLive(s) && s.role !== "main" && !s.rotation && !requested.has(s.id) && !rotated.has(s.id) && !reminded.has(s.id) && !s.remindedSinceProgress) {
             const since = Date.parse(ev.ts) - Date.parse(s.lastProgressAt ?? s.createdAt);

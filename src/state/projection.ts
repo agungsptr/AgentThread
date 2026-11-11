@@ -113,6 +113,8 @@ export interface Ticket {
   earlyExits?: number;
   /** Idle notices the coordinator got for the ticket's workers (worker.idle_reported); capped (orchestration/sweep.ts). */
   idleNotices?: number;
+  /** The coordinator was told a worker of the ticket passed the context threshold (worker.context_reported): once per ticket. */
+  contextReported?: boolean;
 }
 
 export interface Entry {
@@ -850,6 +852,11 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
     case "notice.held_reported":
       sessionOf(state, ev.seq, ev.payload.session).noticeHeldReported = true;
       return true;
+    case "worker.context_reported": {
+      const k = state.threads.get(ev.thread)?.tickets.find((x) => x.id === ev.payload.ticket);
+      if (k) k.contextReported = true;
+      return true;
+    }
     case "worker.idle_reported": {
       const s = sessionOf(state, ev.seq, ev.payload.session);
       if (s.idleSeq !== undefined) s.idleReported = true;

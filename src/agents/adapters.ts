@@ -1,4 +1,4 @@
-import { realpathSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Config } from "../config/config.ts";
 import type { AgentKind, SessionRole } from "../domain/types.ts";
@@ -166,6 +166,30 @@ const codexAdapter: AgentAdapter = {
   capabilities: NO_HOOKS,
 };
 
+/**
+ * omp's `compaction.thresholdTokens` (documented in omp's docs/compaction.md) is a fixed trigger in tokens. The overlay
+ * lives under `<root>/.agentthread/` and is rewritten when the config's threshold changes; undefined when it cannot be written.
+ */
+function ompOverlay(root: string, config: Config): string | undefined {
+  const { context_threshold, context_window } = config.session.rotation;
+  const text = `compaction:\n  thresholdTokens: ${Math.floor(context_threshold * context_window)}\n`;
+  const dir = join(root, ".agentthread");
+  const file = join(dir, "omp-compaction.yml");
+  try {
+    let current: string | undefined;
+    try {
+      current = readFileSync(file, "utf8");
+    } catch {}
+    if (current !== text) {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(file, text);
+    }
+    return file;
+  } catch {
+    return undefined;
+  }
+}
+
 const ompAdapter: AgentAdapter = {
   agent: "omp",
   displayName: "omp",
@@ -173,9 +197,11 @@ const ompAdapter: AgentAdapter = {
   bin: "omp",
   instructionFiles: [],
   prompt: "positional",
-  launch({ run, config }) {
+  launch({ run, config, root }) {
+    const overlay = ompOverlay(root, config);
     return {
       args: [
+        ...(overlay ? ["--config", overlay] : []),
         ...(run.model ? ["--model", run.model] : []),
         ...(run.effort ? ["--thinking", run.effort] : []),
         // Not autonomous: no flag, so omp's own default approval mode applies.
