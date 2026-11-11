@@ -26,10 +26,13 @@ export interface SpawnJob {
   /**
    * A worker's split placed by layout (placeWorker): the largest pane of the thread tab `threadTab` that still splits
    * into two of at least MIN_PANE_COLS x MIN_PANE_ROWS, else a workers tab labelled `workersLabel` (then
-   * `<workersLabel>-2`, …) opened with the thread tab's env `tabEnv`. Without it, or when the layout cannot be read,
-   * the job splits `split.pane` in `split.direction`.
+   * `<workersLabel>-2`, …) opened with this worker's `split.env` less `processEnv` as its tab env (the way a thread tab
+   * carries its first coordinator's env). `processEnv` (the agent-process marker, a few bytes) is the only line typed
+   * into that root pane, as for a coordinator in a thread tab's root pane: a typed line past the terminal's canonical
+   * limit (1024 bytes on macOS) is refused. Without `place`, or when the layout cannot be read, the job splits
+   * `split.pane` in `split.direction`.
    */
-  place?: { workspace: string; threadTab: string; workersLabel: string; tabEnv: Record<string, string> };
+  place?: { workspace: string; threadTab: string; workersLabel: string; processEnv: Record<string, string> };
   args: string[];
   bootstrap: string;
   /**
@@ -375,8 +378,8 @@ function closeQuietly(herdr: HerdrBridge, pane: string): void {
 }
 
 /** No worker pane is made narrower or shorter than this; a split needs twice as much. */
-export const MIN_PANE_COLS = 80;
-export const MIN_PANE_ROWS = 20;
+export const MIN_PANE_COLS = 60;
+export const MIN_PANE_ROWS = 15;
 
 /**
  * Where a worker splits a tab: the largest pane (by area) that splits into two panes of at least MIN_PANE_COLS x
@@ -408,7 +411,7 @@ export function workersTabOrder(label: string, base: string): number | undefined
 
 /**
  * Places a worker by layout (see SpawnJob.place): a split of the thread tab, else of a workers tab, else a new workers
- * tab, whose root pane the worker takes (with its env exported there, since the tab has the thread tab's env).
+ * tab, opened with the worker's env, whose root pane the worker takes (only `place.processEnv` is typed there).
  * Undefined, for the job's plain split, when the job has no placement, the bridge cannot read layouts, or the thread
  * tab's layout cannot be read. Closing the worker's pane closes a workers tab with it once it is its last (Herdr
  * closes a tab with its last pane), as `herdr.close_worker_pane_on_end` and the thread tab's close do.
@@ -467,8 +470,9 @@ function placeWorker(herdr: HerdrBridge, job: SpawnJob, log: (m: string) => void
   let n = 1;
   while (ours.some((t) => t.n === n)) n++;
   const label = n === 1 ? place.workersLabel : `${place.workersLabel}-${n}`;
-  const { rootPaneId } = herdr.createTab({ workspace: place.workspace, cwd: split.cwd, label, env: place.tabEnv });
-  return { pane: rootPaneId, exportEnv: split.env };
+  const tabEnv = Object.fromEntries(Object.entries(split.env).filter(([k]) => !Object.hasOwn(place.processEnv, k)));
+  const { rootPaneId } = herdr.createTab({ workspace: place.workspace, cwd: split.cwd, label, env: tabEnv });
+  return { pane: rootPaneId, exportEnv: place.processEnv };
 }
 
 /**

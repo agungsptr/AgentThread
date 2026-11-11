@@ -801,9 +801,12 @@ function layoutBridge(tabs: Record<string, { label: string; panes: Record<string
 const PLACED: SpawnJob = {
   ...JOB,
   bootstrap: "",
-  split: { pane: "w1:p2", direction: "down", cwd: "/wt", env: { AGT_SESSION: "s-1", AGT_ROLE: "worker" } },
-  place: { workspace: "w1", threadTab: "w1:t2", workersLabel: "001-x-workers", tabEnv: { AGT_ROLE: "coordinator" } },
+  split: { pane: "w1:p2", direction: "down", cwd: "/wt", env: { AGT_SESSION: "s-1", AGT_ROLE: "worker", AGT_AGENT_PROCESS: "1", BIG: "x".repeat(1800) } },
+  place: { workspace: "w1", threadTab: "w1:t2", workersLabel: "001-x-workers", processEnv: { AGT_AGENT_PROCESS: "1" } },
 };
+
+/** Real Herdr refuses a typed line past the terminal's canonical limit (1024 bytes on macOS): agt types only short ones. */
+const longTyped = (calls: string[]) => calls.filter((c) => c.startsWith("run ") && Buffer.byteLength(c) > 200);
 
 const attachedPane = async (job: SpawnJob, b: HerdrBridge) => {
   const reports: { pane?: string }[] = [];
@@ -824,19 +827,33 @@ test("the largest pane is split, not the job's split source", async () => {
 });
 
 test("a narrow, tall pane is split down", async () => {
-  const { b, calls } = layoutBridge({ "w1:t2": { label: "001-x", panes: { "w1:p2": rect(120, 60) } } });
+  const { b, calls } = layoutBridge({ "w1:t2": { label: "001-x", panes: { "w1:p2": rect(100, 60) } } });
   await attachedPane(PLACED, b);
   expect(calls).toContain("split w1:p2 down");
 });
 
-test("repeated workers never make a pane under 80 x 20, the divider counted", async () => {
-  for (const start of [rect(200, 50), rect(160, 40), rect(161, 41), rect(321, 81)]) {
+test("e2e 2026-11-11: a thread tab whose only pane is 120 x 40 takes workers without any long typed line", async () => {
+  const { b, calls, tabs } = layoutBridge({ "w1:t2": { label: "001-x", panes: { "w1:p2": rect(120, 40) } } });
+  await attachedPane(PLACED, b);
+  expect(calls).toContain("split w1:p2 down");
+  for (let i = 0; i < 6; i++) await attachedPane(PLACED, b); // fills the tab, then a workers tab
+  expect(calls.some((c) => c.startsWith("tab create w1 001-x-workers "))).toBe(true);
+  expect(longTyped(calls)).toEqual([]);
+  for (const tab of Object.values(tabs))
+    for (const r of Object.values(tab.panes)) {
+      expect(r.width).toBeGreaterThanOrEqual(60);
+      expect(r.height).toBeGreaterThanOrEqual(15);
+    }
+});
+
+test("repeated workers never make a pane under 60 x 15, the divider counted", async () => {
+  for (const start of [rect(200, 50), rect(120, 30), rect(121, 31), rect(241, 61)]) {
     const { b, tabs } = layoutBridge({ "w1:t2": { label: "001-x", panes: { "w1:p2": start } } });
     for (let i = 0; i < 8; i++) await attachedPane(PLACED, b);
     for (const tab of Object.values(tabs))
       for (const r of Object.values(tab.panes)) {
-        expect(r.width).toBeGreaterThanOrEqual(80);
-        expect(r.height).toBeGreaterThanOrEqual(20);
+        expect(r.width).toBeGreaterThanOrEqual(60);
+        expect(r.height).toBeGreaterThanOrEqual(15);
       }
   }
 });
@@ -847,18 +864,20 @@ test("a chosen pane that closes before its split falls back to today's split", a
   expect(calls).toEqual(["pane list w1", "layout w1:p2", "split w1:p7 right", "split w1:p2 down", "start w1:p50"]);
 });
 
-test("a full tab puts the worker in the thread's workers tab, created with the thread tab's env; the worker's env is exported there", async () => {
+test("a full tab puts the worker in the thread's workers tab, created with the worker's env; only the agent-process marker is typed", async () => {
   const { b, calls } = layoutBridge({ "w1:t2": { label: "001-x", panes: { "w1:p2": rect(100, 30), "w1:p3": rect(99, 30, 101) } } });
   const pane = await attachedPane(PLACED, b);
   expect(pane).toBe("w1:p51");
+  const { AGT_AGENT_PROCESS: _marker, ...tabEnv } = PLACED.split!.env;
   expect(calls).toEqual([
     "pane list w1",
     "layout w1:p2",
     "tab list w1",
-    `tab create w1 001-x-workers /wt {"AGT_ROLE":"coordinator"}`,
-    "run w1:p51  export AGT_SESSION='s-1' AGT_ROLE='worker'",
+    `tab create w1 001-x-workers /wt ${JSON.stringify(tabEnv)}`,
+    "run w1:p51  export AGT_AGENT_PROCESS='1'",
     "start w1:p51",
   ]);
+  expect(longTyped(calls)).toEqual([]);
 });
 
 test("the workers tab is split by the same rule; when it is full too, another workers tab opens", async () => {
@@ -902,12 +921,12 @@ test("a bridge without layout calls, or a job without placement, splits as today
   expect(calls).toEqual(["split w1:p2 down", "start w1:p51"]);
 });
 
-test("chooseSplit: the largest pane that allows a split; right from 161 columns, else down from 41 rows (a divider each)", () => {
+test("chooseSplit: the largest pane that allows a split; right from 121 columns, else down from 31 rows (a divider each)", () => {
   const l = (...panes: [string, Rect][]) => ({ tabId: "w1:t1", zoomed: false, panes: panes.map(([paneId, rect]) => ({ paneId, rect })) });
-  expect(chooseSplit(l(["a", rect(161, 20)]))).toEqual({ pane: "a", direction: "right" });
-  expect(chooseSplit(l(["a", rect(160, 41)]))).toEqual({ pane: "a", direction: "down" });
-  expect(chooseSplit(l(["a", rect(160, 40)]))).toBeUndefined();
-  expect(chooseSplit(l(["a", rect(150, 40)], ["b", rect(90, 45)]))).toEqual({ pane: "b", direction: "down" });
+  expect(chooseSplit(l(["a", rect(121, 15)]))).toEqual({ pane: "a", direction: "right" });
+  expect(chooseSplit(l(["a", rect(120, 31)]))).toEqual({ pane: "a", direction: "down" });
+  expect(chooseSplit(l(["a", rect(120, 30)]))).toBeUndefined();
+  expect(chooseSplit(l(["a", rect(120, 30)], ["b", rect(70, 35)]))).toEqual({ pane: "b", direction: "down" });
   expect(chooseSplit(l(["a", rect(160, 50)], ["b", rect(200, 50)]))).toEqual({ pane: "b", direction: "right" });
   expect(chooseSplit({ ...l(["a", rect(200, 50)]), zoomed: true })).toBeUndefined();
 });

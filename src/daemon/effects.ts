@@ -17,7 +17,7 @@ import { HerdrCli, HerdrError, spawnAsync } from "../herdr/bridge.ts";
 import { addWorktreeAsync, addWorktreeFromAsync } from "../project/git.ts";
 import { paths } from "../project/paths.ts";
 import { NOTICE_HELD_CAPPED_AT, NOTICE_RETRY_MAX_MS } from "../orchestration/reactor.ts";
-import { tabEnv, threadGitEnv } from "../orchestration/sessions.ts";
+import { threadGitEnv } from "../orchestration/sessions.ts";
 import type { Thread } from "../state/projection.ts";
 
 type HerdrEffect = Extract<Effect, { kind: "herdr.tab.ensure" | "herdr.tab.close" }>;
@@ -268,7 +268,7 @@ export function createEffectRunner(opts: {
               : {}),
             // A worker is placed by the thread tab's layout, or in the thread's workers tab when that tab is full.
             ...(effect.role === "worker" && effect.splitFrom && t.tab
-              ? { place: { workspace: layout.workspace, threadTab: t.tab, workersLabel: workersLabel(t), tabEnv: tabEnv(t, { root: opts.root, config: opts.config }) } }
+              ? { place: { workspace: layout.workspace, threadTab: t.tab, workersLabel: workersLabel(t), processEnv: launched.processEnv } }
               : {}),
             args: launched.args,
             bootstrap: bootstrapPrompt(prompt, effect.bootstrap ?? "start", effect.notice),
