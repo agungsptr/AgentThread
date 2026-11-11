@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { agtTrustedFolders, answerTrustIn, watchTrustDialogs, type Herdr } from "../release/harness.ts";
+import { agtTrustedFolders, answerTrustIn, say, watchTrustDialogs, type Herdr } from "../release/harness.ts";
+import { P8_DIALOG } from "../fixtures/trust-screens.ts";
 
 const TRUST_SCREEN = "Quick safety check: Is this a project you created or one you trust?\n ❯ 1. No, exit\n   2. Yes, I trust this folder";
 const YES_SCREEN = "Quick safety check: Is this a project you created or one you trust?\n   1. No, exit\n ❯ 2. Yes, I trust this folder";
@@ -133,4 +134,40 @@ test("heavy rerun 4: a worker Herdr lists idle at a wrapped trust dialog is seen
   });
   await w.done;
   expect(foreign).toEqual(["w1:p5"]);
+});
+
+test("a worker Herdr lists idle at a dialog chopped beyond reading (4-column pane) fails the row after the grace", async () => {
+  let t = 0;
+  const foreign: string[] = [];
+  let w!: ReturnType<typeof watchTrustDialogs>;
+  const herdr = {
+    agents: async () => [{ pane_id: "w1:p8", agent: "claude", agent_status: "idle" }],
+    run: async () => ({ exitCode: 0, stdout: P8_DIALOG, stderr: "" }),
+  } as unknown as Parameters<typeof watchTrustDialogs>[0];
+  w = watchTrustDialogs(herdr, () => "main", () => {}, (pane) => void foreign.push(pane), {
+    now: () => t,
+    sleep: async (ms) => void ((t += ms) >= 60_000 && w.stop()),
+  });
+  await w.done;
+  expect(foreign).toEqual(["w1:p8"]);
+});
+
+test("say never types into a pane that may show a trust dialog: it waits for it to go, and gives up with the screen", async () => {
+  const fakeHerdr = (screens: string[]) => {
+    const typed: string[] = [];
+    const herdr = {
+      run: async () => ({ exitCode: 0, stdout: screens.length > 1 ? screens.shift()! : screens[0]!, stderr: "" }),
+      ok: async (args: string[]) => void typed.push(args.join(" ")),
+    } as unknown as Herdr;
+    return { herdr, typed };
+  };
+  let t = 0;
+  const clock = { now: () => t, sleep: async (ms: number) => void (t += ms), waitMs: 5_000 };
+  const gone = fakeHerdr([P8_DIALOG, P8_DIALOG, "Welcome to Claude Code\n❯ "]);
+  await say(gone.herdr, "w1:p3", "go on", clock);
+  expect(gone.typed).toEqual(["agent prompt w1:p3 go on"]);
+  t = 0;
+  const stuck = fakeHerdr([P8_DIALOG]);
+  await expect(say(stuck.herdr, "w1:p3", "go on", clock)).rejects.toThrow("not typing into pane w1:p3: it still shows a trust dialog after 5s");
+  expect(stuck.typed).toEqual([]);
 });

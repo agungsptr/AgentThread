@@ -54,6 +54,22 @@ export const isTrustDialog = (screen: string, prompt: TrustPrompt): boolean => {
  */
 export const trustDialogLive = (screen: string, prompt: TrustPrompt): boolean => isTrustDialog(screen, prompt) && prompt.footer.test(collapse(screen));
 
+/** `re` with its spaces removed, for a screen with all its whitespace removed. */
+const squeezed = (re: RegExp) => new RegExp(re.source.replace(/\s+/g, ""), re.flags.replace("g", ""));
+
+/**
+ * Whether the dialog may be on `screen`, however it is drawn: the screen with all its whitespace removed holds a
+ * fragment of the dialog (its question or an option) with its spaces removed. In a pane only a few columns wide the
+ * dialog's words are chopped across lines ("No," / "exit"), and neither isTrustDialog nor trustDialogLive can read it.
+ * Conservative: what types into a pane (a bootstrap, a notice, the e2e harness) holds while this is true and the agent
+ * is not known to be past the dialog; answering still needs the dialog read whole (trustDialogLive, trustChoiceSelected).
+ * A dialog left above a shell prompt by an agent that exited counts here too.
+ */
+export const trustDialogMaybe = (screen: string, prompt: TrustPrompt): boolean => {
+  const text = screen.replace(/\s+/g, "");
+  return [prompt.refuse, prompt.choice, ...prompt.screen].some((re) => squeezed(re).test(text));
+};
+
 /**
  * Whether the dialog on `screen` has the trusting option selected. Only the dialog's own option lines are judged: the
  * last `refuse` line on screen and the first `choice` line after it. The trusting line must carry the marker and the

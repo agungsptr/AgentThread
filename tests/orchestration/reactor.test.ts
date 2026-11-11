@@ -71,6 +71,15 @@ test("a fresh session.started delivers the notices queued before it", () => {
   ]);
 });
 
+test("a delivery on a start only Herdr's poll saw is marked unconfirmed (Herdr may list a startup dialog idle)", () => {
+  const s = base();
+  apply(s, { type: "notice.queued", thread: "001", payload: { session: C, text: "Start coordinating." } });
+  const started = apply(s, { type: "session.started", thread: "001", payload: { session: C, source: "poll" } });
+  expect(react(s, started, ctx()).effects).toEqual([
+    { kind: "notice.deliver", session: C, thread: "001", pane: "w1:p2", text: "Start coordinating.", count: 1, unconfirmed: true },
+  ]);
+});
+
 test("idle worker with a done ticket ends, closes its pane, and the slot spawns the next queued ticket", () => {
   const s = base(1);
   apply(

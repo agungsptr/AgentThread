@@ -7,13 +7,13 @@ import { adapterFor, trustPrompts } from "../agents/adapters.ts";
 import { bootstrapPrompt } from "../agents/prompts.ts";
 import { agentsMd, writeAgentsFilesAsync, writeThreadDirFiles } from "../agents/agents-md.ts";
 import { attachDeadline, launchSpawnJob, type SpawnJob } from "../agents/spawn-job.ts";
-import { trustDialogLive } from "../agents/trust.ts";
+import { trustDialogLive, trustDialogMaybe } from "../agents/trust.ts";
 import { canonical, cleanupThread, type CleanupOutcome } from "./cleanup-job.ts";
 import type { Effect } from "../commands/handler.ts";
 import type { Command } from "../commands/schema.ts";
 import { durationMs, type Config } from "../config/config.ts";
 import type { EventBody, Layout } from "../domain/types.ts";
-import { HerdrCli, spawnAsync } from "../herdr/bridge.ts";
+import { HerdrCli, HerdrError, spawnAsync } from "../herdr/bridge.ts";
 import { addWorktreeAsync, addWorktreeFromAsync } from "../project/git.ts";
 import { paths } from "../project/paths.ts";
 import { threadGitEnv } from "../orchestration/sessions.ts";
@@ -42,7 +42,7 @@ export function asyncHerdr(cli: HerdrCli): EffectBridge {
     agentPrompt: (target, text) => cli.agentPromptAsync(target, text),
     closePane: (pane) => cli.closePaneAsync(pane),
     agentExists: (target) => cli.agentExistsAsync(target),
-    paneRead: (pane) => cli.paneReadAsync(pane),
+    paneRead: (pane) => cli.paneReadAsync(pane, NOTICE_READ_MS),
   };
 }
 
@@ -63,6 +63,8 @@ export function createEffectRunner(opts: {
   reportCleanup?: (command: Extract<Command, { cmd: "thread.cleanup_report" }>) => void;
   /** The worktree_setup command's time limit (default 5 minutes). */
   setupTimeoutMs?: number;
+  /** How long a notice delivery waits for the pane's screen (default NOTICE_READ_MS). */
+  noticeReadMs?: number;
 }): EffectRunner {
   const log = opts.log ?? ((m: string) => console.error(m));
   const launch = opts.launch ?? ((job: SpawnJob) => launchSpawnJob(job, { logFile: paths(opts.root).daemonLog }));
@@ -272,12 +274,19 @@ export function createEffectRunner(opts: {
         const layout = opts.layout();
         if (!layout) return [];
         const bridge = bridgeFor(layout);
-        // Herdr may list an agent at its trust dialog idle (a narrow pane wraps the dialog's footer), and a prompt's
-        // Enter would pick "No, exit". Not delivered, the notice stays queued for the agent's next idle.
-        const screen = bridge.paneRead ? await Promise.resolve(bridge.paneRead(effect.pane)).catch(() => undefined) : undefined;
-        if (screen !== undefined && trustPrompts().some((p) => trustDialogLive(screen, p))) {
-          log(`notice delivery to session ${effect.session} held: pane ${effect.pane} shows a trust dialog; it goes at the agent's next idle`);
+        // Herdr may list an agent at its trust dialog idle (a narrow pane wraps or chops the dialog), and a prompt's
+        // Enter would pick "No, exit". The dialog read whole always holds the delivery; its fragments hold it while only
+        // Herdr's poll says the agent started; a screen not read in time holds it too. Not delivered, the notice stays
+        // queued for the agent's next idle.
+        const held = (why: string) => {
+          log(`notice delivery to session ${effect.session} held: ${why}; it goes at the agent's next idle`);
           return [];
+        };
+        if (bridge.paneRead) {
+          const screen = await readWithin(bridge.paneRead(effect.pane), opts.noticeReadMs ?? NOTICE_READ_MS);
+          if (screen === "timeout") return held(`pane ${effect.pane}'s screen was not read within ${opts.noticeReadMs ?? NOTICE_READ_MS}ms`);
+          if (screen !== undefined && trustPrompts().some((p) => trustDialogLive(screen, p) || (effect.unconfirmed === true && trustDialogMaybe(screen, p))))
+            return held(`pane ${effect.pane} shows a trust dialog`);
         }
         try {
           await bridge.agentPrompt(effect.pane, effect.text);
@@ -315,6 +324,22 @@ export function createEffectRunner(opts: {
 }
 
 /** Runs an effect; stop() ends the background worktree jobs (the daemon calls it when it stops). */
+/** How long a notice delivery waits for the pane's screen before it holds the notice for the next trigger. */
+const NOTICE_READ_MS = 3_000;
+
+/** The screen, "timeout" when it took longer than `ms` (Herdr's own timeout too), or undefined when it could not be read. */
+async function readWithin(read: Promise<string> | string, ms: number): Promise<string | "timeout" | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve(read).catch((e: unknown) => (e instanceof HerdrError && e.code === "timeout" ? ("timeout" as const) : undefined)),
+      new Promise<"timeout">((r) => (timer = setTimeout(() => r("timeout"), ms))),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export type EffectRunner = ((effect: Effect) => Promise<EventBody[]>) & { stop(): Promise<void> };
 
 type RepoWorktreeEffect = Extract<Effect, { kind: "git.worktree.add"; repo: string }>;

@@ -4,7 +4,7 @@ import { join, relative, resolve, sep } from "node:path";
 import { HerdrError, shellQuote, type HerdrBridge, type PaneScreen } from "../herdr/bridge.ts";
 import { adapterForHerdrKind } from "./adapters.ts";
 import { AGT_BIN } from "./claude.ts";
-import { TRUST_TRIES, answerTrustDialog, isTrustDialog, trustDialogLive } from "./trust.ts";
+import { TRUST_TRIES, answerTrustDialog, isTrustDialog, trustDialogLive, trustDialogMaybe } from "./trust.ts";
 
 export interface SpawnJob {
   root: string;
@@ -194,12 +194,15 @@ export async function runSpawnJob(
 const SCREEN_LINES = 40;
 const lastLines = (text: string) => text.split("\n").slice(-SCREEN_LINES).join("\n");
 
-/** Whether `pane` shows its agent kind's trust dialog waiting for input. A screen that cannot be read is taken as no. */
+/**
+ * Whether `pane` may show its agent kind's trust dialog: read whole, or only its chopped fragments (trustDialogMaybe).
+ * A screen that cannot be read is taken as no.
+ */
 async function trustDialogUp(kind: string, pane: string, screen: PaneScreen | undefined): Promise<boolean> {
   const prompt = adapterForHerdrKind(kind)?.trustPrompt;
   if (!prompt || !screen) return false;
   const text = await screen.paneReadAsync(pane).catch(() => undefined);
-  return text !== undefined && trustDialogLive(text, prompt);
+  return text !== undefined && (trustDialogLive(text, prompt) || trustDialogMaybe(text, prompt));
 }
 
 /** The trust watch lasts about 60s: TRUST_POLLS reads, TRUST_POLL_MS apart. */
@@ -227,9 +230,10 @@ export function agtCreatedFolder(root: string, cwd: string): boolean {
  * `blocked` whose screen shows the whole dialog, or to one it lists running whose screen shows the dialog waiting
  * (trustDialogLive: Herdr misses a dialog wrapped by a narrow pane), and `confirm` only once the trusting option is
  * seen selected (answerTrustDialog); a dialog whose cursor will not move there is logged and left to the user. Once
- * Herdr has confirmed the launch (its start returned) and lists the agent running (idle, working, done) with no dialog
- * on its screen, the agent is past the dialog (`ready`) and the watch ends; before the launch such a status may be the
- * pane's previous agent. Until then, and on any error, it polls on until its end. A watch that ends unanswered while
+ * Herdr has confirmed the launch (its start returned) and lists the agent running (idle, working, done) on two reads in
+ * a row with no dialog on its screen, not even its fragments before an answer (trustDialogMaybe: a pane a few columns
+ * wide chops it beyond reading), the agent is past the dialog (`ready`) and the watch ends; before the launch such a
+ * status may be the pane's previous agent. Until then, and on any error, it polls on until its end. A watch that ends unanswered while
  * the agent is blocked (another dialog, or one it did not recognize) writes the screen it last read to the log.
  *
  * `released` resolves when the bootstrap may go: the watch ended (the agent is ready, or it gave up), or `attachBy`
@@ -250,8 +254,10 @@ function watchTrust(
   let stopped = false;
   let launched = false;
   let answered = false;
-  /** Set when the watch saw the launched agent running with no dialog on its screen. */
+  /** Set when the watch saw the launched agent running with no dialog on its screen, twice in a row. */
   let ready = false;
+  /** Consecutive reads of the launched agent running with no dialog: one may come before the dialog is drawn. */
+  let clear = 0;
   /** The screen read at the last poll when the agent was blocked; cleared by any other status. */
   let blocked: string | undefined;
   let release!: () => void;
@@ -265,15 +271,27 @@ function watchTrust(
         const status = (await screen.agentListAsync()).find((a) => a.pane === pane)?.status;
         const running = status === "idle" || status === "working" || status === "done";
         blocked = undefined;
-        if (!(status === "blocked" || (launched && running))) continue;
+        if (!(status === "blocked" || (launched && running))) {
+          clear = 0;
+          continue;
+        }
         const text = await screen.paneReadAsync(pane);
         // Herdr lists an agent idle at a dialog it does not see (heavy rerun 4: the second split's narrow pane wrapped
-        // the footer). Running with no dialog waiting on screen is past it.
+        // the footer). Running with no dialog waiting on screen, twice, is past it. Before an answer, fragments of the
+        // dialog that cannot be read whole are not past it: nothing is answered, and the bootstrap is held.
         if (running && !trustDialogLive(text, prompt)) {
+          if (!answered && trustDialogMaybe(text, prompt)) {
+            clear = 0;
+            blocked = text;
+            continue;
+          }
+          if (++clear < 2) continue;
           ready = true;
           return;
         }
-        blocked = text;
+        clear = 0;
+        // After the answer, the dialog's own screen still read is stale, not a second dialog to log.
+        blocked = answered && trustDialogMaybe(text, prompt) ? undefined : text;
         // Answered: Herdr may list the agent blocked a little longer, or a second startup dialog follows. The watch waits
         // for the agent to be ready, keeping the screen so a watch that ends with the agent still blocked logs it.
         if (answered || !isTrustDialog(text, prompt)) continue;

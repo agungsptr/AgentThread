@@ -91,7 +91,15 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
   const deliver = (s: Session | undefined) => {
     if (!s || delivered.has(s.id) || rotated.has(s.id) || !isLive(s) || s.status !== "idle" || !s.pane || s.notices.length === 0) return;
     delivered.add(s.id);
-    effects.push({ kind: "notice.deliver", session: s.id, thread: s.thread, pane: s.pane, text: s.notices.join("\n"), count: s.notices.length });
+    effects.push({
+      kind: "notice.deliver",
+      session: s.id,
+      thread: s.thread,
+      pane: s.pane,
+      text: s.notices.join("\n"),
+      count: s.notices.length,
+      ...(s.polledStart ? { unconfirmed: true as const } : {}),
+    });
   };
   /** Emits session.ended at most once per session per call; returns whether it did. */
   const end = (s: Session): boolean => {

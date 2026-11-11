@@ -21,7 +21,8 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parse, stringify } from "yaml";
-import { CLAUDE_TRUST_PROMPT, TRUST_TRIES, answerTrustDialog, isTrustDialog, trustDialogLive } from "../../src/agents/trust.ts";
+import { trustPrompts } from "../../src/agents/adapters.ts";
+import { CLAUDE_TRUST_PROMPT, TRUST_TRIES, answerTrustDialog, isTrustDialog, trustDialogLive, trustDialogMaybe } from "../../src/agents/trust.ts";
 import { deepMerge } from "../../src/config/config.ts";
 import { request } from "../../src/daemon/client.ts";
 import type { AgentKind, StoredEvent } from "../../src/domain/types.ts";
@@ -451,8 +452,30 @@ export async function waitForEvent<T extends StoredEvent["type"]>(
   throw new TimeoutError(`timed out after ${Math.round(timeoutMs / 1000)}s waiting for ${types.join(" or ")}${what ? ` (${what})` : ""}; last events: ${tail}`);
 }
 
-/** Acts as the user typing into main's pane: `herdr agent prompt`. */
-export async function say(herdr: Herdr, pane: string, text: string): Promise<void> {
+/** How long `say` waits for a pane that may show a trust dialog before it gives up. */
+export const SAY_DIALOG_WAIT_MS = 30_000;
+
+/**
+ * Acts as the user typing into a pane (main's, or a coordinator's): `herdr agent prompt`, which types the text and
+ * Enter. While the pane may show an agent's trust dialog, even chopped by a narrow pane (trustDialogMaybe), Enter would
+ * pick its selected option ("No, exit"): `say` waits for it to go, and after `waitMs` throws with the screen instead.
+ */
+export async function say(
+  herdr: Pick<Herdr, "ok" | "run">,
+  pane: string,
+  text: string,
+  o: { waitMs?: number; now?: () => number; sleep?: (ms: number) => Promise<void> } = {},
+): Promise<void> {
+  const now = o.now ?? Date.now;
+  const sleep = o.sleep ?? ((ms: number) => Bun.sleep(ms));
+  const until = now() + (o.waitMs ?? SAY_DIALOG_WAIT_MS);
+  for (;;) {
+    const screen = (await herdr.run(["pane", "read", pane, "--source", "visible"])).stdout;
+    if (!trustPrompts().some((p) => trustDialogMaybe(screen, p))) break;
+    if (now() >= until)
+      throw new Error(`not typing into pane ${pane}: it still shows a trust dialog after ${Math.round((o.waitMs ?? SAY_DIALOG_WAIT_MS) / 1000)}s; its screen:\n${screen.split("\n").slice(-SCREEN_LINES).join("\n")}`);
+    await sleep(1_000);
+  }
   await herdr.ok(["agent", "prompt", pane, text]);
 }
 
@@ -497,7 +520,11 @@ export function watchTrustDialogs(
           if (a.agent !== "claude" || (a.agent_status !== "blocked" && a.agent_status !== "idle")) continue;
           if (a.pane_id !== mainPane() && reported.has(a.pane_id)) continue;
           const screen = (await herdr.run(["pane", "read", a.pane_id, "--source", "visible"])).stdout;
-          if (a.agent_status === "idle" ? !trustDialogLive(screen, CLAUDE_TRUST_PROMPT) : !TRUST.test(screen.replace(/\s+/g, " "))) continue;
+          // Idle: the dialog waiting, or its fragments chopped by a narrow pane; a whole dialog that is not waiting is a
+          // leftover above a running agent.
+          const chopped = trustDialogMaybe(screen, CLAUDE_TRUST_PROMPT) && !isTrustDialog(screen, CLAUDE_TRUST_PROMPT);
+          const shown = a.agent_status === "idle" ? trustDialogLive(screen, CLAUDE_TRUST_PROMPT) || chopped : TRUST.test(screen.replace(/\s+/g, " ")) || chopped;
+          if (!shown) continue;
           if (a.pane_id !== mainPane()) {
             seen.add(a.pane_id);
             missed.delete(a.pane_id);

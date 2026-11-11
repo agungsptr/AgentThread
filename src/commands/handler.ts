@@ -39,7 +39,8 @@ export type Effect =
       /** Text the bootstrap prompt ends with: a returned ticket's notice for its fresh worker. */
       notice?: string;
     }
-  | { kind: "notice.deliver"; session: string; thread?: string; pane: string; text: string; count: number }
+  /** `unconfirmed`: only Herdr's poll says the agent started (it may list an agent at a startup dialog idle). */
+  | { kind: "notice.deliver"; session: string; thread?: string; pane: string; text: string; count: number; unconfirmed?: true }
   | { kind: "pane.close"; pane: string }
   | { kind: "session.probe"; session: string; thread?: string; pane: string };
 

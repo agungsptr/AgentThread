@@ -262,9 +262,9 @@ export class HerdrCli implements HerdrBridge, PaneScreen {
     }
   }
 
-  async paneReadAsync(pane: string): Promise<string> {
+  async paneReadAsync(pane: string, timeoutMs?: number): Promise<string> {
     // `pane read` prints the screen itself, not a JSON result.
-    return (await this.callAsync(["pane", "read", pane, "--source", "visible"], undefined, { raw: true })) as string;
+    return (await this.callAsync(["pane", "read", pane, "--source", "visible"], timeoutMs, { raw: true })) as string;
   }
 
   async paneSendKeysAsync(pane: string, key: string): Promise<void> {

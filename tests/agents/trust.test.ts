@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { CLAUDE_TRUST_PROMPT, answerTrustDialog, isTrustDialog, trustChoiceSelected, trustDialogLive } from "../../src/agents/trust.ts";
+import { CLAUDE_TRUST_PROMPT, answerTrustDialog, isTrustDialog, trustChoiceSelected, trustDialogLive, trustDialogMaybe } from "../../src/agents/trust.ts";
+import { P8_DIALOG, P8_EXITED, P8_FOOTER, P8_SHELL } from "../fixtures/trust-screens.ts";
 
 // As Claude Code draws it (heavy rerun 3's pane screens); the `❯` marks the selected option.
 const dialog = (yes: boolean) =>
@@ -160,4 +161,27 @@ test("a wrapped dialog is answered as a whole one is: down until 'Yes' shows sel
   const io = { read: async () => narrower(yes), send: async (k: string) => void (keys.push(k), k === "down" && (yes = true)), sleep: async () => {} };
   expect((await answerTrustDialog(io, CLAUDE_TRUST_PROMPT, narrower(false))).answered).toBe(true);
   expect(keys).toEqual(["down", "enter"]);
+});
+
+// ---------- Plan 13 Task 8 fix round 1: a dialog chopped beyond reading (panes about 4 columns wide) ----------
+
+test("a dialog chopped mid-word by a 4-column pane is not read whole, but its fragments say it may be there", () => {
+  for (const screen of [P8_DIALOG, P8_EXITED]) {
+    expect(isTrustDialog(screen, CLAUDE_TRUST_PROMPT)).toBe(false);
+    expect(trustDialogLive(screen, CLAUDE_TRUST_PROMPT)).toBe(false); // never answered from fragments
+    expect(trustChoiceSelected(screen, CLAUDE_TRUST_PROMPT)).toBe(false);
+    expect(trustDialogMaybe(screen, CLAUDE_TRUST_PROMPT)).toBe(true);
+  }
+  // Every dialog read whole is a possible one too, also a dead one above a shell prompt.
+  for (const draw of [dialog, narrow, narrower]) {
+    expect(trustDialogMaybe(draw(false), CLAUDE_TRUST_PROMPT)).toBe(true);
+    expect(trustDialogMaybe(`${draw(false)}\n\n❯ `, CLAUDE_TRUST_PROMPT)).toBe(true);
+  }
+  expect(trustDialogMaybe("Welcome to Claude Code\n\n❯ ", CLAUDE_TRUST_PROMPT)).toBe(false);
+  expect(trustDialogMaybe("Allow this tool?\n❯ Yes\n  No\n\n Enter to confirm · Esc to cancel", CLAUDE_TRUST_PROMPT)).toBe(false);
+});
+
+test("the report's 40 lines of p8 alone hold none of the dialog's fragments: the footer is chopped past them", () => {
+  // The lines above (the options) were cut off by the report, so the check cannot be shown on this dump alone.
+  expect(trustDialogMaybe([...P8_FOOTER, ...P8_SHELL].join("\n"), CLAUDE_TRUST_PROMPT)).toBe(false);
 });
