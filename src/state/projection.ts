@@ -41,6 +41,10 @@ export interface Session {
   stalled?: boolean;
   /** Turns finished with no notice (e.g. its bootstrap) still waiting for delivery: a startup spin does not count. */
   settledTurns?: number;
+  /** Seq of the agent.idle that began the current idle stretch (cleared when the session is active again). */
+  idleSeq?: number;
+  /** The message of the session's latest progress or note. */
+  lastReport?: string;
   /** Herdr reported it blocked before it finished any turn (it got a blocked notice instead). */
   blockedEarly?: boolean;
   /** A blocked notice was already raised and no active/idle/start has happened since. */
@@ -506,10 +510,13 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       t.decisions.push({ ts: ev.ts, actor: ev.actor, message: ev.payload.message });
       note(t, ev, `decision: ${ev.payload.message}`);
       break;
-    case "note.recorded":
+    case "note.recorded": {
       t.findings.push({ ts: ev.ts, actor: ev.actor, message: ev.payload.message });
+      const by = ev.actor.session ? state.sessions.get(ev.actor.session) : undefined;
+      if (by) by.lastReport = ev.payload.message;
       note(t, ev, `note: ${ev.payload.message}`);
       break;
+    }
     case "question.recorded": {
       const by = ev.actor.session ? state.sessions.get(ev.actor.session) : undefined;
       const role: Role | undefined = by?.role ?? ev.actor.role;
@@ -549,6 +556,7 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       const s = sid ? state.sessions.get(sid) : undefined;
       if (s) {
         s.lastProgressAt = ev.ts;
+        s.lastReport = ev.payload.message;
         s.turnsSinceProgress = 0;
         delete s.remindedSinceProgress;
       }
@@ -680,6 +688,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
         else delete s.polledStart;
         delete s.blockedNotified;
         delete s.blockedSeq;
+        delete s.idleSeq;
         if (ev.type === "session.active" && ev.actor.role !== "user") s.hooksSeen = true;
         s.status = atPrompt ? "idle" : "active";
         s.lastActiveAt = ev.ts;
@@ -694,6 +703,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
         delete s.polledStart;
         delete s.blockedNotified;
         delete s.blockedSeq;
+        s.idleSeq ??= ev.seq;
         if (ev.actor.role !== "user") s.hooksSeen = true;
         if (s.status === "active") {
           s.turns++;
@@ -803,6 +813,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
       s.notices.splice(0, ev.payload.count);
       if (isLive(s)) {
         delete s.polledStart;
+        delete s.idleSeq;
         s.status = "active"; // a pasted notice starts a turn
         s.lastActiveAt = ev.ts;
       }

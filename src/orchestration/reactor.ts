@@ -587,6 +587,14 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
           const text = `Session ${s.id} (${s.agent} ${s.model ?? "default"}) finished its first turn without running any agt command; it may be misconfigured (for example a wrong model). Check pane ${s.pane ?? "unknown"}.`;
           notify(s.role === "coordinator" ? liveSessions(state, undefined, "main")[0] : coordinatorToNotify(s.thread), text);
         }
+        // A worker whose turn ended with its ticket still in_progress (no done, no block) would sit silent: tell the
+        // coordinator, once per idle stretch (only the idle that began it, as with blocked). A worker that ran no agt command
+        // yet is the stall watchdog's.
+        if (s && isLive(s) && s.role === "worker" && s.idleSeq === ev.seq && s.authored && s.ticket && s.thread &&
+          state.threads.get(s.thread)?.tickets.find((k) => k.id === s.ticket)?.status === "in_progress") {
+          const last = s.lastReport?.trim().replace(/\.$/, "");
+          notify(coordinatorToNotify(s.thread), `The worker for ticket ${s.ticket} went idle without reporting${last ? `: ${last}` : "."}${last ? "." : ""} Tell it what to do with agt tell, or return or block the ticket.`);
+        }
         const ticketStatus = s?.thread ? state.threads.get(s.thread)?.tickets.find((k) => k.id === s.ticket)?.status : undefined;
         // A worker whose ticket is done or blocked has nothing left to do; ending it frees its slot.
         const finished = s && isLive(s) && s.role === "worker" && (ticketStatus === "done" || ticketStatus === "blocked");

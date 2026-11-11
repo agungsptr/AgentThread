@@ -149,3 +149,20 @@ describe("legacy threads keep every old prompt byte for byte", () => {
     expect(bootstrapPrompt({ root: "/repo", role: "worker", thread: LEGACY, ticket: "T1", ticketDoc: "x.md" })).toBe(want["bootstrap.worker"]!);
   });
 });
+
+describe("idle and unblock rules (task threads only)", () => {
+  const WORKER_RULE =
+    'Never end a turn waiting for someone. If your ticket needs another ticket first, run agt ticket block 007/T2 --reason "<what you wait for>" and stop. When the ticket is done, run agt ticket done 007/T2 --summary "<one line>".';
+  const COORD_RULE =
+    "- When you accept a ticket that another ticket was blocked on, reopen the blocked one with agt ticket reopen 007/<T> and start a new worker for it with agt worker spawn 007 --ticket <T> (a blocked worker has ended).";
+
+  test("the worker blocks instead of waiting; the coordinator reopens a ticket whose dependency was accepted", () => {
+    expect(worker(DEFAULT_CONFIG).split("\n")).toContain(WORKER_RULE);
+    expect(coordinator(DEFAULT_CONFIG).split("\n")).toContain(COORD_RULE);
+  });
+
+  test("legacy threads do not get them", () => {
+    expect(systemPrompt({ root: "/repo", role: "worker", thread: LEGACY, ticket: "T1" })).not.toContain("Never end a turn waiting");
+    expect(systemPrompt({ root: "/repo", role: "coordinator", thread: LEGACY })).not.toContain("was blocked on");
+  });
+});

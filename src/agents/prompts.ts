@@ -109,6 +109,7 @@ export function systemPrompt(o: PromptInput): string {
         : [
             `- Before restarting the stack, running e2e or the browser check, run agt stack acquire ${t.id} (add --for e2e4 for the full e2e); wait for the notice if it is queued; agt stack release ${t.id} when done.`,
             ...coordinatorWorkflowLines(o),
+            `- When you accept a ticket that another ticket was blocked on, reopen the blocked one with agt ticket reopen ${t.id}/<T> and start a new worker for it with agt worker spawn ${t.id} --ticket <T> (a blocked worker has ended).`,
           ]),
       `- Record important decisions with agt decide ${t.id} "<decision>" and progress with agt progress ${t.id} "<message>".`,
       `- If a ticket is blocked, fix the cause, or reopen it with agt ticket reopen ${t.id}/<T> and start a new worker for it with agt worker spawn ${t.id} --ticket <T>.`,
@@ -138,7 +139,12 @@ export function systemPrompt(o: PromptInput): string {
     } Never bypass the commit guard (no git commit --no-verify, no changing ${
       t.dir === undefined ? "core.hooksPath or AGT_ROLE" : "core.hooksPath, AGT_ROLE or AGT_AGENT_PROCESS"
     }). Do not work on other tickets.`,
-    ...(t.dir === undefined ? [] : workerWorkflowLines(o)),
+    ...(t.dir === undefined
+      ? []
+      : [
+          `Never end a turn waiting for someone. If your ticket needs another ticket first, run agt ticket block ${t.id}/${o.ticket} --reason "<what you wait for>" and stop. When the ticket is done, run agt ticket done ${t.id}/${o.ticket} --summary "<one line>".`,
+          ...workerWorkflowLines(o),
+        ]),
     "When unsure how to do something with agt, run: agt guide worker",
   ].join("\n");
 }
