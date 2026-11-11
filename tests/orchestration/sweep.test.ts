@@ -231,27 +231,65 @@ test("held notices back off 10s, 20s, 40s … up to 5 minutes, derived from the 
   expect(waits).toEqual([10, 20, 40, 80, 160, 300, 300, 300]);
 });
 
-test("the backoff resets on a delivery, and on an active or started session; replaying the events gives the same state", () => {
-  const s = heldNotice();
-  const evs: StoredEvent[] = [];
-  const step = (...e: StoredEvent[]) => evs.push(...e);
-  step(...hold(s, 11), ...hold(s, 32));
-  expect(s.sessions.get(C)!.noticeHeldCount).toBe(3);
-  expect(s.sessions.get(C)!.noticeHeldReason).toBe("trust dialog");
-  step(...apply(s, at(40), { type: "session.active", thread: "001", payload: { session: C } }));
-  expect(s.sessions.get(C)!.noticeHeldCount).toBeUndefined();
-  step(...hold(s, 50));
-  expect(s.sessions.get(C)!.noticeHeldCount).toBe(1);
-  step(...apply(s, at(51), { type: "notice.delivered", thread: "001", payload: { session: C, count: 1 } }));
-  expect(s.sessions.get(C)!.noticeHeldCount).toBeUndefined();
-  expect(s.sessions.get(C)!.noticeHeldReported).toBeUndefined();
-  // replay: a fresh state fed the same events, stopped after two holds, matches the live state at that point
+const HELD_FIELDS = (s: State) => {
+  const x = s.sessions.get(C)!;
+  return { count: x.noticeHeldCount, reason: x.noticeHeldReason, reported: x.noticeHeldReported, at: x.noticeHeldAt };
+};
+
+test("the backoff resets on a delivery, a start or a hook's active, not a poll's; replaying every prefix gives the same state", () => {
   const live = heldNotice();
-  hold(live, 11);
-  const replayed = heldNotice();
-  for (const ev of evs.slice(0, 1)) applyEvent(replayed, { ...ev, seq: replayed.lastSeq + 1 });
-  expect(replayed.sessions.get(C)!.noticeHeldCount).toBe(live.sessions.get(C)!.noticeHeldCount);
-  expect(replayed.sessions.get(C)!.noticeHeldAt).toBe(live.sessions.get(C)!.noticeHeldAt);
+  const evs: StoredEvent[] = [];
+  const poll = { role: "user" } as const;
+  const hook = { ...USER, role: "worker" } as StoredEvent["actor"];
+  const step = (ts: number, body: EventBody, actor?: StoredEvent["actor"]) => {
+    const ev = { ...body, seq: live.lastSeq + 1, ts: at(ts), actor: actor ?? USER } as StoredEvent;
+    applyEvent(live, ev);
+    evs.push(ev);
+    return HELD_FIELDS(live);
+  };
+  const held = (ts: number): EventBody => ({ type: "notice.held", thread: "001", payload: { session: C, reason: "trust dialog" } });
+  expect(step(11, held(11)).count).toBe(2);
+  // hookless flicker: polled active/idle cycles keep counting
+  expect(step(12, { type: "session.active", thread: "001", payload: { session: C } }, poll as never).count).toBe(2);
+  step(13, { type: "agent.idle", thread: "001", payload: { session: C } });
+  expect(step(40, held(40)).count).toBe(3);
+  expect(step(41, { type: "notice.held_reported", thread: "001", payload: { session: C } }).reported).toBe(true);
+  // a hook's active resets the stretch
+  expect(step(42, { type: "session.active", thread: "001", payload: { session: C } }, hook).count).toBeUndefined();
+  step(43, { type: "agent.idle", thread: "001", payload: { session: C } });
+  expect(step(60, held(60)).count).toBe(1);
+  expect(step(61, { type: "notice.delivered", thread: "001", payload: { session: C, count: 1 } })).toEqual({ count: undefined, reason: undefined, reported: undefined, at: undefined });
+  // every prefix of the log replays to the same held fields
+  const base = evs.length;
+  const fresh = heldNotice();
+  for (let n = 0; n < base; n++) {
+    applyEvent(fresh, { ...evs[n]!, seq: fresh.lastSeq + 1 });
+    const again = heldNotice();
+    for (let k = 0; k <= n; k++) applyEvent(again, { ...evs[k]!, seq: again.lastSeq + 1 });
+    expect(HELD_FIELDS(again)).toEqual(HELD_FIELDS(fresh));
+  }
+});
+
+test("a hookless agent flickering active and idle still reaches the coordinator report", () => {
+  const s = stateOf(INIT, threadCreated("001", { status: "in_progress" }));
+  apply(
+    s,
+    T0,
+    { type: "session.created", thread: "001", payload: { session: C, role: "coordinator", agent: "claude-code", name: "c" } },
+    { type: "session.started", thread: "001", payload: { session: C } },
+    { type: "session.created", thread: "001", payload: { session: W, role: "worker", agent: "claude-code", name: "w", ticket: "T1" } },
+    { type: "session.attached", thread: "001", payload: { session: W, pane: "w1:p3" } },
+    { type: "session.started", thread: "001", payload: { session: W } },
+    { type: "agent.idle", thread: "001", payload: { session: W } },
+    { type: "notice.queued", thread: "001", payload: { session: W, text: "Hi." } },
+  );
+  for (let i = 0; i < 3; i++) {
+    apply(s, at(1 + i * 10), { type: "notice.held", thread: "001", payload: { session: W, reason: "r" } });
+    apply(s, at(2 + i * 10), { type: "session.active", thread: "001", payload: { session: W } });
+    apply(s, at(3 + i * 10), { type: "agent.idle", thread: "001", payload: { session: W } });
+  }
+  expect(s.sessions.get(W)!.noticeHeldCount).toBe(3);
+  expect(sweep(s, at(200), ctx()).events.map((e) => e.type)).toEqual(["notice.held_reported", "notice.queued"]);
 });
 
 test("a session held three times in a row has its coordinator told once per stretch, outside its own queue", () => {
@@ -284,4 +322,12 @@ test("a session held three times in a row has its coordinator told once per stre
   wHold(141);
   expect(sweep(s, at(141 + 81), ctx()).events.filter((e) => e.type === "notice.queued")).toEqual([]);
   expect(s.sessions.get(W)!.notices).toEqual(["Hi."]);
+});
+
+test("the reactor does not deliver to a session inside its held backoff, and delivers once it has passed", () => {
+  const s = heldNotice();
+  const [idle] = apply(s, "2026-10-11T10:00:05.000Z", { type: "agent.idle", thread: "001", payload: { session: C } });
+  expect(react(s, [idle!], ctx()).effects.filter((e) => e.kind === "notice.deliver")).toEqual([]);
+  const [later] = apply(s, "2026-10-11T10:00:30.000Z", { type: "agent.idle", thread: "001", payload: { session: C } });
+  expect(react(s, [later!], ctx()).effects.filter((e) => e.kind === "notice.deliver").length).toBe(1);
 });

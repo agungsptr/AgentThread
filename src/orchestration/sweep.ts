@@ -97,10 +97,14 @@ export function sweep(state: State, now: string, ctx: ReactorContext): { events:
     if (Date.parse(now) - Date.parse(since) <= noticeRetryMs(s.noticeHeldCount ?? 1)) continue;
     // Held again and again: the coordinator hears once per stretch (never through the held session's own queue).
     if ((s.noticeHeldCount ?? 0) >= NOTICE_HELD_REPORT_AFTER && !s.noticeHeldReported && s.notices.length > 0) {
-      const reason = s.noticeHeldReason;
+      const line = s.noticeHeldReason?.split("\n")[0]?.trim() ?? "";
+      const reason = line.length > 120 ? `${line.slice(0, 119)}…` : line;
       const target = s.role === "worker" && s.thread ? coordinatorTarget(state, s.thread) : s.role === "coordinator" ? liveSessions(state, undefined, "main")[0] : undefined;
-      events.push({ type: "notice.held_reported", ...(s.thread ? { thread: s.thread } : {}), payload: { session: s.id } });
-      if (target && target.id !== s.id) events.push({ type: "notice.queued", ...(target.thread ? { thread: target.thread } : {}), payload: { session: target.id, text: `Messages to ${s.role} ${s.role === "worker" && s.ticket ? `ticket ${s.ticket}` : s.id.slice(0, 8)} keep being held${reason ? ` (${reason})` : ""}; check its pane.` } });
+      // Marked only with someone to tell: a coordinator that appears later (a replacement) still hears of the stretch.
+      if (target && target.id !== s.id) {
+        events.push({ type: "notice.held_reported", ...(s.thread ? { thread: s.thread } : {}), payload: { session: s.id } });
+        events.push({ type: "notice.queued", ...(target.thread ? { thread: target.thread } : {}), payload: { session: target.id, text: `Messages to ${s.role} ${s.role === "worker" && s.ticket ? `ticket ${s.ticket}` : s.id.slice(0, 8)} keep being held${reason ? ` (${reason})` : ""}; check its pane.` } });
+      }
     }
     const e = noticeDelivery(s);
     if (e) effects.push(e);

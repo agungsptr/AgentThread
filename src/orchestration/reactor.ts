@@ -116,8 +116,11 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
       if (e.type === "notice.queued" && e.payload.session === oldId) out[i] = { ...e, payload: { ...e.payload, session: newId } };
     }
   };
+  let now = "";
   const deliver = (s: Session | undefined) => {
     if (!s || delivered.has(s.id) || rotated.has(s.id)) return;
+    // A held stretch is retried by the sweep on its backoff, not by every event that would deliver.
+    if (s.noticeHeldAt && now && Date.parse(now) - Date.parse(s.noticeHeldAt) <= noticeRetryMs(s.noticeHeldCount ?? 1)) return;
     const e = noticeDelivery(s);
     if (!e) return;
     delivered.add(s.id);
@@ -284,6 +287,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
   };
 
   for (const ev of events) {
+    now = ev.ts;
     reviewReady(ev);
     switch (ev.type) {
       case "thread.tier_chosen": {

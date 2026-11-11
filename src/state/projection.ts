@@ -703,7 +703,8 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
         delete s.blockedNotified;
         delete s.blockedSeq;
         endIdleStretch(s);
-        endHeldStretch(s);
+        // Herdr's poll flickers a hookless agent between working and idle: only a hook, a start or a delivery proves it is reachable.
+        if (ev.type === "session.started" || ev.actor.role !== "user") endHeldStretch(s);
         if (ev.type === "session.active" && ev.actor.role !== "user") s.hooksSeen = true;
         s.status = atPrompt ? "idle" : "active";
         s.lastActiveAt = ev.ts;
@@ -861,13 +862,14 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
   }
 }
 
-/** The session is active again: its idle stretch (and whether it was reported) is over. */
+/** A held stretch of notice deliveries is over: its backoff count, reason and report start afresh. */
 function endHeldStretch(s: Session): void {
   delete s.noticeHeldCount;
   delete s.noticeHeldReason;
   delete s.noticeHeldReported;
 }
 
+/** The session is active again: its idle stretch (and whether it was reported) is over. */
 function endIdleStretch(s: Session): void {
   delete s.idleSeq;
   delete s.idleAt;
