@@ -432,6 +432,8 @@ type WriteOptions = {
   /** The repo's name: its excludes file is `<root>/.agentthread/worktree-excludes/<repoName>` (default: the repo folder's name). */
   repoName?: string;
   worktree: string;
+  /** A task thread's task name: `{task}` in the generated skill's project config is filled in. */
+  task?: string;
   content: string;
   /** With agents.skill not false, the generated skills are written too. */
   config: Config;
@@ -475,7 +477,7 @@ function* writeSteps(o: WriteOptions): Steps<void> {
   if (skill) {
     const listed = yield* git(c, wt, ["ls-files", "--", ...SKILL_ROOTS]);
     const tracked = new Set(listed.ok ? lines(listed.stdout).filter(Boolean) : []);
-    writeSkills(wt, { root: o.root, config: o.config, tracked, log });
+    writeSkills(wt, { root: o.root, config: o.config, ...(o.task !== undefined ? { task: o.task } : {}), tracked, log });
   }
 }
 
@@ -484,7 +486,7 @@ function* writeSteps(o: WriteOptions): Steps<void> {
  * plainly, with no git call, no exclude and no guard. Never writes through a symlink. Synchronous plain fs, so the
  * daemon may call it.
  */
-export function writeThreadDirFiles(o: { root: string; dir: string; content: string; config: Config; log?: (message: string) => void }): void {
+export function writeThreadDirFiles(o: { root: string; dir: string; task?: string; content: string; config: Config; log?: (message: string) => void }): void {
   const log = o.log ?? ((m) => console.error(m));
   const agents = join(o.dir, "AGENTS.md");
   let regular = false;
@@ -497,5 +499,5 @@ export function writeThreadDirFiles(o: { root: string; dir: string; content: str
     removeIfPresent(join(o.dir, link));
     symlinkSync("AGENTS.md", join(o.dir, link));
   }
-  writeSkills(o.dir, { root: o.root, config: o.config, tracked: new Set(), log });
+  writeSkills(o.dir, { root: o.root, config: o.config, ...(o.task !== undefined ? { task: o.task } : {}), tracked: new Set(), log });
 }

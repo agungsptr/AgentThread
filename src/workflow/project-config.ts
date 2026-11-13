@@ -19,13 +19,15 @@ export function migrationConfigured(config: Config): boolean {
 }
 
 const val = (v: string | number | undefined): string => (v === undefined || v === "" ? NOT_CONFIGURED : String(v));
-const code = (v: string | number | undefined): string => (v === undefined || v === "" ? NOT_CONFIGURED : `\`${v}\``);
+const codeOf = (v: string | number | undefined): string => (v === undefined || v === "" ? NOT_CONFIGURED : `\`${v}\``);
 const list = (v: string[] | undefined): string => (v?.length ? v.map((x) => `\`${x}\``).join(", ") : NOT_CONFIGURED);
 const cell = (s: string): string => s.replace(/\|/g, "\\|");
 
 /** The Markdown "Project config" section appended to the generated feature-workflow skill. */
-export function projectConfigSection(config: Config, repos: { name: string; path: string }[]): string {
+export function projectConfigSection(config: Config, repos: { name: string; path: string }[], task?: string): string {
   const w = config.workflow;
+  // a task thread's copy has `{task}` filled in (task names are shell-safe: ^[a-z0-9][a-z0-9._-]*$); the root copy keeps it
+  const code = (v: string | number | undefined): string => codeOf(typeof v === "string" && task !== undefined ? v.replaceAll("{task}", task) : v);
   const configured = config.workspace.repos ?? {};
   const lines: string[] = ["## Project config (from .agentthread/config.yaml)", ""];
 
@@ -51,7 +53,7 @@ export function projectConfigSection(config: Config, repos: { name: string; path
     "",
     `- Stack restart: ${code(w.stack?.restart)}`,
     `- Stack status: ${code(w.stack?.status)}`,
-    ...(w.stack?.restart?.includes("{task}")
+    ...(task === undefined && w.stack?.restart?.includes("{task}")
       ? ["- In the restart command, replace `{task}` with the thread's task name (the folder under `.worktrees/`) before running it; never run it with the placeholder or an empty value."]
       : []),
     `- E2E stage 2: ${code(w.e2e?.stage2)}`,

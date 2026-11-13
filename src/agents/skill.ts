@@ -20,7 +20,8 @@ const FRONTMATTER = [
 ].join("\n");
 
 type Env = Record<string, string | undefined>;
-type Opts = { root: string; config: Config };
+/** `task`: a task thread's task name; its generated skills have `{task}` in the project config filled in. */
+type Opts = { root: string; config: Config; task?: string };
 
 /** The skill file: frontmatter, the generated marker, then the guide for every role. */
 export function skillText(o: Opts): string {
@@ -36,7 +37,7 @@ function withMarker(md: string): string {
 /** The feature-workflow skill: the shipped content, then the project config section rendered from agt config. */
 export function featureWorkflowText(o: Opts): string {
   const repos = Object.entries(workspaceReposNoSpawn(o.root, o.config)).map(([name, r]) => ({ name, path: r.path }));
-  return `${withMarker(FEATURE_WORKFLOW)}\n\n${projectConfigSection(o.config, repos)}`;
+  return `${withMarker(FEATURE_WORKFLOW)}\n\n${projectConfigSection(o.config, repos, o.task)}`;
 }
 
 const NOT_CONFIGURED = "not configured";

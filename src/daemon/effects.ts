@@ -88,17 +88,17 @@ export function createEffectRunner(opts: {
     ));
 
   // AGENTS.md carries the role rules; a failure to write it is logged and never blocks the worktree or a spawn.
-  const writeAgents = async (thread: { id: string; title: string; slug: string }, worktree: string) => {
+  const writeAgents = async (thread: { id: string; title: string; slug: string; task?: string }, worktree: string) => {
     try {
-      await writeAgentsFilesAsync({ root: opts.root, worktree, content: agentsMd({ root: opts.root, thread: { ...thread, worktree }, config: opts.config }), config: opts.config, log });
+      await writeAgentsFilesAsync({ root: opts.root, worktree, ...(thread.task !== undefined ? { task: thread.task } : {}), content: agentsMd({ root: opts.root, thread: { ...thread, worktree }, config: opts.config }), config: opts.config, log });
     } catch (e) {
       log(`writing AGENTS.md for thread ${thread.id} failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
   // A thread directory is not in git: its files are written plainly, with the same failure handling.
-  const writeDirAgents = (thread: { id: string; title: string; slug: string }, dir: string) => {
+  const writeDirAgents = (thread: { id: string; title: string; slug: string; task?: string }, dir: string) => {
     try {
-      writeThreadDirFiles({ root: opts.root, dir, content: agentsMd({ root: opts.root, thread: { ...thread, dir }, config: opts.config }), config: opts.config, log });
+      writeThreadDirFiles({ root: opts.root, dir, ...(thread.task !== undefined ? { task: thread.task } : {}), content: agentsMd({ root: opts.root, thread: { ...thread, dir }, config: opts.config }), config: opts.config, log });
     } catch (e) {
       log(`writing AGENTS.md for thread ${thread.id} failed: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -151,7 +151,7 @@ export function createEffectRunner(opts: {
             const t = opts.thread(e.thread);
             if (t) {
               try {
-                await writeAgentsFilesAsync({ root: opts.root, repo: e.repoPath, repoName: e.repo, worktree: e.path, content: agentsMd({ root: opts.root, thread: t, config: opts.config }), config: opts.config, log });
+                await writeAgentsFilesAsync({ root: opts.root, repo: e.repoPath, repoName: e.repo, worktree: e.path, ...(t.task !== undefined ? { task: t.task } : {}), content: agentsMd({ root: opts.root, thread: t, config: opts.config }), config: opts.config, log });
               } catch (err) {
                 log(`writing AGENTS.md for thread ${t.id} in ${e.path} failed: ${err instanceof Error ? err.message : String(err)}`);
               }

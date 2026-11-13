@@ -257,6 +257,35 @@ describe("generated skills", () => {
     expect(git(wt, "status", "--porcelain", "-uall")).toBe("");
   });
 
+  describe("stack commands with {task} filled in", () => {
+    const cfg: Config = { ...DEFAULT_CONFIG, workflow: { ...DEFAULT_CONFIG.workflow, stack: { restart: "make restart TASK={task}" } } };
+    const rel = ".claude/skills/agt-feature-workflow/SKILL.md";
+
+    test("the thread directory skill carries the task", () => {
+      const dir = join(tempRepo(), "thread-dir");
+      mkdirSync(dir, { recursive: true });
+      writeThreadDirFiles({ root: "/repo", dir, task: "capitalize", content: "# AgentThread\n", config: cfg, log: () => {} });
+      const text = readFileSync(join(dir, rel), "utf8");
+      expect(text).toContain("`make restart TASK=capitalize`");
+      expect(text).not.toContain("{task}");
+    });
+
+    test("the worktree skill carries the task", () => {
+      const root = tempRepo();
+      const wt = worktreeOf(root);
+      writeAgentsFiles({ root, worktree: wt, task: "capitalize", content: "# AgentThread\n", env: ENV, config: cfg, log: () => {} });
+      const text = readFileSync(join(wt, rel), "utf8");
+      expect(text).toContain("`make restart TASK=capitalize`");
+      expect(text).not.toContain("{task}");
+    });
+
+    test("the root skill keeps the placeholder and the note", () => {
+      const text = featureWorkflowText({ root: tempRepo(), config: cfg });
+      expect(text).toContain("`make restart TASK={task}`");
+      expect(text).toContain("replace `{task}` with the thread's task name");
+    });
+  });
+
   test("a thread directory: every skill under both roots", () => {
     const dir = join(tempRepo(), "thread-dir");
     mkdirSync(dir, { recursive: true });
