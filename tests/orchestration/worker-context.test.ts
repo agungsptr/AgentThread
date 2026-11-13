@@ -70,3 +70,24 @@ test("a coordinator still rotates on context and gets no worker notice", () => {
   const r = idle(s, 150_000, C, { role: "coordinator", thread: "001", session: C });
   expect(r.events).toEqual([{ type: "session.rotation_requested", thread: "001", payload: { session: C, reason: "context" } }]);
 });
+
+test("a returned ticket's fresh worker that also grows large is reported again", () => {
+  const s = base();
+  apply(s, USER, ...idle(s, 150_000).events);
+  expect(s.threads.get("001")!.tickets[0]!.contextReported).toBe(true);
+  const W2 = "22222222-2222-4222-8222-222222222222";
+  const WA2: Actor = { role: "worker", thread: "001", ticket: "T1", session: W2 };
+  apply(s, { role: "coordinator", thread: "001", session: C } as Actor, { type: "ticket.returned", thread: "001", payload: { ticket: "T1", note: "rest" } });
+  expect(s.threads.get("001")!.tickets[0]!.contextReported).toBeUndefined();
+  apply(
+    s,
+    USER,
+    { type: "session.created", thread: "001", payload: { session: W2, role: "worker", agent: "claude-code", name: "w2", ticket: "T1" } },
+    { type: "session.attached", thread: "001", payload: { session: W2, pane: "w1:p4" } },
+  );
+  apply(s, WA2, { type: "ticket.claimed", thread: "001", payload: { ticket: "T1", assignee: W2 } });
+  const again = idle(s, 150_000, W2, WA2);
+  expect(notices(again)).toEqual([NOTICE(75)]);
+  apply(s, USER, ...again.events);
+  expect(project(log).threads.get("001")!.tickets[0]!.contextReported).toBe(true);
+});

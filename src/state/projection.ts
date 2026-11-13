@@ -468,6 +468,7 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       delete k.freshWorkers;
       delete k.summary;
       delete k.reviewNoticeSeq;
+      delete k.contextReported;
       note(t, ev, `${k.id} returned: ${ev.payload.note}`);
       break;
     }

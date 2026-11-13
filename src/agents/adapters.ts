@@ -45,6 +45,8 @@ export interface AgentAdapter {
   promptArgs(text: string): string[];
   /** Writes files `launch()` names; run it just before the agent starts (launch itself stays pure). False: it failed. */
   prepare?(o: LaunchInput): boolean;
+  /** The args to start with when `prepare` failed: `launch()`'s args minus whatever names the files it could not write. */
+  degradedArgs?(args: string[]): string[];
   capabilities: { hooks: boolean; contextSize: boolean; preCompact: boolean };
   /**
    * The agent's one-time folder-trust dialog, which agt answers itself when the agent starts in a folder agt created
@@ -203,10 +205,7 @@ function prepareOmp({ root, config }: LaunchInput): boolean {
 export function prepareLaunch<L extends { args: string[] }>(adapter: AgentAdapter, input: LaunchInput, launched: L, onFail: (msg: string) => void = () => {}): L {
   if (!adapter.prepare || adapter.prepare(input)) return launched;
   onFail(`cannot write the ${adapter.displayName} launch files under ${join(input.root, ".agentthread")}; starting without them`);
-  const args = [...launched.args];
-  const i = args.indexOf("--config");
-  if (i >= 0) args.splice(i, 2);
-  return { ...launched, args };
+  return adapter.degradedArgs ? { ...launched, args: adapter.degradedArgs([...launched.args]) } : launched;
 }
 
 const ompAdapter: AgentAdapter = {
@@ -217,6 +216,11 @@ const ompAdapter: AgentAdapter = {
   instructionFiles: [],
   prompt: "positional",
   prepare: prepareOmp,
+  degradedArgs(args) {
+    const i = args.indexOf("--config");
+    if (i >= 0) args.splice(i, 2);
+    return args;
+  },
   launch({ run, config, root }) {
     return {
       args: [

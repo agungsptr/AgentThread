@@ -256,3 +256,12 @@ test("prepareLaunch starts omp without --config (and logs) when the overlay cann
   expect(msgs).toHaveLength(1);
   expect(prepareLaunch(adapterFor("codex"), input, { args: ["a"] }).args).toEqual(["a"]);
 });
+
+test("a failing prepare is not mangled by omp's fallback: another adapter without its own fallback keeps its args", () => {
+  const fake = { ...adapterFor("codex"), prepare: () => false };
+  const msgs: string[] = [];
+  expect(prepareLaunch(fake, base as never, { args: ["--config", "x", "--model", "m"] }, (m) => msgs.push(m)).args).toEqual(["--config", "x", "--model", "m"]);
+  expect(msgs).toHaveLength(1);
+  const own = { ...fake, degradedArgs: (a: string[]) => a.filter((x) => x !== "--flag") };
+  expect(prepareLaunch(own, base as never, { args: ["--flag", "--model", "m"] }).args).toEqual(["--model", "m"]);
+});
