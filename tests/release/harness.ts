@@ -28,7 +28,8 @@ import { request } from "../../src/daemon/client.ts";
 import type { AgentKind, StoredEvent } from "../../src/domain/types.ts";
 import { spawnAsync, type RunResult } from "../../src/herdr/bridge.ts";
 import { paths } from "../../src/project/paths.ts";
-import { runClock } from "./stall-clock.ts";
+import { runClock, type stallClock } from "./stall-clock.ts";
+export { runClock };
 
 export const REPO = resolve(import.meta.dir, "../..");
 export const AGT = join(REPO, "bin", "agt");
@@ -616,12 +617,28 @@ export function trustGate(): { promise: Promise<never>; fail(pane: string, check
   return { promise, fail: (pane, check) => reject(new Error(`trust dialog in coordinator/worker pane ${pane}: ${check}`)) };
 }
 
-/** Runs a scenario against its deadline and the trust gate; whichever settles first decides. */
-export async function raceScenario(run: Promise<unknown>, gate: Promise<never>, msLeft: number, timeoutMessage: string): Promise<void> {
+/**
+ * Runs a scenario against its deadline (absolute, on `clock`) and the trust gate; whichever settles first decides. The
+ * deadline is polled, not a one-shot timer, so a paused machine's sleep does not end the row.
+ */
+export async function raceScenario(
+  run: Promise<unknown>,
+  gate: Promise<never>,
+  deadline: number,
+  timeoutMessage: string,
+  o: { clock?: Pick<ReturnType<typeof stallClock>, "now">; pollMs?: number } = {},
+): Promise<void> {
+  const clock = o.clock ?? runClock;
   let timer: Timer | undefined;
-  await Promise.race([run, gate, new Promise((_, reject) => (timer = setTimeout(() => reject(new TimeoutError(timeoutMessage)), msLeft)))]).finally(() =>
-    clearTimeout(timer),
-  );
+  const expired = new Promise<never>((_, reject) => {
+    const poll = () => {
+      if (clock.now() >= deadline) reject(new TimeoutError(timeoutMessage));
+      else timer = setTimeout(poll, o.pollMs ?? 1_000);
+    };
+    poll();
+  });
+  expired.catch(() => {});
+  await Promise.race([run, gate, expired]).finally(() => clearTimeout(timer));
 }
 
 /**

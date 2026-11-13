@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { AgentKind, StoredEvent } from "../../../src/domain/types.ts";
 import type { RunResult } from "../../../src/herdr/bridge.ts";
 import { paths } from "../../../src/project/paths.ts";
-import { git, isSymlinkTo, runFor, type EventOf, type Herdr, type HerdrServer, type RoleAgents } from "../harness.ts";
+import { git, isSymlinkTo, runClock, runFor, type EventOf, type Herdr, type HerdrServer, type RoleAgents } from "../harness.ts";
 
 /** What a scenario's run() gets. Assertions go through check(); a thrown error fails the row too. */
 export interface H {
@@ -157,13 +157,13 @@ export async function verifyThread(h: H, thread: string, o: { coordinator: strin
     .filter((e): e is EventOf<"session.attached"> => e.type === "session.attached" && workers.some((w) => w.payload.session === e.payload.session))
     .map((e) => e.payload.pane);
   h.check("worker panes opened", workerPanes.length > 0, workerPanes.join(","));
-  const waitStart = Date.now();
+  const waitStart = runClock.now();
   let panes = await h.herdr.panes();
-  for (const until = Date.now() + Math.min(90_000, Math.max(0, h.left() - 30_000)); workerPanes.some((p) => panes.includes(p)) && Date.now() < until; ) {
+  for (const until = runClock.now() + Math.min(90_000, Math.max(0, h.left() - 30_000)); workerPanes.some((p) => panes.includes(p)) && runClock.now() < until; ) {
     await Bun.sleep(2_000);
     panes = await h.herdr.panes();
   }
-  const waited = `waited ${Math.round((Date.now() - waitStart) / 1000)}s`;
+  const waited = `waited ${Math.round((runClock.now() - waitStart) / 1000)}s`;
   const open = workerPanes.filter((p) => panes.includes(p)).join(",");
   h.check("worker panes closed", !open, open ? `${open} still open (${waited})` : `all closed (${waited})`);
 }

@@ -116,7 +116,7 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
     case "daemon": {
       const daemonRoot = findRoot(cwd, env);
       if ((sub === "start" || sub === "run") && inAgentContext(env, cwd)) {
-        throw new Error(`agt daemon ${sub} must run from the project root, not a worktree or an agent pane; the user starts it with agt start`);
+        throw new Error(`agt daemon ${sub} must run from the project root, not a worktree, an agent pane or a shell in a thread tab (use the main tab); the user starts it with agt start`);
       }
       return daemon(sub, daemonRoot, env);
     }

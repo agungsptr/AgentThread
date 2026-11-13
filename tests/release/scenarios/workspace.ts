@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { AGENT_KINDS, type AgentKind, type StoredEvent } from "../../../src/domain/types.ts";
 import { shellQuote, spawnAsync } from "../../../src/herdr/bridge.ts";
 import { paths } from "../../../src/project/paths.ts";
-import { assertInScratchBase, cleanEnv, git, isSymlinkTo, say, TimeoutError, wsTask, type EventOf, type RoleAgents } from "../harness.ts";
+import { assertInScratchBase, cleanEnv, git, isSymlinkTo, runClock, say, TimeoutError, wsTask, type EventOf, type RoleAgents } from "../harness.ts";
 import { actingCoordinator, askForThread, closeThread, mainIdle, sessionsOf, tiers, type H, type Scenario } from "./common.ts";
 
 /** The shared workspace task (plan Global Constraints, verbatim). */
@@ -253,9 +253,9 @@ const latestStage = (all: StoredEvent[], thread: string, stage: number) =>
 /** Reads brief.md until it has `want`, or a timeout; returns the last text read ("" when it never existed). */
 async function briefWith(file: string, want: RegExp[], timeoutMs: number): Promise<string> {
   let text = "";
-  for (const until = Date.now() + timeoutMs; ; ) {
+  for (const until = runClock.now() + timeoutMs; ; ) {
     text = existsSync(file) ? readFileSync(file, "utf8") : "";
-    if (want.every((w) => w.test(text)) || Date.now() >= until) return text;
+    if (want.every((w) => w.test(text)) || runClock.now() >= until) return text;
     await Bun.sleep(500);
   }
 }
@@ -313,7 +313,7 @@ async function reviewAnsweringWaits(h: H, thread: string): Promise<void> {
 async function answeringWaits<T>(h: H, threads: string[], until: (all: StoredEvent[]) => T | undefined, timeoutMs: number, what: string): Promise<T> {
   const ms = Math.max(1_000, Math.min(timeoutMs, h.left()));
   const answered = new Set<number>();
-  for (const end = Date.now() + ms; ; ) {
+  for (const end = runClock.now() + ms; ; ) {
     const all = await h.events();
     const hit = until(all);
     if (hit !== undefined) return hit;
@@ -328,7 +328,7 @@ async function answeringWaits<T>(h: H, threads: string[], until: (all: StoredEve
       await say(h.herdr, c.pane, c.agent, WAITING_ANSWER);
       h.note(`thread ${e.thread} waited for the user (${e.payload.what}); answered in coordinator pane ${c.pane}`);
     }
-    if (Date.now() >= end) {
+    if (runClock.now() >= end) {
       const tail = all.slice(-12).map((e) => `${e.seq} ${e.type}${e.thread ? ` ${e.thread}` : ""}`).join(", ");
       throw new TimeoutError(`timed out after ${Math.round(ms / 1000)}s waiting for ${what}; last events: ${tail}`);
     }
@@ -433,7 +433,7 @@ const branchExists = async (repoPath: string, name: string) =>
 
 /** Polls until `file` exists (a pane writes it with a final mv), or a timeout; returns its text ("" when it never came). */
 async function fileFrom(file: string, timeoutMs: number): Promise<string> {
-  for (const until = Date.now() + timeoutMs; Date.now() < until; await Bun.sleep(500)) if (existsSync(file)) return readFileSync(file, "utf8");
+  for (const until = runClock.now() + timeoutMs; runClock.now() < until; await Bun.sleep(500)) if (existsSync(file)) return readFileSync(file, "utf8");
   return existsSync(file) ? readFileSync(file, "utf8") : "";
 }
 
@@ -627,7 +627,7 @@ async function tabShell(h: H): Promise<void> {
   // The first coordinator's agent process (its cwd is the thread directory) carries AGT_AGENT_PROCESS=1.
   const marked = (p: { vars: Record<string, string> }) => p.vars.AGT_ROLE === "coordinator" && p.vars.AGT_THREAD === thread && p.vars.AGT_AGENT_PROCESS === "1";
   let procs = await processesUnder(dir);
-  for (const until = Date.now() + 60_000; !procs.some(marked) && Date.now() < until; procs = await processesUnder(dir)) await Bun.sleep(3_000);
+  for (const until = runClock.now() + 60_000; !procs.some(marked) && runClock.now() < until; procs = await processesUnder(dir)) await Bun.sleep(3_000);
   const vars = (v: Record<string, string>) => Object.entries(v).filter(([k]) => k !== "AGT_ROOT").map(([k, x]) => `${k}=${x}`).join(" ") || "no AGT_ vars";
   for (const p of procs) h.note(`process ${p.pid} in ${dir}: ${p.command} [${vars(p.vars)}]`);
   h.check("the first coordinator's agent process has AGT_AGENT_PROCESS=1", procs.some(marked), procs.filter(marked).map((p) => `${p.pid}`).join(",") || `${procs.length} processes, none marked`);

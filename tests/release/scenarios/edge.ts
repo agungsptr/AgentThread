@@ -1,5 +1,5 @@
 import type { StoredEvent } from "../../../src/domain/types.ts";
-import type { EventOf } from "../harness.ts";
+import { runClock, type EventOf } from "../harness.ts";
 import { DAILY } from "./happy.ts";
 import { actingCoordinator, closeThread, finishAndVerify, mainSession, newThread, sessionsOf, type H, type Scenario } from "./common.ts";
 
@@ -210,10 +210,10 @@ export function edgeScenarios(): Scenario[] {
       startEnv: { AGT_CLAUDE_BIN: "/nonexistent/agt-e2e/claude" },
       async run(h) {
         // `agt start` itself fails to launch main; it must say so and end main's session within 60s.
-        const t0 = Date.now();
+        const t0 = runClock.now();
         const m = await h.waitFor("session.created", (e) => e.payload.role === "main", 30_000, "main session");
         await h.waitFor("session.ended", (e) => e.payload.session === m.payload.session, 60_000, "main session ended");
-        h.check("failed within 60s", Date.now() - t0 < 60_000, `${Math.round((Date.now() - t0) / 1000)}s`);
+        h.check("failed within 60s", runClock.now() - t0 < 60_000, `${Math.round((runClock.now() - t0) / 1000)}s`);
         h.check("the pane says what failed", /cannot start Claude Code \(\/nonexistent\/agt-e2e\/claude\)/.test(await h.herdr.read(h.mainPane)));
       },
     },

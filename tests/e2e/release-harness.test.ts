@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FIXED_MARKER, prepareFixedScratch, raceScenario, trustGate, watchTrustDialogs, type Herdr } from "../release/harness.ts";
+import { FIXED_MARKER, prepareFixedScratch, raceScenario, runClock, trustGate, watchTrustDialogs, type Herdr } from "../release/harness.ts";
 
 const temp = () => realpathSync(mkdtempSync(join(tmpdir(), "agt-harness-test-")));
 
@@ -57,7 +57,7 @@ test("a foreign trust dialog past the grace ends the row within seconds, not at 
   const t0 = Date.now();
   try {
     const never = new Promise<void>(() => {});
-    await expect(raceScenario(never, gate.promise, 60_000, "scenario timed out after 20m")).rejects.toThrow(
+    await expect(raceScenario(never, gate.promise, runClock.now() + 60_000, "scenario timed out after 20m")).rejects.toThrow(
       "trust dialog in coordinator/worker pane w1:p7: no trust dialog in a coordinator/worker pane",
     );
     expect(Date.now() - t0).toBeLessThan(3_000);
@@ -67,8 +67,8 @@ test("a foreign trust dialog past the grace ends the row within seconds, not at 
 });
 
 test("raceScenario: the scenario's own result and the deadline", async () => {
-  await raceScenario(Promise.resolve(), trustGate().promise, 60_000, "t");
-  await expect(raceScenario(new Promise<void>(() => {}), trustGate().promise, 20, "scenario timed out after 20m")).rejects.toThrow("scenario timed out after 20m");
+  await raceScenario(Promise.resolve(), trustGate().promise, runClock.now() + 60_000, "t");
+  await expect(raceScenario(new Promise<void>(() => {}), trustGate().promise, runClock.now() + 20, "scenario timed out after 20m")).rejects.toThrow("scenario timed out after 20m");
 });
 
 test("the fixed scratch root: a missing folder fails with the one-time trust step", () => {

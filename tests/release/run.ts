@@ -248,7 +248,7 @@ async function runRow(sc: Scenario): Promise<{ status: "PASS" | "FAIL"; reason?:
     h.check("harness: the layout names the isolated Herdr socket", layout.payload.herdrSocket === server.socket, layout.payload.herdrSocket);
     // Main is a bare process in its pane: answer its first-run trust dialog by screen as well.
     if (manager) void answerTrustIn(server.herdr, h.mainPane, sc.agents.main, 60_000, note).then((a) => a && note(`answered the trust dialog in main's pane ${h.mainPane}`));
-    await raceScenario(sc.run(h), trustAbort.promise, deadline - runClock.now(), `scenario timed out after ${values.timeout ?? "20m"}`);
+    await raceScenario(sc.run(h), trustAbort.promise, deadline, `scenario timed out after ${values.timeout ?? "20m"}`);
   } catch (e) {
     failure = e instanceof Error ? e.message : String(e);
     log(`[${sc.id}] error: ${failure}`);

@@ -18,7 +18,10 @@ export function stallClock(o: { now?: () => number; tickMs?: number; thresholdMs
       last = t;
       if (gap > thresholdMs) stalled += gap - tickMs;
     },
-    now: () => wall() - stalled,
+    now: () => {
+      clock.observe(); // self-corrects after a wake, before the interval has ticked
+      return wall() - stalled;
+    },
     stalledMs: () => stalled,
     start(): void {
       timer ??= setInterval(() => clock.observe(), tickMs);
