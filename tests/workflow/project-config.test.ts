@@ -62,3 +62,11 @@ test("stageNa: stage 7 without e2e stages, stage 8 without browser urls or resta
   expect(na({ e2e: { stage2: "x" }, browser: { urls: ["u"] } })).toEqual([{ stage: 8, reason: "no browser URL or stack restart configured" }]);
   expect(na({ e2e: { baseline: "b" }, browser: { urls: [] }, stack: { restart: "r" } }).map((x) => x.stage)).toEqual([7, 8]);
 });
+
+test("projectConfigSection: a command with {task} says what to put there", () => {
+  const s = projectConfigSection(full, repos);
+  expect(s).toContain("replace `{task}` with the thread's task name");
+  expect(s).toContain("never run it with the placeholder or an empty value");
+  const noPlaceholder = ConfigSchema.parse({ workflow: { stack: { restart: "make restart" } } });
+  expect(projectConfigSection(noPlaceholder, repos)).not.toContain("replace `{task}`");
+});

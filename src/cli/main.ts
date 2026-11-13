@@ -8,9 +8,9 @@ import { agentEnv } from "../agents/claude.ts";
 import { adapterFor, agentBin, prepareLaunch } from "../agents/adapters.ts";
 import { configWarnings, installWarnings, roleAgent, trustWarning } from "../agents/roles.ts";
 import { systemPrompt } from "../agents/prompts.ts";
-import { decodeJob, loggedArgv, placementLock, placementWait, reportWithRetry, runSpawnJob, spawnReportRetry, spawnTrustPolls } from "../agents/spawn-job.ts";
+import { agtCreatedFolder, decodeJob, loggedArgv, placementLock, placementWait, reportWithRetry, runSpawnJob, spawnReportRetry, spawnTrustPolls } from "../agents/spawn-job.ts";
 import { contextTokensFromTranscript } from "../agents/transcript.ts";
-import { isAlive, request } from "../daemon/client.ts";
+import { DaemonUnavailable, isAlive, request } from "../daemon/client.ts";
 import { startDaemon } from "../daemon/server.ts";
 import { configHash, DEFAULT_CONFIG, loadConfig } from "../config/config.ts";
 import { AGENT_KINDS, ROLES, SESSION_SIGNALS, STAGE_STATES, type Actor, type SessionRole, type AgentKind, type Layout, type StoredEvent } from "../domain/types.ts";
@@ -29,10 +29,25 @@ const GUIDE_ROLES = ["main", "coordinator", "worker"] as const;
 
 class UsageError extends Error {}
 
+/** An agent pane (its AGT_* env) or any shell inside a worktree agt created (`<root>/.worktrees/...`). */
+function inAgentContext(env: Env, cwd: string): boolean {
+  if (env.AGT_THREAD || env.AGT_ROLE === "coordinator" || env.AGT_ROLE === "worker" || env.AGT_ROLE === "main") return true;
+  try {
+    return agtCreatedFolder(findRoot(cwd, env), cwd);
+  } catch {
+    return false;
+  }
+}
+
 export async function main(argv: string[], env: Env = process.env, cwd: string = process.cwd()): Promise<number> {
   try {
     return await run(argv, env, cwd);
   } catch (e) {
+    if (e instanceof DaemonUnavailable && inAgentContext(env, cwd)) {
+      // An agent obeying "run `agt daemon start`" would start a daemon pinned to its worktree and outlive the project's run.
+      console.error("agt: daemon is not running; tell the user (only they start it, with `agt start` in the main tab)");
+      return 1;
+    }
     if (e instanceof UsageError) {
       console.error(e.message ? `agt: ${e.message}\n\n${USAGE}` : USAGE);
       return 2;
@@ -98,8 +113,13 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
       if (await isAlive(paths(setupRoot).socket)) console.log("run agt start to apply the new config");
       return 0;
     }
-    case "daemon":
-      return daemon(sub, findRoot(cwd, env), env);
+    case "daemon": {
+      const daemonRoot = findRoot(cwd, env);
+      if ((sub === "start" || sub === "run") && inAgentContext(env, cwd)) {
+        throw new Error(`agt daemon ${sub} must run from the project root, not a worktree or an agent pane; the user starts it with agt start`);
+      }
+      return daemon(sub, daemonRoot, env);
+    }
     case "config":
       console.log(stringify(loadConfig(findRoot(cwd, env), env)).trimEnd());
       return 0;
@@ -359,7 +379,7 @@ async function ensureDaemon(root: string, env: Env): Promise<"started" | "runnin
   // log in the child (see loggedArgv): no fd of ours is handed over.
   const [cmd, args] = loggedArgv(p.daemonLog, [process.execPath, Bun.main, "daemon", "run"]);
   try {
-    spawn(cmd, args, { detached: true, stdio: "ignore", env: { ...env, AGT_ROOT: root } }).unref();
+    spawn(cmd, args, { detached: true, stdio: "ignore", cwd: root, env: { ...env, AGT_ROOT: root } }).unref();
   } catch {
     throw new Error("failed to launch daemon");
   }

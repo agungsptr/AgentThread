@@ -39,6 +39,7 @@ import {
   writeWorkspaceConfig,
   type HerdrServer,
 } from "./harness.ts";
+import { runClock } from "./stall-clock.ts";
 import type { H, Scenario } from "./scenarios/common.ts";
 import { allScenarios, listRows } from "./scenarios/index.ts";
 
@@ -54,6 +55,7 @@ const { values } = parseArgs({
   strict: true,
 });
 
+runClock.start(); // row deadlines do not run while the machine sleeps
 const log = (m: string) => console.log(`${new Date().toISOString().slice(11, 19)} ${m}`);
 
 let scenarios = allScenarios();
@@ -168,7 +170,7 @@ async function runRow(sc: Scenario): Promise<{ status: "PASS" | "FAIL"; reason?:
       }
     })());
   teardown = cleanup;
-  const deadline = Date.now() + timeoutMs;
+  const deadline = runClock.now() + timeoutMs;
   try {
     xdg = rowConfigHome();
     server = await startHerdr();
@@ -207,7 +209,7 @@ async function runRow(sc: Scenario): Promise<{ status: "PASS" | "FAIL"; reason?:
         return res.stdout.trim();
       },
       events: () => events(r),
-      waitFor: (type, pred, ms, what) => waitForEvent(r, type, pred, Math.max(1_000, Math.min(ms ?? 120_000, deadline - Date.now())), what),
+      waitFor: (type, pred, ms, what) => waitForEvent(r, type, pred, Math.max(1_000, Math.min(ms ?? 120_000, deadline - runClock.now())), what),
       say: (text) => say(h.herdr, h.mainPane, sc.agents.main, text),
       async restartHerdr() {
         await h.server.stop();
@@ -229,7 +231,7 @@ async function runRow(sc: Scenario): Promise<{ status: "PASS" | "FAIL"; reason?:
         log(`[${sc.id}] ${ok ? "ok  " : "FAIL"} ${name}${detail ? ` (${detail})` : ""}`);
       },
       note,
-      left: () => deadline - Date.now(),
+      left: () => deadline - runClock.now(),
     };
     // A fixed-root row's folder is trusted once by the user; a dialog there means that step is missing, so say how.
     const trustCheck = sc.scratchAt ? MIXED_MAIN_TRUST : "no trust dialog in a coordinator/worker pane";
@@ -246,7 +248,7 @@ async function runRow(sc: Scenario): Promise<{ status: "PASS" | "FAIL"; reason?:
     h.check("harness: the layout names the isolated Herdr socket", layout.payload.herdrSocket === server.socket, layout.payload.herdrSocket);
     // Main is a bare process in its pane: answer its first-run trust dialog by screen as well.
     if (manager) void answerTrustIn(server.herdr, h.mainPane, sc.agents.main, 60_000, note).then((a) => a && note(`answered the trust dialog in main's pane ${h.mainPane}`));
-    await raceScenario(sc.run(h), trustAbort.promise, deadline - Date.now(), `scenario timed out after ${values.timeout ?? "20m"}`);
+    await raceScenario(sc.run(h), trustAbort.promise, deadline - runClock.now(), `scenario timed out after ${values.timeout ?? "20m"}`);
   } catch (e) {
     failure = e instanceof Error ? e.message : String(e);
     log(`[${sc.id}] error: ${failure}`);

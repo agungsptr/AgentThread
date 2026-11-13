@@ -28,6 +28,7 @@ import { request } from "../../src/daemon/client.ts";
 import type { AgentKind, StoredEvent } from "../../src/domain/types.ts";
 import { spawnAsync, type RunResult } from "../../src/herdr/bridge.ts";
 import { paths } from "../../src/project/paths.ts";
+import { runClock } from "./stall-clock.ts";
 
 export const REPO = resolve(import.meta.dir, "../..");
 export const AGT = join(REPO, "bin", "agt");
@@ -438,14 +439,14 @@ export async function waitForEvent<T extends StoredEvent["type"]>(
   timeoutMs = 120_000,
   what = "",
 ): Promise<EventOf<T>> {
-  const until = Date.now() + timeoutMs;
+  const until = runClock.now() + timeoutMs;
   const types: readonly string[] = Array.isArray(type) ? type : [type];
   let all: StoredEvent[] = [];
   for (;;) {
     all = await events(root);
     const hit = all.find((e) => types.includes(e.type) && pred(e as EventOf<T>, all));
     if (hit) return hit as EventOf<T>;
-    if (Date.now() > until) break;
+    if (runClock.now() > until) break;
     await Bun.sleep(2_000);
   }
   const tail = all.slice(-12).map((e) => `${e.seq} ${e.type}${e.thread ? ` ${e.thread}` : ""}`).join(", ");

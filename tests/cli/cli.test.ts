@@ -49,6 +49,29 @@ test("daemon lifecycle", () => {
   expect(agt(["daemon", "status"]).code).toBe(1);
 });
 
+test("agt never starts a daemon from inside a worktree or an agent pane", () => {
+  const wt = join(root, ".worktrees", "task", "web");
+  mkdirSync(wt, { recursive: true });
+  // No AGT_ROOT: the project is found by walking up from the worktree, like an agent's own agt call.
+  for (const sub of ["start", "run"]) {
+    const r = agt(["daemon", sub], { cwd: wt, root: false });
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("project root");
+  }
+  expect(agt(["daemon", "status"], { cwd: wt, root: false }).code).toBe(1);
+  // An agent pane, whatever its cwd, is refused too.
+  expect(agt(["daemon", "start"], { env: WORKER }).err).toContain("project root");
+  expect(agt(["daemon", "status"]).code).toBe(1); // still no daemon anywhere
+});
+
+test("a daemon-less agt call from an agent does not tell it to start the daemon", () => {
+  const r = agt(["log", "001", "hi"], { env: WORKER });
+  expect(r.code).toBe(1);
+  expect(r.err).toContain("daemon is not running");
+  expect(r.err).not.toContain("agt daemon start");
+  expect(r.err).toContain("tell the user");
+});
+
 test("commands without a daemon explain how to start it", () => {
   expect(agt(["log", "001", "hi"])).toMatchObject({ code: 1, err: "agt: daemon is not running; run `agt daemon start`" });
 });

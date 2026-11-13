@@ -51,6 +51,9 @@ export function projectConfigSection(config: Config, repos: { name: string; path
     "",
     `- Stack restart: ${code(w.stack?.restart)}`,
     `- Stack status: ${code(w.stack?.status)}`,
+    ...(w.stack?.restart?.includes("{task}")
+      ? ["- In the restart command, replace `{task}` with the thread's task name (the folder under `.worktrees/`) before running it; never run it with the placeholder or an empty value."]
+      : []),
     `- E2E stage 2: ${code(w.e2e?.stage2)}`,
     `- E2E stage 3: ${code(w.e2e?.stage3)}`,
     `- E2E stage 4: ${code(w.e2e?.stage4)}`,
