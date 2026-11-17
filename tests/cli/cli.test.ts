@@ -49,27 +49,54 @@ test("daemon lifecycle", () => {
   expect(agt(["daemon", "status"]).code).toBe(1);
 });
 
-test("agt never starts a daemon from inside a worktree or an agent pane", () => {
+const AGENT = { AGT_AGENT_PROCESS: "1" };
+const MAIN_HINT = "agt daemon is started from the project's main tab: run agt start there.";
+
+test("a worktree shell with no AGT_* env is told to use the project root, and no daemon starts", () => {
   const wt = join(root, ".worktrees", "task", "web");
   mkdirSync(wt, { recursive: true });
-  // No AGT_ROOT: the project is found by walking up from the worktree, like an agent's own agt call.
+  // No AGT_ROOT: the project is found by walking up from the worktree.
   for (const sub of ["start", "run"]) {
     const r = agt(["daemon", sub], { cwd: wt, root: false });
     expect(r.code).toBe(1);
     expect(r.err).toContain("project root");
+    expect(r.err).toContain(root);
+    expect(r.err).not.toContain("tell the user");
   }
+  const down = agt(["log", "001", "hi"], { cwd: wt, root: false });
+  expect(down.err).toBe(`agt: daemon is not running; ${MAIN_HINT}`);
   expect(agt(["daemon", "status"], { cwd: wt, root: false }).code).toBe(1);
-  // An agent pane, whatever its cwd, is refused too.
-  expect(agt(["daemon", "start"], { env: WORKER }).err).toContain("project root");
   expect(agt(["daemon", "status"]).code).toBe(1); // still no daemon anywhere
 });
 
-test("a daemon-less agt call from an agent does not tell it to start the daemon", () => {
-  const r = agt(["log", "001", "hi"], { env: WORKER });
-  expect(r.code).toBe(1);
-  expect(r.err).toContain("daemon is not running");
-  expect(r.err).not.toContain("agt daemon start");
-  expect(r.err).toContain("tell the user");
+test("an agent process is told not to start the daemon and to tell the user", () => {
+  for (const env of [{ ...WORKER, ...AGENT }, { ...COORD, ...AGENT }]) {
+    for (const sub of ["start", "run"]) {
+      const r = agt(["daemon", sub], { env });
+      expect(r.code).toBe(1);
+      expect(r.err).toContain("do not start the daemon");
+      expect(r.err).toContain("tell the user");
+    }
+    const down = agt(["log", "001", "hi"], { env });
+    expect(down.code).toBe(1);
+    expect(down.err).toBe("agt: daemon is not running; tell the user (only they start it, with `agt start` in the main tab)");
+  }
+  expect(agt(["daemon", "status"]).code).toBe(1);
+});
+
+test("a user shell in a thread or workers tab is pointed at the main tab, and no daemon starts", () => {
+  for (const env of [WORKER, COORD, { AGT_ROLE: "main" }, { AGT_THREAD: "001" }] as Record<string, string>[]) {
+    for (const sub of ["start", "run"]) {
+      const r = agt(["daemon", sub], { env });
+      expect(r.code).toBe(1);
+      expect(r.err).toBe(`agt: agt daemon ${sub}: ${MAIN_HINT}`);
+      expect(r.err).not.toContain("tell the user");
+    }
+    const down = agt(["log", "001", "hi"], { env });
+    expect(down.code).toBe(1);
+    expect(down.err).toBe(`agt: daemon is not running; ${MAIN_HINT}`);
+  }
+  expect(agt(["daemon", "status"]).code).toBe(1);
 });
 
 test("commands without a daemon explain how to start it", () => {

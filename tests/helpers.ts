@@ -58,8 +58,12 @@ export function stateOf(...bodies: EventBody[]): State {
   return project(stored(bodies));
 }
 
+/** Every temp project dir this test process created; tests/leak-guard.ts kills any daemon still running in one. */
+export const createdTempDirs = new Set<string>();
+
 export function tempRepo(): string {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "agt-repo-")));
+  createdTempDirs.add(dir);
   const git = (...args: string[]) => {
     const r = Bun.spawnSync(["git", "-C", dir, ...args], { stderr: "pipe" });
     if (r.exitCode !== 0) throw new Error(r.stderr.toString());
@@ -153,6 +157,7 @@ export function fakeHerdrState(seed: Partial<FakeHerdrState> = {}): {
 /** A folder holding two git repos (a, b) and a plain folder. */
 export function twoRepoFolder(): string {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "agt-ws-")));
+  createdTempDirs.add(root);
   for (const n of ["a", "b"]) {
     mkdirSync(join(root, n));
     const r = Bun.spawnSync(["git", "-C", join(root, n), "init", "-q", "-b", "main"]);

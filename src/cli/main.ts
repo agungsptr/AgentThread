@@ -29,23 +29,38 @@ const GUIDE_ROLES = ["main", "coordinator", "worker"] as const;
 
 class UsageError extends Error {}
 
-/** An agent pane (its AGT_* env) or any shell inside a worktree agt created (`<root>/.worktrees/...`). */
-function inAgentContext(env: Env, cwd: string): boolean {
-  if (env.AGT_THREAD || env.AGT_ROLE === "coordinator" || env.AGT_ROLE === "worker" || env.AGT_ROLE === "main") return true;
+type Asker = "agent" | "tab-shell" | "worktree-shell";
+
+/**
+ * Who is running agt where only an agent or the project's main tab may start the daemon: an agent process
+ * (AGT_AGENT_PROCESS=1), a user's own shell in a thread or workers tab (it inherits AGT_ROLE/AGT_THREAD from the tab
+ * but has no marker), or a shell inside a worktree agt created (`<root>/.worktrees/...`) with no AGT_* at all.
+ */
+function asker(env: Env, cwd: string): Asker | undefined {
+  if (env.AGT_THREAD || env.AGT_ROLE === "coordinator" || env.AGT_ROLE === "worker" || env.AGT_ROLE === "main") {
+    return env.AGT_AGENT_PROCESS === "1" ? "agent" : "tab-shell";
+  }
   try {
-    return agtCreatedFolder(findRoot(cwd, env), cwd);
+    return agtCreatedFolder(findRoot(cwd, env), cwd) ? "worktree-shell" : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
+
+const USER_START_HINT = "agt daemon is started from the project's main tab: run agt start there.";
 
 export async function main(argv: string[], env: Env = process.env, cwd: string = process.cwd()): Promise<number> {
   try {
     return await run(argv, env, cwd);
   } catch (e) {
-    if (e instanceof DaemonUnavailable && inAgentContext(env, cwd)) {
-      // An agent obeying "run `agt daemon start`" would start a daemon pinned to its worktree and outlive the project's run.
-      console.error("agt: daemon is not running; tell the user (only they start it, with `agt start` in the main tab)");
+    const who = e instanceof DaemonUnavailable ? asker(env, cwd) : undefined;
+    if (who !== undefined) {
+      // Obeying "run `agt daemon start`" would start a daemon pinned to a worktree or tab and outlive the project's run.
+      console.error(
+        who === "agent"
+          ? "agt: daemon is not running; tell the user (only they start it, with `agt start` in the main tab)"
+          : `agt: daemon is not running; ${USER_START_HINT}`,
+      );
       return 1;
     }
     if (e instanceof UsageError) {
@@ -115,8 +130,13 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
     }
     case "daemon": {
       const daemonRoot = findRoot(cwd, env);
-      if ((sub === "start" || sub === "run") && inAgentContext(env, cwd)) {
-        throw new Error(`agt daemon ${sub} must run from the project root, not a worktree, an agent pane or a shell in a thread tab (use the main tab); the user starts it with agt start`);
+      const who = sub === "start" || sub === "run" ? asker(env, cwd) : undefined;
+      if (who === "agent") {
+        throw new Error(`agt daemon ${sub} must run from the project root, not a worktree or an agent pane; do not start the daemon: tell the user (only they start it, with agt start in the main tab)`);
+      }
+      if (who === "tab-shell") throw new Error(`agt daemon ${sub}: ${USER_START_HINT}`);
+      if (who === "worktree-shell") {
+        throw new Error(`agt daemon ${sub} must run from the project root (${daemonRoot}), not a worktree: cd there, or run agt start in the main tab`);
       }
       return daemon(sub, daemonRoot, env);
     }
