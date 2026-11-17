@@ -24,13 +24,17 @@ function leaked(): { pid: number; cwd: string; cmd: string }[] {
   return out;
 }
 
-function reap(where: string): void {
+/** Kills every leaked process (see above); returns their pids. */
+export function reap(where: string): number[] {
+  const killed: number[] = [];
   for (const p of leaked()) {
     process.stderr.write(`leak-guard: ${where}: killing ${p.cmd.slice(0, 120)} (pid ${p.pid}, cwd ${p.cwd})\n`);
     try {
       process.kill(p.pid, "SIGKILL");
+      killed.push(p.pid);
     } catch {}
   }
+  return killed;
 }
 
 afterAll(() => {

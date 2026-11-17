@@ -89,7 +89,7 @@ test("a user shell in a thread or workers tab is pointed at the main tab, and no
     for (const sub of ["start", "run"]) {
       const r = agt(["daemon", sub], { env });
       expect(r.code).toBe(1);
-      expect(r.err).toBe(`agt: agt daemon ${sub}: ${MAIN_HINT}`);
+      expect(r.err).toBe(`agt: ${MAIN_HINT}`);
       expect(r.err).not.toContain("tell the user");
     }
     const down = agt(["log", "001", "hi"], { env });

@@ -11,6 +11,7 @@ import { systemPrompt } from "../agents/prompts.ts";
 import { agtCreatedFolder, decodeJob, loggedArgv, placementLock, placementWait, reportWithRetry, runSpawnJob, spawnReportRetry, spawnTrustPolls } from "../agents/spawn-job.ts";
 import { contextTokensFromTranscript } from "../agents/transcript.ts";
 import { DaemonUnavailable, isAlive, request } from "../daemon/client.ts";
+import { launchDaemon } from "./daemon-launch.ts";
 import { startDaemon } from "../daemon/server.ts";
 import { configHash, DEFAULT_CONFIG, loadConfig } from "../config/config.ts";
 import { AGENT_KINDS, ROLES, SESSION_SIGNALS, STAGE_STATES, type Actor, type SessionRole, type AgentKind, type Layout, type StoredEvent } from "../domain/types.ts";
@@ -134,7 +135,7 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
       if (who === "agent") {
         throw new Error(`agt daemon ${sub} must run from the project root, not a worktree or an agent pane; do not start the daemon: tell the user (only they start it, with agt start in the main tab)`);
       }
-      if (who === "tab-shell") throw new Error(`agt daemon ${sub}: ${USER_START_HINT}`);
+      if (who === "tab-shell") throw new Error(USER_START_HINT);
       if (who === "worktree-shell") {
         throw new Error(`agt daemon ${sub} must run from the project root (${daemonRoot}), not a worktree: cd there, or run agt start in the main tab`);
       }
@@ -398,16 +399,8 @@ async function ensureDaemon(root: string, env: Env): Promise<"started" | "runnin
   // A new session (detached) keeps the daemon alive when the pane that started it goes away. The shell opens the
   // log in the child (see loggedArgv): no fd of ours is handed over.
   const [cmd, args] = loggedArgv(p.daemonLog, [process.execPath, Bun.main, "daemon", "run"]);
-  try {
-    spawn(cmd, args, { detached: true, stdio: "ignore", cwd: root, env: { ...env, AGT_ROOT: root } }).unref();
-  } catch {
-    throw new Error("failed to launch daemon");
-  }
-  for (let i = 0; i < 50; i++) {
-    if (await isAlive(p.socket)) return "started";
-    await Bun.sleep(100);
-  }
-  throw new Error(`daemon failed to start; see ${p.daemonLog}`);
+  await launchDaemon({ cmd, args, cwd: root, env: { ...env, AGT_ROOT: root }, socket: p.socket, logFile: p.daemonLog });
+  return "started";
 }
 
 /** The running daemon's config hash, or undefined when it does not answer or predates the hash. */
