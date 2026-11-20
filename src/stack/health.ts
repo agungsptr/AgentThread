@@ -14,6 +14,13 @@ export function pidAlive(pid: number): boolean {
   return r.exitCode === 0 && !r.stdout.toString().trim().startsWith("Z");
 }
 
+/** Start time and process group of a live process (null when it does not exist). */
+export function procInfo(pid: number): { start: string; pgid: number } | null {
+  const r = Bun.spawnSync(["ps", "-o", "lstart=", "-o", "pgid=", "-p", String(pid)], { stdout: "pipe", stderr: "pipe" });
+  const m = r.exitCode === 0 ? /^\s*(.+?)\s+(\d+)\s*$/.exec(r.stdout.toString().trim()) : null;
+  return m ? { start: m[1]!, pgid: Number(m[2]) } : null;
+}
+
 function tcpOnce(host: string, port: number, timeoutMs = 1000): Promise<boolean> {
   return new Promise((resolve) => {
     const s = connect({ host, port });

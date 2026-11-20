@@ -1,9 +1,10 @@
 import { spawn, spawnSync } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import { realpathSync } from "node:fs";
 import type { Config } from "../config/config.ts";
 import { installCommand } from "../project/prefill.ts";
-import { checkHealth, healthTarget, listeners, pidAlive, portHeld, sleepMs, waitHealthy } from "./health.ts";
+import { checkHealth, healthTarget, listeners, pidAlive, portHeld, procInfo, sleepMs, waitHealthy } from "./health.ts";
 import { computeStamp, readStamp, writeStamp } from "./stamp.ts";
 import { checkOnly, MAIN, readTask, resolveTarget, runDir, startOrder, writeTask, type ResolvedService } from "./target.ts";
 
@@ -20,6 +21,8 @@ export type StackOptions = {
   healthIntervalMs?: number;
   /** Wait for SIGTERM before SIGKILL, in ms (default 5000). */
   killGraceMs?: number;
+  /** stop: also kill a port listener that does not run from the workspace. */
+  force?: boolean;
 };
 
 export type StartOptions = StackOptions & { task?: string | undefined; main?: boolean | undefined };
@@ -32,13 +35,30 @@ const files = (root: string, name: string) => ({
   stamp: join(runDir(root), `${name}.stamp`),
 });
 
+/** The pid file: pid, process group and start time of the process, so a recycled pid is not mistaken for it. */
+function writePidFile(root: string, name: string, pid: number): void {
+  const info = procInfo(pid);
+  writeFileSync(files(root, name).pid, `${pid}\n${info?.pgid ?? pid}\n${info?.start ?? ""}\n`);
+}
+
+/**
+ * The pid of the service's own live process: the pid file's process must still exist with the recorded start time and
+ * be its own group leader. Anything else (a dead pid, a recycled one, an old-format file) is stale: the file is
+ * removed and the pid is never signalled.
+ */
 export function readPid(root: string, name: string): number | undefined {
+  const file = files(root, name).pid;
+  let lines: string[];
   try {
-    const n = Number(readFileSync(files(root, name).pid, "utf8").trim());
-    return Number.isInteger(n) && n > 0 ? n : undefined;
+    lines = readFileSync(file, "utf8").split("\n");
   } catch {
     return undefined;
   }
+  const pid = Number(lines[0]);
+  const info = Number.isInteger(pid) && pid > 0 ? procInfo(pid) : null;
+  if (info && pidAlive(pid) && info.pgid === pid && lines[2] !== undefined && lines[2] !== "" && info.start === lines[2]) return pid;
+  rmSync(file, { force: true });
+  return undefined;
 }
 
 export function logTail(root: string, name: string, lines = 20): string[] {
@@ -99,33 +119,44 @@ async function untilGone(alive: () => boolean, graceMs: number, sleep: (ms: numb
   return !alive();
 }
 
-/** Stops one service: its process group (SIGTERM, then SIGKILL), then any listener left on its port; removes the pid file. */
-async function stopOne(o: StackOptions, name: string, port: number | undefined): Promise<boolean> {
+const inside = (dir: string, allowed: string[]): boolean => allowed.some((a) => dir === a || dir.startsWith(`${a}/`));
+
+/**
+ * Stops one service: its process group (SIGTERM, then SIGKILL), then a listener left on its port, but only one
+ * running from the workspace (or any with --force). The pid file goes only when the process is gone.
+ */
+async function stopOne(o: StackOptions, name: string, port: number | undefined, allowed: string[] = []): Promise<boolean> {
   const sleep = o.sleep ?? sleepMs;
+  const out = o.out ?? ((l: string) => console.log(l));
   const grace = o.killGraceMs ?? 5000;
   const f = files(o.root, name);
   let did = false;
   const pid = readPid(o.root, name);
-  if (pid !== undefined && groupAlive(pid)) {
+  if (pid !== undefined) {
     did = true;
     killGroup(pid, "SIGTERM");
     if (!(await untilGone(() => groupAlive(pid), grace, sleep))) {
       killGroup(pid, "SIGKILL");
       await untilGone(() => groupAlive(pid), 2000, sleep);
     }
+    if (!groupAlive(pid)) rmSync(f.pid, { force: true });
   }
   if (port !== undefined) {
-    const pids = listeners(port);
-    if (pids.length) {
+    const mine: number[] = [];
+    for (const p of listeners(port)) {
+      const cwd = cwdOf(p);
+      if (o.force || (cwd !== null && inside(cwd, allowed))) mine.push(p);
+      else out(`${name}: port ${port} is held by another program (pid ${p}, ${cwd ?? "unknown cwd"}); not stopping it`);
+    }
+    if (mine.length) {
       did = true;
-      for (const p of pids) killGroup(p, "SIGTERM");
-      if (!(await untilGone(() => listeners(port).length > 0, Math.min(grace, 2000), sleep))) {
-        for (const p of listeners(port)) killGroup(p, "SIGKILL");
-        await untilGone(() => listeners(port).length > 0, 2000, sleep);
+      for (const p of mine) killGroup(p, "SIGTERM");
+      if (!(await untilGone(() => mine.some(pidAlive), Math.min(grace, 2000), sleep))) {
+        for (const p of mine) killGroup(p, "SIGKILL");
+        await untilGone(() => mine.some(pidAlive), 2000, sleep);
       }
     }
   }
-  rmSync(f.pid, { force: true });
   return did;
 }
 
@@ -158,7 +189,7 @@ export async function startStack(o: StartOptions): Promise<ServiceResult[]> {
       continue;
     }
     const pid = readPid(o.root, name);
-    const alive = pid !== undefined && pidAlive(pid);
+    const alive = pid !== undefined;
     const held = s.port !== undefined ? await portHeld(s.port) : undefined;
     if (alive && (held === undefined || held)) {
       out(`${name}: already running (pid ${pid})`);
@@ -166,13 +197,11 @@ export async function startStack(o: StartOptions): Promise<ServiceResult[]> {
       continue;
     }
     if (alive) await stopOne(o, name, undefined); // alive but not serving: replace it
-    else rmSync(f.pid, { force: true });
     if (s.port !== undefined && (await portHeld(s.port))) {
       fail(`port ${s.port} is held by another process (pid ${listeners(s.port).join(", ") || "unknown"}); run agt stack stop`);
       continue;
     }
-    const stamp = computeStamp(r.cwd);
-    if (readStamp(f.stamp) !== stamp) {
+    if (readStamp(f.stamp) !== computeStamp(r.repoDir, r.cwd)) {
       const cmd = installCommand(r.repoDir, o.config.workspace.repos?.[s.repo]?.install);
       if (cmd && !installed.has(r.repoDir)) {
         out(`${name}: installing (${cmd})`);
@@ -189,10 +218,10 @@ export async function startStack(o: StartOptions): Promise<ServiceResult[]> {
           continue;
         }
       }
-      writeStamp(f.stamp, stamp);
+      writeStamp(f.stamp, computeStamp(r.repoDir, r.cwd)); // after install and migrate, which may touch the tree
     }
     const newPid = spawnDetached(s.start, r.cwd, f.log);
-    writeFileSync(f.pid, `${newPid}\n`);
+    writePidFile(o.root, name, newPid);
     const target = healthTarget(s);
     const t0 = (o.now ?? Date.now)();
     const ok = await waitHealthy(target, {
@@ -221,9 +250,10 @@ export async function stopStack(o: StackOptions): Promise<ServiceResult[]> {
   const out = o.out ?? ((l: string) => console.log(l));
   const resolved = resolveTarget(o.root, o.config, { main: true });
   const list = selected(o, resolved.services, true).reverse();
+  const allowed = [...new Set([o.root, ...resolved.services.map((r) => r.repoDir)].flatMap((d) => [d, (() => { try { return realpathSync(d); } catch { return d; } })()]))];
   const results: ServiceResult[] = [];
   for (const r of list) {
-    const did = await stopOne(o, r.name, r.service.port);
+    const did = await stopOne(o, r.name, r.service.port, allowed);
     out(`${r.name}: ${did ? "stopped" : "not running"}`);
     results.push({ name: r.name, outcome: "stopped" });
   }
@@ -263,7 +293,7 @@ export async function stackStatus(o: StackOptions): Promise<ServiceStatus[]> {
   for (const r of startOrder(resolved.services, o.only)) {
     const port = r.service.port ?? null;
     const filePid = readPid(o.root, r.name);
-    let pid: number | null = filePid !== undefined && pidAlive(filePid) ? filePid : null;
+    let pid: number | null = filePid ?? null;
     if (pid === null && port !== null) pid = listeners(port)[0] ?? null;
     const healthy = pid === null ? false : await checkHealth(healthTarget(r.service));
     const cwd = pid === null ? null : cwdOf(pid);

@@ -20,6 +20,13 @@ export type ResolvedService = {
 
 export type Target = { target: string; services: ResolvedService[] };
 
+const TASK_NAME = /^[A-Za-z0-9._-]+$/;
+
+/** A task slug is one safe path segment: letters, digits, dot, underscore, dash; never "." or "..". */
+export function validTaskName(t: string): boolean {
+  return TASK_NAME.test(t) && t !== "." && t !== "..";
+}
+
 /** The target recorded in .local-run/task ("main" when absent or empty). */
 export function readTask(root: string): string {
   try {
@@ -49,6 +56,7 @@ function isDir(p: string): boolean {
 export function resolveTarget(root: string, config: Config, opts: { task?: string | undefined; main?: boolean | undefined } = {}): Target {
   if (opts.task !== undefined && opts.main) throw new Error("--task and --main exclude each other");
   const target = opts.main ? MAIN : (opts.task ?? readTask(root));
+  if (!validTaskName(target)) throw new Error(`invalid task "${target}": use letters, digits, ".", "_" and "-" (not "." or "..")`);
   const repos = workspaceRepos(root, config);
   const services: ResolvedService[] = [];
   for (const [name, service] of Object.entries(config.workspace.services ?? {})) {

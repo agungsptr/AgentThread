@@ -1,5 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { spawn } from "node:child_process";
+import { computeStamp } from "../../src/stack/stamp.ts";
 import { join } from "node:path";
 import { DEFAULT_CONFIG, type Config, type ServiceConfig } from "../../src/config/config.ts";
 import { listeners, pidAlive, portHeld } from "../../src/stack/health.ts";
@@ -227,6 +230,77 @@ test("restart stops, starts again with a new pid and writes restart.log", async 
   expect(readPid(root, "w")).not.toBe(pid);
   expect(await portHeld(port)).toBe(true);
   expect(readFileSync(join(root, ".local-run", "restart.log"), "utf8")).toContain("w: started");
+});
+
+test("a stale pid file never signals an unrelated live process", async () => {
+  const root = twoRepoFolder();
+  const config = cfg({ a: { path: "a" } }, { w: svc({ repo: "a", start: "sleep 300" }) });
+  guard(root, config);
+  const other = spawn("sleep", ["300"], { detached: true, stdio: "ignore" });
+  other.unref();
+  STAMPS.push(async () => void process.kill(-other.pid!, "SIGKILL"));
+  const pidFile = join(root, ".local-run", "w.pid");
+  mkdirSync(join(root, ".local-run"), { recursive: true });
+  const stale = () => writeFileSync(pidFile, `${other.pid}\n${other.pid}\nMon Jan  1 00:00:00 2001\n`);
+  stale();
+  expect((await stackStatus({ root, config }))[0]!.state).toBe("stopped");
+  expect(existsSync(pidFile)).toBe(false);
+  stale();
+  await stopStack({ root, config, ...quiet });
+  expect(pidAlive(other.pid!)).toBe(true);
+  expect(existsSync(pidFile)).toBe(false);
+  writeFileSync(pidFile, `${other.pid}\n`); // an old-format file cannot be verified either
+  const res = await startStack({ root, config, ...quiet });
+  expect(res[0]!.outcome).toBe("started");
+  expect(readPid(root, "w")).not.toBe(other.pid!);
+  await stopStack({ root, config, ...quiet });
+  stale();
+  await stopStack({ root, config, ...quiet });
+  expect(pidAlive(other.pid!)).toBe(true);
+});
+
+test("the port fallback leaves a foreign listener alone unless --force", async () => {
+  const root = twoRepoFolder();
+  const port = await freePort();
+  const config = cfg({ a: { path: "a" } }, { w: svc({ repo: "a", start: "true", port }) });
+  const foreignDir = realpathSync(mkdtempSync(join(tmpdir(), "agt-foreign-")));
+  createdTempDirs.add(foreignDir);
+  const foreign = spawn("sh", ["-c", serverCmd(port)], { cwd: foreignDir, detached: true, stdio: "ignore" });
+  foreign.unref();
+  STAMPS.push(async () => {
+    try {
+      process.kill(-foreign.pid!, "SIGKILL");
+    } catch {}
+  });
+  for (let i = 0; i < 100 && !(await portHeld(port)); i++) await Bun.sleep(100);
+  const lines: string[] = [];
+  await stopStack({ root, config, ...quiet, out: (l) => lines.push(l) });
+  expect(await portHeld(port)).toBe(true);
+  expect(lines.join("\n")).toMatch(new RegExp(`port ${port} is held by another program \\(pid \\d+, .*agt-foreign.*\\); not stopping it`));
+  await stopStack({ root, config, ...quiet, force: true });
+  expect(await portHeld(port)).toBe(false);
+});
+
+test("task names are validated", () => {
+  const root = twoRepoFolder();
+  const config = twoServices(root, 1, 2);
+  for (const bad of [".", "..", "a/b", "../x", "a b", ""]) expect(() => resolveTarget(root, config, { task: bad })).toThrow("invalid task");
+  expect(() => resolveTarget(root, config, { task: "jira-26.11_a" })).not.toThrow();
+});
+
+test("the stamp covers the whole repo, is recomputed after install, and is not constant outside git", () => {
+  const root = twoRepoFolder();
+  const a = join(root, "a");
+  mkdirSync(join(a, "svc"));
+  for (const args of [["config", "user.email", "t@e.x"], ["config", "user.name", "T"], ["commit", "-q", "--allow-empty", "-m", "i"]]) Bun.spawnSync(["git", "-C", a, ...args]);
+  const before = computeStamp(a, join(a, "svc"));
+  writeFileSync(join(a, "elsewhere.txt"), "x");
+  expect(computeStamp(a, join(a, "svc"))).not.toBe(before);
+  const plain = join(root, "plain");
+  writeFileSync(join(plain, "package.json"), "{}");
+  const s1 = computeStamp(plain);
+  Bun.spawnSync(["touch", "-t", "200101010000", join(plain, "package.json")]);
+  expect(computeStamp(plain)).not.toBe(s1);
 });
 
 test("temp dirs are registered with the leak guard", () => {

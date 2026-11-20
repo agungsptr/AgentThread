@@ -209,8 +209,15 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
     }
     case "stack": {
       const stackRoot = findRoot(cwd, env);
-      if (sub === "start" || sub === "stop" || sub === "restart" || sub === "logs" || (sub === "status" && hasServices(loadConfig(stackRoot, env)))) {
-        return stackServices(stackRoot, env, sub, rest);
+      if (sub === "start" || sub === "stop" || sub === "restart" || sub === "logs") return stackServices(stackRoot, env, sub, rest);
+      if (sub === "status") {
+        let withServices = false;
+        try {
+          withServices = hasServices(loadConfig(stackRoot, env));
+        } catch (e) {
+          console.error(`agt: config is invalid (${e instanceof Error ? e.message.split("\n")[0] : String(e)}); showing the stack lock only`);
+        }
+        if (withServices) return stackServices(stackRoot, env, sub, rest);
       }
       if (sub === "status") {
         if (rest.length) throw new UsageError("stack status takes no arguments");
@@ -323,23 +330,31 @@ async function stackServices(root: string, env: Env, sub: string, args: string[]
     const { values, positionals } = parse(args, { json: { type: "boolean" } });
     if (positionals.length) throw new UsageError("stack status takes only --json");
     const rows = await stackStatus({ root, config });
-    if (values.json) console.log(JSON.stringify(rows, null, 2));
+    let lock: State["stack"] | null = null;
+    if (await isAlive(paths(root).socket)) {
+      const res = await request(paths(root).socket, { op: "command", command: { cmd: "stack.status" }, actor: actorFromEnv(env) });
+      if (res.ok) lock = res.result as State["stack"];
+    }
+    if (values.json) console.log(JSON.stringify({ services: rows, lock }, null, 2));
     else {
       for (const l of formatStatus(rows, root)) console.log(l);
-      if (await isAlive(paths(root).socket)) {
-        const res = await request(paths(root).socket, { op: "command", command: { cmd: "stack.status" }, actor: actorFromEnv(env) });
-        if (res.ok) {
-          const { holder } = res.result as State["stack"];
-          console.log(holder ? `lock: thread ${holder.thread}${holder.purpose ? ` for ${holder.purpose}` : ""}` : "lock: free");
-        }
+      if (!lock) console.log("lock: daemon not running");
+      else {
+        const { holder, queue } = lock;
+        console.log(holder ? `holder: thread ${holder.thread}${holder.purpose ? ` for ${holder.purpose}` : ""}, since ${holder.since}` : "holder: none (the stack is free)");
+        console.log(queue.length ? `queue: ${queue.map((q) => `${q.thread}${q.purpose ? ` (${q.purpose})` : ""}`).join(", ")}` : "queue: empty");
       }
     }
     return 0;
   }
-  const { values, positionals } = parse(args, sub === "stop" ? { only: { type: "string" } } : { task: { type: "string" }, main: { type: "boolean" }, only: { type: "string" } });
+  if (!hasServices(config)) {
+    console.log("no services configured (workspace.services)");
+    return 0;
+  }
+  const { values, positionals } = parse(args, sub === "stop" ? { only: { type: "string" }, force: { type: "boolean" } } : { task: { type: "string" }, main: { type: "boolean" }, only: { type: "string" } });
   if (positionals.length) throw new UsageError(`stack ${sub} takes no arguments`);
   if (values.task !== undefined && values.main) throw new UsageError("--task and --main exclude each other");
-  const o = { root, config, only: only(values.only), task: values.task as string | undefined, main: !!values.main };
+  const o = { root, config, only: only(values.only), task: values.task as string | undefined, main: !!values.main, force: !!values.force };
   const results = await (sub === "stop" ? stopStack(o) : sub === "restart" ? restartStack(o) : startStack(o));
   return results.some((r) => r.outcome === "failed") ? 1 : 0;
 }

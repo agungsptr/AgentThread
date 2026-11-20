@@ -42,12 +42,25 @@ test("agt stack start/status/logs/stop through the CLI; init ignores .local-run"
   expect(start.out).toContain("web: started");
   expect(await portHeld(port)).toBe(true);
   const json = await capture(() => main(["stack", "status", "--json"], env, root));
-  expect(JSON.parse(json.out)[0]).toMatchObject({ service: "web", state: "running", port });
+  const parsed = JSON.parse(json.out);
+  expect(parsed.lock).toBeNull();
+  expect(parsed.services[0]).toMatchObject({ service: "web", state: "running", port });
   const table = await capture(() => main(["stack", "status"], env, root));
   expect(table.out).toContain("service");
+  expect(table.out).toContain("lock: daemon not running");
   const logs = await capture(() => main(["stack", "logs", "web", "-n", "5"], env, root));
   expect(logs.code).toBe(0);
   const stop = await capture(() => main(["stack", "stop"], env, root));
   expect(stop.out).toContain("web: stopped");
   expect(await portHeld(port)).toBe(false);
+});
+
+test("start, stop and restart without services say so and exit 0", async () => {
+  const root = twoRepoFolder();
+  const env = { XDG_CONFIG_HOME: isolatedConfigHome() };
+  initProject(root, "demo", env);
+  for (const sub of ["start", "stop", "restart"]) {
+    const r = await capture(() => main(["stack", sub], env, root));
+    expect(r).toEqual({ code: 0, out: "no services configured (workspace.services)" });
+  }
 });
