@@ -15,7 +15,9 @@ export interface TrustPrompt {
   refuse: RegExp;
   /** The dialog's last words, at the end of the screen while it waits for input (whitespace collapsed). */
   footer: RegExp;
-  /** Moves the selection to the next option. */
+  /** True when the trusting option is listed before the refusing one (agy); false when it follows it (Claude Code). */
+  choiceFirst?: boolean;
+  /** Moves the selection toward the trusting option (from the refusing one). */
   move: string;
   /** Picks the selected option. */
   confirm: string;
@@ -29,6 +31,19 @@ export const CLAUDE_TRUST_PROMPT: TrustPrompt = {
   refuse: /No, exit/i,
   footer: /Enter to confirm\W+Esc to cancel$/i,
   move: "down",
+  confirm: "enter",
+};
+
+/** Antigravity's dialog: the cursor (`>`) starts on "Yes, I trust this folder", the first option; "No, exit" follows it. */
+export const AGY_TRUST_PROMPT: TrustPrompt = {
+  screen: [/Do you trust the contents of this project/i, /No, exit/i],
+  marker: ">",
+  choice: /Yes, I trust this folder/i,
+  refuse: /No, exit/i,
+  // A status line (`auto · <model> · <effort>`) is drawn below the footer.
+  footer: /Navigate\W+enter Confirm(?:\s+auto\b.*)?$/i,
+  choiceFirst: true,
+  move: "up",
   confirm: "enter",
 };
 
@@ -91,23 +106,37 @@ export function trustChoiceSelected(screen: string, prompt: TrustPrompt): boolea
   const no = lines.findLastIndex((line) => prompt.refuse.test(line));
   if (no < 0) return false;
   const marked = (line: string) => line.trimStart().startsWith(prompt.marker);
-  let yes = lines.findIndex((line, i) => i > no && prompt.choice.test(line));
-  // A pane narrower than the option wraps it: the option is the next line with its unmarked continuations, up to a
-  // blank line, read as one.
-  if (yes < 0) {
-    const first = lines.findIndex((line, i) => i > no && line.trim() !== "");
-    if (first < 0) return false;
-    let end = first + 1;
-    while (end < lines.length && lines[end]!.trim() !== "" && !marked(lines[end]!)) end++;
-    if (!prompt.choice.test(collapse(lines.slice(first, end).join(" ")))) return false;
-    yes = first;
+  let yes: number;
+  if (prompt.choiceFirst) {
+    // The trusting option is the nearest choice line above the refusing one.
+    yes = lines.findLastIndex((line, i) => i < no && prompt.choice.test(line));
+    // A pane narrower than the option wraps it: its lines run back from the refusing option to the marked first line.
+    if (yes < 0) {
+      let start = no - 1;
+      while (start >= 0 && lines[start]!.trim() !== "" && !marked(lines[start]!)) start--;
+      if (start < 0 || !marked(lines[start]!)) return false;
+      if (!prompt.choice.test(collapse(lines.slice(start, no).join(" ")))) return false;
+      yes = start;
+    }
+  } else {
+    yes = lines.findIndex((line, i) => i > no && prompt.choice.test(line));
+    // A pane narrower than the option wraps it: the option is the next line with its unmarked continuations, up to a
+    // blank line, read as one.
+    if (yes < 0) {
+      const first = lines.findIndex((line, i) => i > no && line.trim() !== "");
+      if (first < 0) return false;
+      let end = first + 1;
+      while (end < lines.length && lines[end]!.trim() !== "" && !marked(lines[end]!)) end++;
+      if (!prompt.choice.test(collapse(lines.slice(first, end).join(" ")))) return false;
+      yes = first;
+    }
   }
   return marked(lines[yes]!) && !marked(lines[no]!);
 }
 
 /**
  * Answers the trust dialog on `screen` with confirmation: `confirm` is sent only once two reads in a row show the
- * trusting option selected (one read may catch a redraw midway); until then `move` is sent and the screen read again,
+ * trusting option selected (one read may catch a redraw midway); until then `move` is sent (so with the choice already selected, `confirm` goes with no move) and the screen read again,
  * at most `tries` moves. A blind `move` can land before the dialog takes input, so the cursor is checked, never
  * assumed. Gives up, sending nothing more, when the moves run out or the dialog is gone; `screen` is the last one read.
  */

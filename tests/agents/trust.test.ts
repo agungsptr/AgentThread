@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { CLAUDE_TRUST_PROMPT, answerTrustDialog, isTrustDialog, trustChoiceSelected, trustDialogLive, trustDialogMaybe, typingUnsafe } from "../../src/agents/trust.ts";
+import { AGY_TRUST_PROMPT, CLAUDE_TRUST_PROMPT, answerTrustDialog, isTrustDialog, trustChoiceSelected, trustDialogLive, trustDialogMaybe, typingUnsafe } from "../../src/agents/trust.ts";
 import { P8_DIALOG, P8_EXITED, P8_FOOTER, P8_SHELL } from "../fixtures/trust-screens.ts";
 
 // As Claude Code draws it (heavy rerun 3's pane screens); the `❯` marks the selected option.
@@ -194,4 +194,99 @@ test("typingUnsafe: the dialog waiting always; its fragments only until the agen
   expect(typingUnsafe(P8_DIALOG, CLAUDE_TRUST_PROMPT, { confirmed: true })).toBe(false);
   expect(typingUnsafe("Welcome to Claude Code\n❯ ", CLAUDE_TRUST_PROMPT)).toBe(false);
   expect(typingUnsafe(waiting, undefined)).toBe(false);
+});
+
+// ---------- agy (Antigravity): "Yes" first and selected from the start, marker `>` ----------
+
+const agyDialog = (yes: boolean) =>
+  [
+    "Accessing workspace:",
+    "",
+    "/private/var/folders/x/.worktrees/add-slugify-to-api-and-show-",
+    "title-slug-i/api",
+    "",
+    "Do you trust the contents of this project?",
+    "",
+    "Antigravity CLI requires permission to read, edit, and execute files here.",
+    "",
+    `${yes ? ">" : " "} Yes, I trust this folder`,
+    `${yes ? " " : ">"} No, exit`,
+    "",
+    "  ↑/↓ Navigate · enter Confirm",
+    "                                                  auto · Gemini 4 Titanium · high",
+  ].join("\n");
+
+const agyNarrow = (yes: boolean) =>
+  [
+    "Do you trust the",
+    "contents of this",
+    "project?",
+    "",
+    `${yes ? ">" : " "} Yes, I trust`,
+    "  this folder",
+    `${yes ? " " : ">"} No, exit`,
+    "",
+    "  ↑/↓ Navigate ·",
+    "  enter Confirm",
+    "     auto · Gemini 4 Titanium",
+  ].join("\n");
+
+const io = (screens: string[]) => {
+  const keys: string[] = [];
+  let i = 0;
+  return {
+    keys,
+    io: {
+      read: async () => screens[Math.min(++i, screens.length - 1)]!,
+      send: async (k: string) => void keys.push(k),
+      sleep: async () => {},
+    },
+  };
+};
+
+test("agy: its dialog is recognised, whole and waiting, and chopped", () => {
+  expect(isTrustDialog(agyDialog(true), AGY_TRUST_PROMPT)).toBe(true);
+  expect(trustDialogLive(agyDialog(true), AGY_TRUST_PROMPT)).toBe(true);
+  expect(trustDialogLive(agyNarrow(true), AGY_TRUST_PROMPT)).toBe(true);
+  expect(trustDialogMaybe("Do you tr\nust the con\ntents of th\nis project?", AGY_TRUST_PROMPT)).toBe(true);
+  expect(typingUnsafe(agyDialog(true), AGY_TRUST_PROMPT)).toBe(true);
+  expect(trustDialogLive(agyDialog(true), CLAUDE_TRUST_PROMPT)).toBe(false);
+});
+
+test("agy: Yes before No decides by the marker, wrapped too", () => {
+  expect(trustChoiceSelected(agyDialog(true), AGY_TRUST_PROMPT)).toBe(true);
+  expect(trustChoiceSelected(agyDialog(false), AGY_TRUST_PROMPT)).toBe(false);
+  expect(trustChoiceSelected(agyNarrow(true), AGY_TRUST_PROMPT)).toBe(true);
+  expect(trustChoiceSelected(agyNarrow(false), AGY_TRUST_PROMPT)).toBe(false);
+  // Both marked, or Yes marked below No: never.
+  expect(trustChoiceSelected("> Yes, I trust this folder\n> No, exit", AGY_TRUST_PROMPT)).toBe(false);
+  expect(trustChoiceSelected("> No, exit\n  Yes, I trust this folder", AGY_TRUST_PROMPT)).toBe(false);
+});
+
+test("agy: a `>` line outside the dialog's options does not count", () => {
+  const above = `> agt start\n${agyDialog(false)}`;
+  expect(trustChoiceSelected(above, AGY_TRUST_PROMPT)).toBe(false);
+  const below = `${agyDialog(false)}\n> echo hi`;
+  expect(trustChoiceSelected(below, AGY_TRUST_PROMPT)).toBe(false);
+  expect(trustChoiceSelected(`> some quote\n${agyNarrow(false)}`, AGY_TRUST_PROMPT)).toBe(false);
+});
+
+test("agy: Yes selected on two reads sends enter only, no move", async () => {
+  const t = io([agyDialog(true), agyDialog(true)]);
+  const r = await answerTrustDialog(t.io, AGY_TRUST_PROMPT, agyDialog(true));
+  expect(r.answered).toBe(true);
+  expect(t.keys).toEqual(["enter"]);
+});
+
+test("agy: a single stale Yes read does not press enter", async () => {
+  const t = io(["", agyDialog(false), agyDialog(true), agyDialog(true)]);
+  await answerTrustDialog(t.io, AGY_TRUST_PROMPT, agyDialog(true));
+  expect(t.keys).toEqual(["up", "enter"]);
+});
+
+test("agy: No selected moves up and never presses enter while it stays selected", async () => {
+  const t = io([agyDialog(false)]);
+  const r = await answerTrustDialog(t.io, AGY_TRUST_PROMPT, agyDialog(false), { tries: 3 });
+  expect(r.answered).toBe(false);
+  expect(t.keys).toEqual(["up", "up", "up"]);
 });

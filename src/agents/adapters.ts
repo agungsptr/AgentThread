@@ -4,7 +4,7 @@ import type { Config } from "../config/config.ts";
 import type { AgentKind, SessionRole } from "../domain/types.ts";
 import { allowedTools, hookSettings } from "./claude.ts";
 import type { RoleAgent } from "./roles.ts";
-import { CLAUDE_TRUST_PROMPT, type TrustPrompt } from "./trust.ts";
+import { AGY_TRUST_PROMPT, CLAUDE_TRUST_PROMPT, type TrustPrompt } from "./trust.ts";
 
 export interface LaunchInput {
   role: SessionRole;
@@ -246,6 +246,8 @@ const agyAdapter: AgentAdapter = {
   // agy reads AGENTS.md itself (and GEMINI.md, .agents/rules/*.md), but not CLAUDE.md.
   instructionFiles: [],
   prompt: "flag",
+  // The cursor starts on "Yes, I trust this folder", the first option. agy's own config is never read or written.
+  trustPrompt: AGY_TRUST_PROMPT,
   launch({ run, config }) {
     // Pushing is the user's call: a deny rule in the session-only settings (precedence deny > ask > allow). Whether it
     // still holds under --dangerously-skip-permissions is not stated by the docs; the pre-push hook backs it up.

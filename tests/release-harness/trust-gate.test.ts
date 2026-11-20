@@ -210,3 +210,25 @@ test("the trust watcher reads only panes whose agent kind has a trust dialog; an
   expect(await answerTrustIn(herdr as unknown as Herdr, "main", "opencode", 60_000, () => {}, { now: () => t, sleep: async (ms) => void (t += ms) })).toBe(false);
   expect(read).toEqual([]);
 });
+
+test("an agy worker's trust dialog (Yes first, marker `>`) is recognised and gets the 30s grace, never answered outside main", async () => {
+  const AGY_SCREEN = "Do you trust the contents of this project?\n\n> Yes, I trust this folder\n  No, exit\n\n  ↑/↓ Navigate · enter Confirm\n   auto · Gemini 4 Titanium · high";
+  let t = 0;
+  const keys: string[] = [];
+  const foreign: { pane: string; at: number }[] = [];
+  let w!: ReturnType<typeof watchTrustDialogs>;
+  const herdr = {
+    agents: async () => [{ pane_id: "w1:p4", agent: "agy", agent_status: "idle" }],
+    run: async (args: string[]) => (args[1] === "send-keys" && keys.push(args[3]!), { exitCode: 0, stdout: AGY_SCREEN, stderr: "" }),
+  } as unknown as Parameters<typeof watchTrustDialogs>[0];
+  w = watchTrustDialogs(herdr, () => "main", () => {}, (pane) => void foreign.push({ pane, at: t }), {
+    now: () => t,
+    pollMs: 1_500,
+    sleep: async (ms) => void ((t += ms) >= 90_000 && w.stop()),
+  });
+  await w.done;
+  expect(foreign.map((x) => x.pane)).toEqual(["w1:p4"]);
+  expect(foreign[0]!.at).toBeGreaterThanOrEqual(30_000);
+  expect(foreign[0]!.at).toBeLessThan(33_000);
+  expect(keys).toEqual([]);
+});
