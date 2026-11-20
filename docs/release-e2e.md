@@ -91,12 +91,12 @@ Every workspace row runs on Claude Code (except the worker of `ws-happy-worker-<
 answers each `thread.waiting` by typing into the coordinator's pane. Every row that starts an agent runs main: main's
 pane answers Claude Code's trust dialog for the new scratch root, and the thread directories and worktrees under it
 inherit that trust. The rows where the user creates the thread (`ws-edge-*`, `ws-stack-lock`, `ws-tab-shell`) wait for
-main to go idle first; only `ws-smoke-worktrees` and `ws-edge-stage-gates` (no agents) run `agt start --no-manager`.
+main to go idle first; only `ws-smoke-worktrees`, `ws-edge-stage-gates` and `ws-stack-runner` (no agents) run `agt start --no-manager`.
 
 How to run them:
 
 - `--agents` must include `claude-code`: a row whose roles name an agent not listed is dropped.
-- Canary first (minutes): `bun run e2e:release --only ws-smoke-worktrees,ws-edge-stage-gates,ws-tab-shell --agents claude-code`.
+- Canary first (minutes): `bun run e2e:release --only ws-smoke-worktrees,ws-edge-stage-gates,ws-stack-runner,ws-tab-shell --agents claude-code`.
 - Then the heavy rows, marked 40m below, which run a whole thread: `bun run e2e:release --only
   ws-happy-claude-code,ws-cleanup,ws-edge-return,ws-edge-out-of-ticket,ws-stack-lock[,ws-happy-worker-<x>] --agents
   claude-code[,<x>] --timeout 40m`. Budget up to about 40 minutes per heavy row.
@@ -119,6 +119,13 @@ How to run them:
   the CLI as the coordinator (`AGT_ROLE=coordinator`, `AGT_AGENT_PROCESS=1`): its commit on `feat/<task>` is refused
   until `agt stage <id> 8 na --reason test`, and `agt stack acquire <id> --for e2e4` is rejected until the user runs
   `agt stage <id> 7 approve --by user`.
+- `ws-stack-runner`: no agents, no model calls. `agt config apply -` (stdin) adds a tiny Bun HTTP server service per repo
+  (`serve.ts`, two free ports, http health, web after api) and `copy: [.env]`; an untracked `.env` is made in each main
+  checkout and the fixture's own Makefile is removed so agt writes the generated one. After `agt worktree add` of both
+  repos each worktree has the copied `.env`, a clean `git status --porcelain` and the `agt-ready` marker. `agt stack start
+  --task stack-1` makes `agt stack status --json` show both running with cwd in `.worktrees/stack-1/<repo>` and both
+  ports answer HTTP; `make restart TASK=stack-1` brings both back healthy with new pids; `agt stack stop` frees both
+  ports and removes the pid files. The stack is always stopped in `finally`.
 - `ws-stack-lock`, 40m: two threads, each coordinator told to restart the stack before testing. Both get
   `stack.acquired`, the events never show two holders at once, and `.stack.log` has a restart per thread at least 5s
   apart (each restart sleeps 5s).

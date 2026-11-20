@@ -14,6 +14,10 @@ import {
   RESTART_LINE,
   RETURN_LINE,
   returnProblems,
+  allRunning,
+  inTaskWorktree,
+  parseStackStatus,
+  stackConfigPatch,
   stackLogProblems,
   stageNaByAgt,
   WS_ASK_MAIN,
@@ -37,6 +41,7 @@ test("--list includes the workspace rows", () => {
     "ws-edge-return-worker-opencode",
     "ws-edge-stage-gates",
     "ws-stack-lock",
+    "ws-stack-runner",
     "ws-cleanup",
     "ws-tab-shell",
   ]) {
@@ -151,7 +156,7 @@ test("the edge, lock, cleanup and tab-shell rows: Claude Code everywhere; only t
   // Main answers Claude Code's trust dialog for the scratch root before any coordinator starts there.
   for (const id of ["ws-edge-out-of-ticket", "ws-edge-return", "ws-stack-lock", "ws-cleanup", "ws-tab-shell"]) expect(row(id).manager).toBeUndefined();
   // No agent runs in these two.
-  expect(allScenarios().filter((s) => s.id.startsWith("ws-") && s.manager === false).map((s) => s.id).sort()).toEqual(["ws-edge-stage-gates", "ws-smoke-worktrees"]);
+  expect(allScenarios().filter((s) => s.id.startsWith("ws-") && s.manager === false).map((s) => s.id).sort()).toEqual(["ws-edge-stage-gates", "ws-smoke-worktrees", "ws-stack-runner"]);
 });
 
 test("ws-edge-out-of-ticket keeps CHANGELOG.md out of the tickets in its task text", () => {
@@ -287,4 +292,31 @@ test("stageNaByAgt: an agt na record with no later non-na record of that stage",
   expect(stageNaByAgt([], T, 7)).toBe(false);
   // A non-na before agt's na does not matter.
   expect(stageNaByAgt([st(7, "pending", "coordinator"), st(7, "na", "agt")], T, 7)).toBe(true);
+});
+
+test("ws-stack-runner runs without a manager", () => {
+  expect(allScenarios().find((s) => s.id === "ws-stack-runner")!.manager).toBe(false);
+});
+
+test("stackConfigPatch: a service per repo, web after api, .env copied", () => {
+  const p = stackConfigPatch({ api: 4001, web: 4002 }) as { workspace: { repos: Record<string, { copy: string[] }>; services: Record<string, { start: string; health: string; after?: string[] }> } };
+  expect(p.workspace.repos.api!.copy).toEqual([".env"]);
+  expect(p.workspace.services.api!.start).toBe("PORT=4001 bun serve.ts");
+  expect(p.workspace.services.web!.health).toBe("http://127.0.0.1:4002/");
+  expect(p.workspace.services.web!.after).toEqual(["api"]);
+  expect(p.workspace.services.api!.after).toBeUndefined();
+});
+
+test("stack status helpers", () => {
+  const rows = parseStackStatus(JSON.stringify({ services: [{ service: "api", state: "running", port: 1, pid: 10, cwd: ".worktrees/t/api" }, { service: "web", state: "stopped", port: 2, pid: null, cwd: null }], lock: null }));
+  expect(rows.length).toBe(2);
+  expect(parseStackStatus("nope")).toEqual([]);
+  expect(allRunning(rows, ["api"])).toBe(true);
+  expect(allRunning(rows, ["api", "web"])).toBe(false);
+  expect(allRunning(rows, ["api"], { api: 10 })).toBe(false);
+  expect(allRunning(rows, ["api"], { api: 9 })).toBe(true);
+  expect(inTaskWorktree("/r", "t", "api", ".worktrees/t/api")).toBe(true);
+  expect(inTaskWorktree("/r", "t", "api", "/r/.worktrees/t/api/sub")).toBe(true);
+  expect(inTaskWorktree("/r", "t", "api", "api")).toBe(false);
+  expect(inTaskWorktree("/r", "t", "api", null)).toBe(false);
 });

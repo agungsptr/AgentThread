@@ -1,9 +1,10 @@
 import { existsSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { connect } from "node:net";
 import { join } from "node:path";
 import { AGENT_KINDS, type AgentKind, type StoredEvent } from "../../../src/domain/types.ts";
 import { shellQuote, spawnAsync } from "../../../src/herdr/bridge.ts";
 import { paths } from "../../../src/project/paths.ts";
-import { assertInScratchBase, cleanEnv, git, isSymlinkTo, runClock, say, TimeoutError, wsTask, type EventOf, type RoleAgents } from "../harness.ts";
+import { AGT, agt as agtRun, assertInScratchBase, cleanEnv, git, isSymlinkTo, runClock, say, TimeoutError, wsTask, type EventOf, type RoleAgents } from "../harness.ts";
 import { actingCoordinator, askForThread, closeThread, mainIdle, sessionsOf, tiers, type H, type Scenario } from "./common.ts";
 
 /** The shared workspace task (plan Global Constraints, verbatim). */
@@ -289,6 +290,136 @@ async function smokeWorktrees(h: H): Promise<void> {
   h.check("brief.md lists both repos", lists, lists ? brief : `${brief}: ${text ? text.slice(-600) : "never written"}`);
   const sessions = (await h.events()).filter((e) => e.type === "session.created" && e.thread === thread);
   h.check("no session started for the proposed thread (no model calls)", sessions.length === 0, `${sessions.length}`);
+}
+
+// ---- ws-stack-runner: no agents; the stack runner, the worktree copy and the generated Makefile ----
+
+export type StackRow = { service: string; state: string; port: number | null; pid: number | null; cwd: string | null };
+
+/** The partial project config of the row: a tiny Bun server per repo (web after api), `.env` copied into worktrees. */
+export function stackConfigPatch(ports: { api: number; web: number }): Record<string, unknown> {
+  const svc = (repo: "api" | "web", extra: Record<string, unknown> = {}) => ({
+    repo,
+    start: `PORT=${ports[repo]} bun serve.ts`,
+    port: ports[repo],
+    health: `http://127.0.0.1:${ports[repo]}/`,
+    ...extra,
+  });
+  return {
+    workspace: {
+      repos: { api: { copy: [".env"] }, web: { copy: [".env"] } },
+      services: { api: svc("api"), web: svc("web", { after: ["api"] }) },
+    },
+  };
+}
+
+/** The services of `agt stack status --json` ({services, lock}); [] when the text is not that. */
+export function parseStackStatus(text: string): StackRow[] {
+  try {
+    const v = JSON.parse(text) as { services?: unknown };
+    if (!Array.isArray(v.services)) return [];
+    return v.services.filter((r): r is StackRow => typeof r === "object" && r !== null && typeof (r as StackRow).service === "string");
+  } catch {
+    return [];
+  }
+}
+
+/** Whether `cwd` (absolute or relative to `root`) is inside .worktrees/<task>/<repo>. */
+export function inTaskWorktree(root: string, task: string, repo: string, cwd: string | null): boolean {
+  if (!cwd) return false;
+  const want = join(root, ".worktrees", task, repo);
+  const abs = cwd.startsWith("/") ? cwd : join(root, cwd);
+  return abs === want || abs.startsWith(`${want}/`);
+}
+
+/** True when every named service is running with a pid; with `before`, every pid differs from that earlier one. */
+export function allRunning(rows: StackRow[], names: readonly string[], before?: Record<string, number>): boolean {
+  return names.every((n) => {
+    const r = rows.find((x) => x.service === n);
+    return !!r && r.state === "running" && r.pid !== null && (before === undefined || r.pid !== before[n]);
+  });
+}
+
+async function freePorts(n: number): Promise<number[]> {
+  const servers = Array.from({ length: n }, () => Bun.serve({ port: 0, fetch: () => new Response("") }));
+  const ports = servers.map((s) => s.port as number);
+  for (const s of servers) s.stop(true);
+  return ports;
+}
+
+const portOpen = (port: number): Promise<boolean> =>
+  new Promise((res) => {
+    const s = connect({ port, host: "127.0.0.1" });
+    s.once("connect", () => (s.destroy(), res(true)));
+    s.once("error", () => res(false));
+  });
+
+async function httpOk(port: number): Promise<boolean> {
+  try {
+    return (await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(3_000) })).ok;
+  } catch {
+    return false;
+  }
+}
+
+async function stackRunner(h: H): Promise<void> {
+  const task = "stack-1";
+  const names = ["api", "web"] as const;
+  const [pa, pb] = await freePorts(2);
+  const ports = { api: pa!, web: pb! };
+  // The fixture's own Makefile is the user's: remove it so agt writes the generated one.
+  rmSync(join(h.root, "Makefile"), { force: true });
+  for (const repo of REPOS) writeFileSync(join(h.root, repo, ".env"), `REPO=${repo}\n`); // untracked, never committed
+  const cfg = Bun.spawn([process.execPath, AGT, "config", "apply", "-"], { cwd: h.root, env: cleanEnv({ AGT_ROOT: h.root }), stdin: new Response(JSON.stringify(stackConfigPatch(ports))), stdout: "pipe", stderr: "pipe" });
+  const [cfgOut, cfgErr] = await Promise.all([new Response(cfg.stdout).text(), new Response(cfg.stderr).text(), cfg.exited]);
+  h.check("agt config apply - accepts the services and copy config", cfg.exitCode === 0, cfg.exitCode === 0 ? undefined : `${cfgErr.trim() || cfgOut.trim()}`.slice(0, 400));
+
+  const status = async () => parseStackStatus((await h.agt(["stack", "status", "--json"])).stdout);
+  try {
+    const thread = threadIdOf(await h.agtOk(["thread", "new", "Stack runner", "--type", "feature", "--goal", "stack runner row", "--task", task, "--tier", "low", "--reason", "stack row: no coordinator"]));
+    for (const repo of REPOS) await h.agtOk(["worktree", "add", thread, repo]);
+    for (const repo of REPOS) await h.waitFor("worktree.added", (e) => e.thread === thread && e.payload.repo === repo, 180_000, `worktree for ${repo}`);
+    for (const repo of REPOS) {
+      const wt = join(h.root, ".worktrees", task, repo);
+      h.check(`${repo}: .env copied into the worktree`, existsSync(join(wt, ".env")) && readFileSync(join(wt, ".env"), "utf8") === `REPO=${repo}\n`);
+      const porcelain = existsSync(wt) ? (await git(wt, "status", "--porcelain")).trim() : "(missing)";
+      h.check(`${repo}: git status --porcelain is clean (the copy is excluded)`, porcelain === "", porcelain || "clean");
+      const gd = existsSync(wt) ? (await git(wt, "rev-parse", "--absolute-git-dir")).trim() : "";
+      h.check(`${repo}: the agt-ready marker is in the worktree's git dir`, !!gd && existsSync(join(gd, "agt-ready")), gd);
+    }
+
+    const start = await agtRun(h.root, ["stack", "start", "--task", task], {}, 240_000);
+    h.check("agt stack start --task stack-1 exits 0", start.exitCode === 0, `${start.stdout}${start.stderr}`.trim().slice(-400));
+    const rows = await status();
+    for (const n of names) {
+      const r = rows.find((x) => x.service === n);
+      h.check(`status: ${n} is running`, r?.state === "running" && r.pid !== null, JSON.stringify(r ?? null));
+      h.check(`status: ${n} runs inside .worktrees/${task}/${n}`, inTaskWorktree(h.root, task, n, r?.cwd ?? null), r?.cwd ?? "no cwd");
+      h.check(`${n}: HTTP GET on port ${ports[n]} succeeds`, await httpOk(ports[n]));
+    }
+    const before = Object.fromEntries(rows.filter((r) => r.pid !== null).map((r) => [r.service, r.pid as number]));
+
+    const mk = join(h.root, "Makefile");
+    h.check("the generated Makefile is at the root", existsSync(mk) && readFileSync(mk, "utf8").includes("generated by agt"));
+    const make = await spawnAsync("make", ["-C", h.root, "restart", `TASK=${task}`, `AGT=${process.execPath} ${AGT}`], cleanEnv({ AGT_ROOT: h.root }), 60_000);
+    h.check("make restart TASK=stack-1 exits 0", make.exitCode === 0, `${make.stdout}${make.stderr}`.trim().slice(-400));
+    let now: StackRow[] = [];
+    for (const end = runClock.now() + 180_000; runClock.now() < end; await Bun.sleep(2_000)) {
+      now = await status();
+      if (allRunning(now, names, before)) break;
+    }
+    h.check("after make restart both services run again with new pids", allRunning(now, names, before), JSON.stringify(now.map((r) => [r.service, r.state, r.pid])));
+    for (const n of names) h.check(`${n}: HTTP GET on port ${ports[n]} succeeds after the restart`, await httpOk(ports[n]));
+
+    const stop = await h.agt(["stack", "stop"]);
+    h.check("agt stack stop exits 0", stop.exitCode === 0, `${stop.stdout}${stop.stderr}`.trim().slice(-300));
+    for (const n of names) {
+      h.check(`${n}: port ${ports[n]} is free after stop`, !(await portOpen(ports[n])));
+      h.check(`${n}: pid file is gone`, !existsSync(join(h.root, ".local-run", `${n}.pid`)));
+    }
+  } finally {
+    await h.agt(["stack", "stop", "--force"]).catch(() => undefined);
+  }
 }
 
 /** Main is asked for the workspace task; the thread runs to review, then the event log and git are checked. */
@@ -671,6 +802,7 @@ export function workspaceScenarios(): Scenario[] {
   const cc: RoleAgents = { main: "claude-code", coordinator: "claude-code", worker: "claude-code" };
   const rows = new Map<string, Scenario>();
   rows.set("ws-smoke-worktrees", { id: "ws-smoke-worktrees", agents: cc, workspace: true, manager: false, config: { agents: tiers(cc, "1h") }, run: smokeWorktrees });
+  rows.set("ws-stack-runner", { id: "ws-stack-runner", agents: cc, workspace: true, manager: false, config: { agents: tiers(cc, "1h") }, run: stackRunner });
   const key = (a: RoleAgents) => `${a.main}/${a.coordinator}/${a.worker}`;
   const add = (id: string, agents: RoleAgents) => {
     if (![...rows.values()].filter((s) => s.id.startsWith("ws-happy-")).some((s) => key(s.agents) === key(agents))) rows.set(id, happy(id, agents));
