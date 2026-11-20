@@ -7,6 +7,7 @@ import { EFFORTS } from "../agents/roles.ts";
 import { refreshRootSkill } from "../agents/skill.ts";
 import { paths } from "./paths.ts";
 import { configOrDefault, initProject } from "./init.ts";
+import { writeStackMakefiles } from "../stack/makefile.ts";
 import { writeBannedWords } from "../render/write.ts";
 import { prefill, stackPrefill } from "./prefill.ts";
 import { discoverRepos, isWorkspaceProject } from "./workspace.ts";
@@ -264,6 +265,7 @@ export async function initCommand(
   if (!noSetup) await setupIfNeeded(root, env, isTTY);
   // Setup may have just written banned_words.
   writeBannedWords(root, configOrDefault(root, env));
+  writeStackMakefiles(root, configOrDefault(root, env));
   refreshRootSkill(root, env);
   return 0;
 }

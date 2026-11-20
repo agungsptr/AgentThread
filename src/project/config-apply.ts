@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { isMap, isScalar, parse, parseDocument, stringify } from "yaml";
 import { ConfigSchema, configHash, configPaths, deepMerge, loadConfig, readYaml, type Config } from "../config/config.ts";
 import { refreshRootSkill } from "../agents/skill.ts";
+import { writeStackMakefiles } from "../stack/makefile.ts";
 import { writeBannedWords } from "../render/write.ts";
 
 type Env = Record<string, string | undefined>;
@@ -132,5 +133,6 @@ export function applyConfig(o: {
 /** The same refresh `agt setup` and `agt init` run after writing the config. */
 function defaultRefresh(root: string, config: Config, env: Env): void {
   writeBannedWords(root, config);
+  writeStackMakefiles(root, config);
   refreshRootSkill(root, env);
 }

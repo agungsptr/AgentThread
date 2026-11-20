@@ -21,10 +21,11 @@ import { initCommand, setupIfNeeded, setupOnTty } from "../project/setup.ts";
 import { paths } from "../project/paths.ts";
 import { applyConfig, showConfig } from "../project/config-apply.ts";
 import { findRoot } from "../project/root.ts";
-import type { State } from "../state/projection.ts";
+import { project, type State } from "../state/projection.ts";
 import { USAGE } from "./usage.ts";
 import { guide, isLegacyThread } from "../agents/guide.ts";
 import { formatStatus, restartStack, stackLogs, stackStatus, startStack, stopStack } from "../stack/runner.ts";
+import { writeStackMakefiles } from "../stack/makefile.ts";
 import { hasServices, runDir } from "../stack/target.ts";
 import { AGT_BIN } from "../agents/claude.ts";
 
@@ -128,6 +129,7 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
       if (!process.stdin.isTTY) throw new UsageError("agt setup needs a terminal; edit .agentthread/config.yaml instead");
       const setupRoot = findRoot(cwd, env);
       await setupOnTty(setupRoot, env);
+      writeStackMakefiles(setupRoot, loadConfig(setupRoot, env));
       refreshRootSkill(setupRoot, env);
       console.log("saved .agentthread/config.yaml");
       if (await isAlive(paths(setupRoot).socket)) console.log("run agt start to apply the new config");
@@ -424,6 +426,20 @@ async function thread(sub: string | undefined, args: string[], root: string, env
       ...(values.reason !== undefined ? { reason: values.reason } : {}),
       ...(values.now ? { now: true } : {}),
     });
+  }
+  if (sub === "find") {
+    const { values, positionals } = parse(args, { task: { type: "string" } });
+    if (!values.task || positionals.length) throw new UsageError("thread find needs --task <task>");
+    const res = await request(paths(root).socket, { op: "events.since", seq: 0 });
+    if (!res.ok) throw new Error(res.error);
+    const found = [...project(res.result as StoredEvent[]).threads.values()].filter((t) => t.task === values.task);
+    const pick = found.filter((t) => t.status !== "done").pop() ?? found.pop();
+    if (!pick) {
+      console.error(`no thread has task "${values.task}"; create it first: agt thread new "<title>" --type feature --task ${values.task}`);
+      return 1;
+    }
+    console.log(pick.id);
+    return 0;
   }
   if (sub === "choose") {
     const { values, positionals } = parse(args, { tier: { type: "string" } });

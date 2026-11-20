@@ -91,3 +91,17 @@ test("agt stack restart detaches, writes restart.log and returns at once; --wait
   expect(fg.out).toContain("web: started");
   expect(readFileSync(log, "utf8")).toContain("web: started");
 }, 60_000);
+
+test("agt thread find --task fails without a daemon (and without --task)", async () => {
+  const root = twoRepoFolder();
+  const env = { XDG_CONFIG_HOME: isolatedConfigHome() };
+  initProject(root, "demo", env);
+  const err = console.error;
+  console.error = () => {};
+  try {
+    expect(await main(["thread", "find", "--task", "x"], env, root)).not.toBe(0);
+    expect(await main(["thread", "find"], env, root)).not.toBe(0);
+  } finally {
+    console.error = err;
+  }
+});
