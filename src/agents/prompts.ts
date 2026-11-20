@@ -2,6 +2,7 @@ import { isAbsolute, join } from "node:path";
 import type { Config } from "../config/config.ts";
 import type { SessionRole } from "../domain/types.ts";
 import { tierList } from "../orchestration/tiers.ts";
+import { hasServices } from "../stack/target.ts";
 import { paths } from "../project/paths.ts";
 
 /** A thread as the prompts see it: a thread directory (`dir`), or a legacy thread's single git worktree. */
@@ -109,6 +110,7 @@ export function systemPrompt(o: PromptInput): string {
         ? []
         : [
             `- Before restarting the stack, running e2e or the browser check, run agt stack acquire ${t.id} (add --for e2e4 for the full e2e); wait for the notice if it is queued; agt stack release ${t.id} when done.`,
+            ...(o.config && hasServices(o.config) && t.task ? [`- To restart the stack, run agt stack restart --task ${t.task} (it runs in the background; progress is in .local-run/restart.log), still holding the stack lock.`] : []),
             ...coordinatorWorkflowLines(o),
             `- When you accept a ticket that another ticket was blocked on, reopen the blocked one with agt ticket reopen ${t.id}/<T> and start a new worker for it with agt worker spawn ${t.id} --ticket <T> (a blocked worker has ended). To speak to a worker that is still alive, use agt tell ${t.id}/<T> "<message>".`,
           ]),

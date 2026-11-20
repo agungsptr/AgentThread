@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { realpathSync } from "node:fs";
 import type { Config } from "../config/config.ts";
@@ -331,16 +331,12 @@ export async function stackLogs(root: string, config: Config, name: string, opts
 
 export async function restartStack(o: StartOptions): Promise<ServiceResult[]> {
   mkdirSync(runDir(o.root), { recursive: true });
-  const lines: string[] = [];
+  const log = join(runDir(o.root), "restart.log");
+  writeFileSync(log, "");
   const out = (l: string) => {
-    lines.push(l);
+    appendFileSync(log, `${l}\n`);
     (o.out ?? ((x: string) => console.log(x)))(l);
   };
-  const save = () => writeFileSync(join(runDir(o.root), "restart.log"), `${lines.join("\n")}\n`);
-  try {
-    await stopStack({ ...o, out });
-    return await startStack({ ...o, out });
-  } finally {
-    save();
-  }
+  await stopStack({ ...o, out });
+  return await startStack({ ...o, out });
 }

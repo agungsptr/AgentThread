@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { main } from "../../src/cli/main.ts";
 import { portHeld } from "../../src/stack/health.ts";
@@ -64,3 +64,30 @@ test("start, stop and restart without services say so and exit 0", async () => {
     expect(r).toEqual({ code: 0, out: "no services configured (workspace.services)" });
   }
 });
+
+test("agt stack restart detaches, writes restart.log and returns at once; --wait runs in the foreground", async () => {
+  const root = twoRepoFolder();
+  const s = Bun.serve({ port: 0, fetch: () => new Response("x") });
+  const port = s.port!;
+  await s.stop(true);
+  const env = { XDG_CONFIG_HOME: isolatedConfigHome() };
+  initProject(root, "demo", env);
+  writeFileSync(
+    join(root, ".agentthread", "config.yaml"),
+    `workspace:\n  repos:\n    a: { path: a }\n  services:\n    web:\n      repo: a\n      start: "bun -e 'Bun.serve({port:${port},fetch:()=>new Response(\\"ok\\")});setInterval(()=>{},1000)'"\n      port: ${port}\n`,
+  );
+  toStop = () => main(["stack", "stop"], env, root);
+  const bg = await capture(() => main(["stack", "restart", "--main"], env, root));
+  expect(bg.code).toBe(0);
+  expect(bg.out).toContain(join(root, ".local-run", "restart.log"));
+  const log = join(root, ".local-run", "restart.log");
+  const deadline = Date.now() + 30_000;
+  const text = () => (existsSync(log) ? readFileSync(log, "utf8") : "");
+  while (Date.now() < deadline && !text().includes("web: started")) await Bun.sleep(200);
+  expect(text()).toContain("web: started");
+  expect(await portHeld(port)).toBe(true);
+  const fg = await capture(() => main(["stack", "restart", "--main", "--wait"], env, root));
+  expect(fg.code).toBe(0);
+  expect(fg.out).toContain("web: started");
+  expect(readFileSync(log, "utf8")).toContain("web: started");
+}, 60_000);

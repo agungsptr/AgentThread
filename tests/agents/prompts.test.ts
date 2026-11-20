@@ -171,3 +171,11 @@ describe("idle and unblock rules (task threads only)", () => {
     expect(systemPrompt({ root: "/repo", role: "coordinator", thread: LEGACY })).not.toContain("was blocked on");
   });
 });
+
+describe("stack restart rule", () => {
+  const withServices = { ...DEFAULT_CONFIG, workspace: { ...DEFAULT_CONFIG.workspace, repos: { a: { path: "a" } }, services: { web: { repo: "a", dir: ".", start: "x", enabled: true } } } } as unknown as Config;
+  test("a task coordinator is told agt stack restart --task <task> when services exist", () => {
+    expect(coordinator(withServices)).toContain("agt stack restart --task kyc-reject");
+    expect(coordinator(DEFAULT_CONFIG)).not.toContain("agt stack restart");
+  });
+});

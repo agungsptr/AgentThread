@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { stringify } from "yaml";
@@ -25,7 +25,8 @@ import type { State } from "../state/projection.ts";
 import { USAGE } from "./usage.ts";
 import { guide, isLegacyThread } from "../agents/guide.ts";
 import { formatStatus, restartStack, stackLogs, stackStatus, startStack, stopStack } from "../stack/runner.ts";
-import { hasServices } from "../stack/target.ts";
+import { hasServices, runDir } from "../stack/target.ts";
+import { AGT_BIN } from "../agents/claude.ts";
 
 type Env = Record<string, string | undefined>;
 
@@ -351,10 +352,22 @@ async function stackServices(root: string, env: Env, sub: string, args: string[]
     console.log("no services configured (workspace.services)");
     return 0;
   }
-  const { values, positionals } = parse(args, sub === "stop" ? { only: { type: "string" }, force: { type: "boolean" } } : { task: { type: "string" }, main: { type: "boolean" }, only: { type: "string" } });
+  const { values, positionals } = parse(args, sub === "stop" ? { only: { type: "string" }, force: { type: "boolean" } } : { task: { type: "string" }, main: { type: "boolean" }, only: { type: "string" }, ...(sub === "restart" ? { wait: { type: "boolean" } } : {}) });
   if (positionals.length) throw new UsageError(`stack ${sub} takes no arguments`);
   if (values.task !== undefined && values.main) throw new UsageError("--task and --main exclude each other");
   const o = { root, config, only: only(values.only), task: values.task as string | undefined, main: !!values.main, force: !!values.force };
+  if (sub === "restart" && !values.wait) {
+    // Detached into its own session so the restart survives the caller's pane; progress goes to .local-run/restart.log.
+    const log = join(runDir(root), "restart.log");
+    mkdirSync(runDir(root), { recursive: true });
+    writeFileSync(log, "restart requested\n");
+    const flags = [...(values.task !== undefined ? ["--task", values.task] : []), ...(values.main ? ["--main"] : []), ...(values.only !== undefined ? ["--only", values.only] : [])];
+    const child = spawn(process.execPath, [AGT_BIN, "stack", "restart", "--wait", ...flags], { cwd: root, env: { ...process.env, ...env, AGT_ROOT: root }, detached: true, stdio: "ignore" });
+    child.on("error", () => {});
+    child.unref();
+    console.log(`restarting the stack in the background; follow ${log} (or agt stack status)`);
+    return 0;
+  }
   const results = await (sub === "stop" ? stopStack(o) : sub === "restart" ? restartStack(o) : startStack(o));
   return results.some((r) => r.outcome === "failed") ? 1 : 0;
 }
