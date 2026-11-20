@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConfigSchema, type Config } from "../../src/config/config.ts";
@@ -220,5 +220,113 @@ describe("addWorktreeFromAsync", () => {
     await addWorktreeFromAsync(local, "wip/x", path, "origin/release");
     expect(git(path, "rev-parse", "HEAD").out).toBe(git(upstream, "rev-parse", "release").out);
     expect(git(path, "rev-parse", "--abbrev-ref", "HEAD").out).toBe("wip/x");
+  });
+});
+
+describe("the built-in copy and install step", () => {
+  const cfg = (repo: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
+    ConfigSchema.parse({ agents: { skill: false }, workspace: { repos: { api: { path: "api", ...repo } }, ...extra } });
+  const commit = (api: string, ...files: string[]) => {
+    git(api, "add", "-f", ...files);
+    git(api, "-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-q", "-m", "files");
+  };
+
+  test("copies present files with their mode, skips missing ones with a note, never overwrites", async () => {
+    const s = setup(cfg({ copy: [".env", "e2e/.env.local", "missing.env", "tracked.txt"], install: "" }));
+    writeFileSync(join(s.api, ".env"), "A=1\n");
+    chmodSync(join(s.api, ".env"), 0o750);
+    mkdirSync(join(s.api, "e2e"));
+    writeFileSync(join(s.api, "e2e/.env.local"), "B=2\n");
+    writeFileSync(join(s.api, "tracked.txt"), "main\n");
+    commit(s.api, "tracked.txt");
+    writeFileSync(join(s.api, "tracked.txt"), "dirty main\n");
+    expect((await s.run(s.effect)).ok).toBe(true);
+    expect(readFileSync(join(s.path, ".env"), "utf8")).toBe("A=1\n");
+    expect(lstatSync(join(s.path, ".env")).mode & 0o777).toBe(0o750);
+    expect(readFileSync(join(s.path, "e2e/.env.local"), "utf8")).toBe("B=2\n");
+    expect(existsSync(join(s.path, "missing.env"))).toBe(false);
+    expect(readFileSync(join(s.path, "tracked.txt"), "utf8")).toBe("main\n");
+    expect(s.logs.some((l) => l.includes("missing.env") && l.includes("skipped"))).toBe(true);
+  });
+
+  test("a symlink pointing outside the repo is refused", async () => {
+    const s = setup(cfg({ copy: [".env", "link/x"], install: "" }));
+    const outside = join(s.root, "secret.txt");
+    writeFileSync(outside, "s\n");
+    symlinkSync(outside, join(s.api, ".env"));
+    mkdirSync(join(s.root, "elsewhere"));
+    writeFileSync(join(s.root, "elsewhere/x"), "x\n");
+    symlinkSync(join(s.root, "elsewhere"), join(s.api, "link"));
+    expect((await s.run(s.effect)).ok).toBe(true);
+    expect(existsSync(join(s.path, ".env"))).toBe(false);
+    expect(existsSync(join(s.path, "link/x"))).toBe(false);
+    expect(s.logs.filter((l) => l.includes("refused")).length).toBe(2);
+  });
+
+  test("a destination symlink leading out of the worktree is refused", async () => {
+    const s = setup(cfg({ copy: ["d2/.env"], install: "" }));
+    mkdirSync(join(s.root, "outside"));
+    git(s.api, "checkout", "-q", "-b", "feat");
+    symlinkSync(join(s.root, "outside"), join(s.api, "d2"));
+    commit(s.api, "d2");
+    git(s.api, "checkout", "-q", "main");
+    mkdirSync(join(s.api, "d2"));
+    writeFileSync(join(s.api, "d2/.env"), "y\n");
+    expect((await s.run({ ...s.effect, source: "feat" })).ok).toBe(true);
+    expect(existsSync(join(s.root, "outside/.env"))).toBe(false);
+    expect(s.logs.some((l) => l.includes("refused"))).toBe(true);
+  });
+
+  const fakeNpm = (s: { root: string }) => {
+    const bin = join(s.root, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "npm"), `#!/bin/sh\necho "$PWD: npm $*" >> ${join(s.root, "install.log")}\n`);
+    chmodSync(join(bin, "npm"), 0o755);
+    return bin;
+  };
+
+  test("the install command is detected from the lockfile and runs in the worktree", async () => {
+    const s = setup(cfg({}));
+    writeFileSync(join(s.api, "package.json"), "{}");
+    writeFileSync(join(s.api, "package-lock.json"), "{}");
+    commit(s.api, "package.json", "package-lock.json");
+    const saved = process.env.PATH;
+    process.env.PATH = `${fakeNpm(s)}:${saved}`;
+    try {
+      expect((await s.run(s.effect)).ok).toBe(true);
+    } finally {
+      process.env.PATH = saved;
+    }
+    expect(readFileSync(join(s.root, "install.log"), "utf8")).toBe(`${s.path}: npm ci\n`);
+  });
+
+  test("an explicit install command overrides detection; an empty one disables it", async () => {
+    const s = setup(cfg({ install: "echo custom > ../custom.log" }));
+    writeFileSync(join(s.api, "package.json"), "{}");
+    commit(s.api, "package.json");
+    expect((await s.run(s.effect)).ok).toBe(true);
+    expect(readFileSync(join(s.path, "../custom.log"), "utf8")).toBe("custom\n");
+    const d = setup(cfg({ install: "" }));
+    writeFileSync(join(d.api, "package.json"), "{}");
+    commit(d.api, "package.json");
+    expect((await d.run(d.effect)).ok).toBe(true);
+  });
+
+  test("a failing install fails the worktree with the last log lines and leaves nothing behind", async () => {
+    const s = setup(cfg({ install: "echo one >&2; echo boom >&2; exit 3" }));
+    const r = await s.run(s.effect);
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("install for api failed");
+    expect(r.error).toContain("exit 3");
+    expect(r.error).toContain("boom");
+    s.nothingLeft();
+  });
+
+  test("worktree_setup replaces the built-in step", async () => {
+    const s = setup(cfg({ copy: [".env"], install: "echo installed > ../installed.log" }, { worktree_setup: "git -C {repo} worktree add -q -b wip/{task} {path} {src}" }));
+    writeFileSync(join(s.api, ".env"), "A=1\n");
+    expect((await s.run(s.effect)).ok).toBe(true);
+    expect(existsSync(join(s.path, ".env"))).toBe(false);
+    expect(existsSync(join(s.path, "../installed.log"))).toBe(false);
   });
 });

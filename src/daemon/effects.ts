@@ -15,6 +15,8 @@ import { durationMs, type Config } from "../config/config.ts";
 import type { EventBody, Layout } from "../domain/types.ts";
 import { HerdrCli, HerdrError, spawnAsync } from "../herdr/bridge.ts";
 import { addWorktreeAsync, addWorktreeFromAsync } from "../project/git.ts";
+import { installCommand } from "../project/prefill.ts";
+import { copyIntoWorktree } from "../project/worktree-copy.ts";
 import { paths } from "../project/paths.ts";
 import { NOTICE_HELD_CAPPED_AT, NOTICE_RETRY_MAX_MS } from "../orchestration/reactor.ts";
 import { threadGitEnv } from "../orchestration/sessions.ts";
@@ -147,7 +149,7 @@ export function createEffectRunner(opts: {
         const job = inRepoChain(e.repoPath, async () => {
           let error: string | undefined;
           try {
-            await addRepoWorktree(e, opts.root, opts.config, opts.setupTimeoutMs ?? SETUP_TIMEOUT_MS, bg);
+            await addRepoWorktree(e, opts.root, opts.config, opts.setupTimeoutMs ?? SETUP_TIMEOUT_MS, bg, log);
             const t = opts.thread(e.thread);
             if (t) {
               try {
@@ -431,7 +433,7 @@ export function runShellGroup(
  * run made (a worktree registered at the path during the run, else a folder that was not there, and a wip/<task>
  * branch that did not exist before) and throws.
  */
-async function addRepoWorktree(e: RepoWorktreeEffect, root: string, config: Config, setupTimeoutMs: number, bg: Background): Promise<void> {
+async function addRepoWorktree(e: RepoWorktreeEffect, root: string, config: Config, setupTimeoutMs: number, bg: Background, log?: (m: string) => void): Promise<void> {
   const git = (args: string[], timeoutMs = 30_000) => spawnAsync("git", ["-C", e.repoPath, ...args], process.env, timeoutMs);
   // The branch checked out at the path itself: git may not search above it (the thread directory, or the root).
   const onBranch = async () => {
@@ -455,6 +457,21 @@ async function addRepoWorktree(e: RepoWorktreeEffect, root: string, config: Conf
     const setup = config.workspace.worktree_setup;
     if (setup === undefined) {
       await addWorktreeFromAsync(e.repoPath, e.branch, e.path, e.source);
+      // The built-in step: the repo's env files from the main checkout, then its dependencies.
+      const repoCfg = config.workspace.repos?.[e.repo];
+      for (const note of await copyIntoWorktree(e.repoPath, e.path, repoCfg?.copy ?? [])) log?.(`worktree ${e.repo}: ${note}`);
+      const install = installCommand(e.path, repoCfg?.install);
+      if (install !== null) {
+        const ran = bg.setupChain.then(() => (bg.stopped ? undefined : runShellGroup(`cd ${shq(e.path)} || exit 1\n${install}`, setupTimeoutMs, bg.groups)));
+        bg.setupChain = ran.catch(() => {});
+        const r = await ran;
+        if (!r) throw new Error("the daemon is stopping");
+        if (r.exitCode !== 0 || r.timedOut) {
+          const tail = r.stderr.trim().split("\n").slice(-10).join("\n");
+          const why = bg.stopped ? "the daemon stopped" : r.timedOut ? `timed out after ${Math.round(setupTimeoutMs / 1000)}s` : `exit ${r.exitCode}${tail ? `: ${tail}` : ""}`;
+          throw new Error(`install for ${e.repo} failed (${why})`);
+        }
+      }
       return;
     }
     const values: Record<string, string> = { root, task: e.branch.replace(/^wip\//, ""), repo: e.repo, src: e.source, path: e.path };
