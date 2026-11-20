@@ -49,7 +49,8 @@ agt config apply <file|-> [--dry-run]  # merge a partial YAML/JSON config into .
 ```
 
 `config apply` deep-merges like `agt setup` (maps merge, so `workspace.repos` merges by repo name; lists replace; a `null`
-removes a key), keeps the file's comments, validates the merged result, and prints a diff (`+ path: new`, `- path: old`,
+removes the key from the project file only: the user config or the default then applies, and a note says so when
+the effective config does not change), keeps the file's comments, validates the merged result, and prints a diff (`+ path: new`, `- path: old`,
 `~ path: old -> new`). On a validation error it prints `path: message` lines and changes nothing (exit 1). `--dry-run` only
 validates and prints the diff. A real apply then refreshes the banned-words file and the root skills, and says to restart a
 running daemon (`agt start`) when the config changed.

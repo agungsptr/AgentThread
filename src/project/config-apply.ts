@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { isMap, isScalar, parse, parseDocument, stringify } from "yaml";
 import { ConfigSchema, configHash, configPaths, deepMerge, loadConfig, readYaml, type Config } from "../config/config.ts";
@@ -42,13 +42,22 @@ export function diffConfig(before: unknown, after: unknown): string[] {
   return lines.sort((x, y) => x.slice(2).localeCompare(y.slice(2)));
 }
 
+/** Drops null keys from objects (not arrays), recursively. */
+function prune(v: unknown): unknown {
+  if (!isObj(v)) return v;
+  return Object.fromEntries(Object.entries(v).filter(([, x]) => x !== null).map(([k, x]) => [k, prune(x)]));
+}
+
 /** Merges the patch into the YAML document in place, keeping its comments. A null value removes the key. */
 function mergeInto(doc: ReturnType<typeof parseDocument>, path: string[], patch: Obj): void {
   for (const [k, v] of Object.entries(patch)) {
     const at = [...path, k];
     if (v === null) doc.deleteIn(at);
     else if (isObj(v) && isMap(doc.getIn(at))) mergeInto(doc, at, v);
-    else {
+    else if (isObj(v) && !isMap(doc.getIn(at))) {
+      const kept = prune(v) as Obj;
+      if (Object.keys(kept).length > 0) doc.setIn(at, doc.createNode(kept));
+    } else {
       // A scalar edited in place keeps its trailing comment.
       const cur = doc.getIn(at, true);
       if (isScalar(cur) && (v === null || typeof v !== "object")) cur.value = v;
@@ -57,7 +66,7 @@ function mergeInto(doc: ReturnType<typeof parseDocument>, path: string[], patch:
   }
 }
 
-export type ApplyResult = { ok: false; errors: string[] } | { ok: true; diff: string[]; written: boolean; hashChanged: boolean };
+export type ApplyResult = { ok: false; errors: string[] } | { ok: true; diff: string[]; written: boolean; hashChanged: boolean; refreshError?: string };
 
 /**
  * `agt config apply`: merges a partial project config into .agentthread/config.yaml, validates the merged result with
@@ -109,8 +118,14 @@ export function applyConfig(o: {
   const hashChanged = oldHash !== configHash(parsed.data);
   if (o.dryRun) return { ok: true, diff, written: false, hashChanged };
   mkdirSync(dirname(p.project), { recursive: true });
-  writeFileSync(p.project, doc.toString());
-  (o.refresh ?? defaultRefresh)(o.root, parsed.data, o.env);
+  const tmp = `${p.project}.tmp`;
+  writeFileSync(tmp, doc.toString());
+  renameSync(tmp, p.project);
+  try {
+    (o.refresh ?? defaultRefresh)(o.root, parsed.data, o.env);
+  } catch (e) {
+    return { ok: true, diff, written: true, hashChanged, refreshError: e instanceof Error ? e.message : String(e) };
+  }
   return { ok: true, diff, written: true, hashChanged };
 }
 

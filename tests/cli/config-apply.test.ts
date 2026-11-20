@@ -141,3 +141,41 @@ test("applyConfig runs the refresh only on a real write, and reports a hash chan
   expect(applyConfig({ root, env, text: "workers:\n  max_workers: 5\n", refresh })).toMatchObject({ ok: true, diff: [], hashChanged: false });
   void repoName;
 });
+
+test("config apply: nulls inside new objects are pruned; a removal with no effect prints a note", () => {
+  const root = tempRepo();
+  initProject(root, "demo");
+  const r = agt(root, ["config", "apply", "-"], 'workflow:\n  stack:\n    restart: null\n    status: "x"\n');
+  expect(r.code).toBe(0);
+  expect(parse(readFileSync(cfgFile(root), "utf8"))).toEqual({ workflow: { stack: { status: "x" } } });
+  writeFileSync(cfgFile(root), "workers:\n  max_workers: 3\n");
+  const n = agt(root, ["config", "apply", "-"], "workers:\n  max_workers: null\n");
+  expect(n.code).toBe(0);
+  expect(n.out).toContain("note: a removed key leaves the effective config unchanged");
+});
+
+test("config apply: unreadable file is a usage error", () => {
+  const root = tempRepo();
+  initProject(root, "demo");
+  const r = agt(root, ["config", "apply", "nope.yaml"]);
+  expect(r.code).toBe(2);
+  expect(r.err).toContain("cannot read nope.yaml:");
+  expect(agt(root, ["config", "apply", root]).err).toContain("cannot read");
+});
+
+test("config apply: refresh failure keeps the saved file and reports it", () => {
+  const root = tempRepo();
+  initProject(root, "demo");
+  const env = { XDG_CONFIG_HOME: isolatedConfigHome(), HOME: "/nonexistent" };
+  const r = applyConfig({ root, env, text: "workers:\n  max_workers: 5\n", refresh: () => { throw new Error("boom"); } });
+  expect(r).toMatchObject({ ok: true, written: true, refreshError: "boom" });
+  expect(parse(readFileSync(cfgFile(root), "utf8"))).toEqual({ workers: { max_workers: 5 } });
+  expect(existsSync(`${cfgFile(root)}.tmp`)).toBe(false);
+});
+
+test("config apply - with a terminal stdin is a usage error, not a hang", () => {
+  const root = tempRepo();
+  initProject(root, "demo");
+  const r = Bun.spawnSync(["script", "-q", "/dev/null", process.execPath, BIN, "config", "apply", "-"], { cwd: root, env: envOf(root), stdout: "pipe", stderr: "pipe", timeout: 15000 });
+  expect(r.stdout.toString() + r.stderr.toString()).toContain("config apply - reads the config from stdin");
+});

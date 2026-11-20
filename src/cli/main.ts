@@ -158,7 +158,13 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
         if (positionals.length !== 1) throw new UsageError("config apply needs <file|->");
         const cfgRoot = findRoot(cwd, env);
         const src = positionals[0]!;
-        const text = src === "-" ? await Bun.stdin.text() : readFileSync(resolve(cwd, src), "utf8");
+        if (src === "-" && process.stdin.isTTY) throw new UsageError("config apply - reads the config from stdin");
+        let text: string;
+        try {
+          text = src === "-" ? await Bun.stdin.text() : readFileSync(resolve(cwd, src), "utf8");
+        } catch (e) {
+          throw new UsageError(`cannot read ${src}: ${e instanceof Error ? e.message : String(e)}`);
+        }
         const res = applyConfig({ root: cfgRoot, env, text, dryRun: !!values["dry-run"] });
         if (!res.ok) {
           for (const e of res.errors) console.error(e);
@@ -166,9 +172,14 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
           return 1;
         }
         console.log(res.diff.length ? res.diff.join("\n") : "no changes");
+        if (res.diff.some((l) => l.startsWith("- ")) && !res.hashChanged) console.log("note: a removed key leaves the effective config unchanged (the user config or the default still applies)");
         if (!res.written) console.log("dry run: config not changed");
         else {
           console.log("saved .agentthread/config.yaml");
+          if (res.refreshError !== undefined) {
+            console.error(`saved .agentthread/config.yaml, but the refresh failed: ${res.refreshError}`);
+            return 1;
+          }
           if (res.hashChanged && (await isAlive(paths(cfgRoot).socket))) console.log("config changed: restart the daemon with agt start in the main tab to apply it");
         }
         return 0;
