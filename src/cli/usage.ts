@@ -1,10 +1,12 @@
 export const USAGE = `usage: agt <command>
 
-  init [--name <name>]
+  init [--name <name>] [--no-setup]   create the project; --no-setup skips the wizard (no prompts, safe from an agent shell; a no-op when already initialised)
   setup                      choose agent, model and effort per role, and complexity tiers
   start [--no-manager]       set up the Herdr layout and run the main manager (inside a Herdr pane)
   daemon start|stop|status
-  config
+  config                     print the effective config
+  config show [--json]       the effective config and the files its layers came from
+  config apply <file|-> [--dry-run]   merge a partial YAML/JSON config into .agentthread/config.yaml (repos merge by name), validate it, print the diff, refresh skills; --dry-run only validates
   thread new <title...> --type feature|bug|chore [--goal <text>] [--criteria <text>]... [--depends <id>]... [--max-workers <n>] [--task <name>]
              [--tier <name> --reason <why> [--now]]
   thread choose <id> --tier <name>

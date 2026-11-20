@@ -293,7 +293,7 @@ test("workflow: a second run with blank answers keeps every earlier value", asyn
     "a typecheck command": "make tc",
     "chat language": "Indonesian",
     "file language": "English",
-    "stack restart command ({task} = the task id)": "make up TASK={task}",
+    "stack restart command ({task} = the task name)": "make up TASK={task}",
     "stack status command": "make ps",
     "e2e stage 2 command": "make e2e2",
     "e2e stage 3 command": "make e2e3",

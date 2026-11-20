@@ -5,6 +5,7 @@ import { isMap, parse, parseDocument } from "yaml";
 import { adapterFor, agentBin } from "../agents/adapters.ts";
 import { EFFORTS } from "../agents/roles.ts";
 import { refreshRootSkill } from "../agents/skill.ts";
+import { paths } from "./paths.ts";
 import { configOrDefault, initProject } from "./init.ts";
 import { writeBannedWords } from "../render/write.ts";
 import { prefill, stackPrefill } from "./prefill.ts";
@@ -190,7 +191,7 @@ export async function runSetup(o: {
   const stack = stackPrefill(rootPrefill.makeTargets);
   await text("chat language", ["workflow", "chat_language"]);
   await text("file language", ["workflow", "file_language"]);
-  await text("stack restart command ({task} = the task id)", ["workflow", "stack", "restart"], stack.restart);
+  await text("stack restart command ({task} = the task name)", ["workflow", "stack", "restart"], stack.restart);
   await text("stack status command", ["workflow", "stack", "status"], stack.status);
   await text("e2e stage 2 command", ["workflow", "e2e", "stage2"], rootPrefill.e2e);
   await text("e2e stage 3 command", ["workflow", "e2e", "stage3"]);
@@ -247,10 +248,20 @@ export async function setupIfNeeded(root: string, env: Env, isTTY: boolean = !!p
 }
 
 /** `agt init`: create the project, print `initialized`, then offer setup. Init succeeds even with no agent installed. */
-export async function initCommand(root: string, env: Env, name: string | undefined, isTTY: boolean = !!process.stdin.isTTY): Promise<number> {
+export async function initCommand(
+  root: string,
+  env: Env,
+  name: string | undefined,
+  isTTY: boolean = !!process.stdin.isTTY,
+  noSetup = false,
+): Promise<number> {
+  if (noSetup && existsSync(paths(root).db)) {
+    console.log(`already initialized at ${paths(root).dir}`);
+    return 0;
+  }
   initProject(root, name, env);
   console.log("initialized");
-  await setupIfNeeded(root, env, isTTY);
+  if (!noSetup) await setupIfNeeded(root, env, isTTY);
   // Setup may have just written banned_words.
   writeBannedWords(root, configOrDefault(root, env));
   refreshRootSkill(root, env);

@@ -39,6 +39,21 @@ agt start       # run inside a Herdr pane: sets up the main tab, then opens the 
 agt setup       # re-run the per-project wizard: agent, model and effort per role, and complexity tiers
 ```
 
+Non-interactive configuration (for scripts and agent shells; no prompts, no terminal needed):
+
+```sh
+agt init --no-setup                 # init without the wizard; on an initialised project it says so and exits 0
+agt config show [--json]            # effective config (user + project, validated) and the file each layer came from;
+                                    # --json: {"config": {...}, "sources": {"user": {"path", "exists"}, "project": {...}}}
+agt config apply <file|-> [--dry-run]  # merge a partial YAML/JSON config into .agentthread/config.yaml
+```
+
+`config apply` deep-merges like `agt setup` (maps merge, so `workspace.repos` merges by repo name; lists replace; a `null`
+removes a key), keeps the file's comments, validates the merged result, and prints a diff (`+ path: new`, `- path: old`,
+`~ path: old -> new`). On a validation error it prints `path: message` lines and changes nothing (exit 1). `--dry-run` only
+validates and prints the diff. A real apply then refreshes the banned-words file and the root skills, and says to restart a
+running daemon (`agt start`) when the config changed.
+
 Describe a feature or bug to the main manager. After you confirm, it creates a thread; the coordinator and workers take it from there.
 
 ## Configuration

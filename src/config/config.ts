@@ -232,7 +232,7 @@ export function deepMerge(base: Record<string, unknown>, over: Record<string, un
   return out;
 }
 
-function readYaml(file: string): Record<string, unknown> {
+export function readYaml(file: string): Record<string, unknown> {
   if (!existsSync(file)) return {};
   let value: unknown;
   try {

@@ -19,6 +19,7 @@ import { HerdrCli, shellQuote } from "../herdr/bridge.ts";
 import { refreshRootSkill } from "../agents/skill.ts";
 import { initCommand, setupIfNeeded, setupOnTty } from "../project/setup.ts";
 import { paths } from "../project/paths.ts";
+import { applyConfig, showConfig } from "../project/config-apply.ts";
 import { findRoot } from "../project/root.ts";
 import type { State } from "../state/projection.ts";
 import { USAGE } from "./usage.ts";
@@ -116,9 +117,9 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
       return 0;
     }
     case "init": {
-      const { values } = parse(argv.slice(1), { name: { type: "string" } });
+      const { values } = parse(argv.slice(1), { name: { type: "string" }, "no-setup": { type: "boolean" } });
       const initRoot = resolve(env.AGT_ROOT ?? cwd);
-      return initCommand(initRoot, env, values.name as string | undefined);
+      return initCommand(initRoot, env, values.name as string | undefined, !!process.stdin.isTTY, !!values["no-setup"]);
     }
     case "setup": {
       if (!process.stdin.isTTY) throw new UsageError("agt setup needs a terminal; edit .agentthread/config.yaml instead");
@@ -141,9 +142,39 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
       }
       return daemon(sub, daemonRoot, env);
     }
-    case "config":
-      console.log(stringify(loadConfig(findRoot(cwd, env), env)).trimEnd());
-      return 0;
+    case "config": {
+      if (sub === undefined) {
+        console.log(stringify(loadConfig(findRoot(cwd, env), env)).trimEnd());
+        return 0;
+      }
+      if (sub === "show") {
+        const { values, positionals } = parse(rest, { json: { type: "boolean" } });
+        if (positionals.length) throw new UsageError("config show takes only --json");
+        console.log(showConfig(findRoot(cwd, env), env, !!values.json));
+        return 0;
+      }
+      if (sub === "apply") {
+        const { values, positionals } = parse(rest, { "dry-run": { type: "boolean" } });
+        if (positionals.length !== 1) throw new UsageError("config apply needs <file|->");
+        const cfgRoot = findRoot(cwd, env);
+        const src = positionals[0]!;
+        const text = src === "-" ? await Bun.stdin.text() : readFileSync(resolve(cwd, src), "utf8");
+        const res = applyConfig({ root: cfgRoot, env, text, dryRun: !!values["dry-run"] });
+        if (!res.ok) {
+          for (const e of res.errors) console.error(e);
+          console.error("config not changed");
+          return 1;
+        }
+        console.log(res.diff.length ? res.diff.join("\n") : "no changes");
+        if (!res.written) console.log("dry run: config not changed");
+        else {
+          console.log("saved .agentthread/config.yaml");
+          if (res.hashChanged && (await isAlive(paths(cfgRoot).socket))) console.log("config changed: restart the daemon with agt start in the main tab to apply it");
+        }
+        return 0;
+      }
+      throw new UsageError(`unknown config subcommand '${sub}'`);
+    }
     case "start":
       return start(findRoot(cwd, env), env, argv.slice(1));
     case "thread":
