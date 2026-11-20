@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { stringify } from "yaml";
@@ -26,7 +26,7 @@ import { USAGE } from "./usage.ts";
 import { guide, isLegacyThread } from "../agents/guide.ts";
 import { formatStatus, restartStack, stackLogs, stackStatus, startStack, stopStack } from "../stack/runner.ts";
 import { writeStackMakefiles } from "../stack/makefile.ts";
-import { hasServices, runDir } from "../stack/target.ts";
+import { checkOnly, hasServices, resolveTarget, runDir } from "../stack/target.ts";
 import { AGT_BIN } from "../agents/claude.ts";
 
 type Env = Record<string, string | undefined>;
@@ -371,17 +371,36 @@ async function stackServices(root: string, env: Env, sub: string, args: string[]
   const o = { root, config, only: only(values.only), task: values.task as string | undefined, main: !!values.main, force: !!values.force };
   if (sub === "restart" && !values.wait) {
     // Detached into its own session so the restart survives the caller's pane; progress goes to .local-run/restart.log.
+    // Validate here so a bad --task/--only is a usage error now, not a silent failure in the child.
+    try {
+      resolveTarget(root, config, { task: o.task, main: o.main });
+      checkOnly(config, o.only);
+    } catch (e) {
+      throw new UsageError(e instanceof Error ? e.message : String(e));
+    }
     const log = join(runDir(root), "restart.log");
     mkdirSync(runDir(root), { recursive: true });
-    writeFileSync(log, "restart requested\n");
+    appendFileSync(log, "restart requested\n");
+    const fd = openSync(log, "a");
     const flags = [...(values.task !== undefined ? ["--task", values.task] : []), ...(values.main ? ["--main"] : []), ...(values.only !== undefined ? ["--only", values.only] : [])];
-    const child = spawn(process.execPath, [AGT_BIN, "stack", "restart", "--wait", ...flags], { cwd: root, env: { ...process.env, ...env, AGT_ROOT: root }, detached: true, stdio: "ignore" });
+    const child = spawn(process.execPath, [AGT_BIN, "stack", "restart", "--wait", ...flags], { cwd: root, env: { ...process.env, ...env, AGT_ROOT: root }, detached: true, stdio: ["ignore", fd, fd] });
     child.on("error", () => {});
     child.unref();
+    closeSync(fd);
     console.log(`restarting the stack in the background; follow ${log} (or agt stack status)`);
     return 0;
   }
-  const results = await (sub === "stop" ? stopStack(o) : sub === "restart" ? restartStack(o) : startStack(o));
+  let results;
+  try {
+    results = await (sub === "stop" ? stopStack(o) : sub === "restart" ? restartStack(o) : startStack(o));
+  } catch (e) {
+    if (sub === "restart" && values.wait) {
+      try {
+        appendFileSync(join(runDir(root), "restart.log"), `restart failed: ${e instanceof Error ? e.message : String(e)}\n`);
+      } catch {}
+    }
+    throw e;
+  }
   return results.some((r) => r.outcome === "failed") ? 1 : 0;
 }
 
@@ -441,6 +460,10 @@ async function thread(sub: string | undefined, args: string[], root: string, env
   if (sub === "find") {
     const { values, positionals } = parse(args, { task: { type: "string" } });
     if (!values.task || positionals.length) throw new UsageError("thread find needs --task <task>");
+    if (!(await isAlive(paths(root).socket))) {
+      console.error(`the agt daemon is not running: run agt start in ${root}`);
+      return 1;
+    }
     const res = await request(paths(root).socket, { op: "events.since", seq: 0 });
     if (!res.ok) throw new Error(res.error);
     const found = [...project(res.result as StoredEvent[]).threads.values()].filter((t) => t.task === values.task);

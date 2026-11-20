@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Config } from "../config/config.ts";
+import { ensureLocalRunIgnored } from "../project/init.ts";
 import { hasServices } from "./target.ts";
 
 /** The first line of every file agt generates; a Makefile or MAKEFILE.md without it is the user's and is never touched. */
@@ -60,7 +61,14 @@ export function renderMakefile(): string {
   return `${MAKEFILE_MARKER}
 # Thin wrapper around the agt stack commands; the targets live in .agentthread/agt.mk (see MAKEFILE.md).
 .DEFAULT_GOAL := help
-include .agentthread/agt.mk
+-include .agentthread/agt.mk
+
+# A fresh clone has no .agentthread/agt.mk (it is not committed): every target says how to get it.
+ifeq ($(wildcard .agentthread/agt.mk),)
+.PHONY: help start stop restart status logs wt-new
+help start stop restart status logs wt-new:
+	@echo "this Makefile needs agt: run agt init in $(CURDIR)" >&2; exit 1
+endif
 `;
 }
 
@@ -127,6 +135,7 @@ function writeOwned(file: string, marker: string, content: string): boolean {
  */
 export function writeStackMakefiles(root: string, config: Config): string[] {
   if (!hasServices(config)) return [];
+  ensureLocalRunIgnored(root);
   const written: string[] = [];
   mkdirSync(join(root, ".agentthread"), { recursive: true });
   writeFileSync(join(root, ".agentthread", "agt.mk"), renderMk());

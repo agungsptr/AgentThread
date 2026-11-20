@@ -213,7 +213,8 @@ export const ConfigSchema = z
           .optional(),
         services: z.record(z.string().regex(SERVICE_NAME, "service name must match /^[a-z][a-z0-9-]*$/"), serviceSchema).optional(),
         /**
-         * Run by `agt worktree add` instead of git worktree add. The placeholders {root} {task} {repo} {src} {path} are
+         * Run by `agt worktree add` instead of git worktree add. It replaces the built-in copy + install step too: the
+         * command must do any file copying and dependency install itself. The placeholders {root} {task} {repo} {src} {path} are
          * filled in already shell-quoted, so they must be used unquoted.
          */
         worktree_setup: z.string().min(1).optional(),

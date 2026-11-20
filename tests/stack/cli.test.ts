@@ -105,3 +105,50 @@ test("agt thread find --task fails without a daemon (and without --task)", async
     console.error = err;
   }
 });
+
+test("restart with a bad --task/--only fails fast, before stopping a running stack", async () => {
+  const root = twoRepoFolder();
+  const s = Bun.serve({ port: 0, fetch: () => new Response("x") });
+  const port = s.port!;
+  await s.stop(true);
+  const env = { XDG_CONFIG_HOME: isolatedConfigHome() };
+  initProject(root, "demo", env);
+  writeFileSync(
+    join(root, ".agentthread", "config.yaml"),
+    `workspace:\n  repos:\n    a: { path: a }\n  services:\n    web:\n      repo: a\n      start: "bun -e 'Bun.serve({port:${port},fetch:()=>new Response(\\"ok\\")});setInterval(()=>{},1000)'"\n      port: ${port}\n`,
+  );
+  toStop = () => main(["stack", "stop"], env, root);
+  expect((await capture(() => main(["stack", "start", "--main"], env, root))).code).toBe(0);
+  expect(await portHeld(port)).toBe(true);
+  const err = console.error;
+  console.error = () => {};
+  try {
+    expect(await main(["stack", "restart", "--task", "bad/x"], env, root)).not.toBe(0);
+    expect(await main(["stack", "restart", "--only", "nope"], env, root)).not.toBe(0);
+    expect(existsSync(join(root, ".local-run", "restart.log"))).toBe(false);
+    // the child's own failure lands in restart.log
+    expect(await main(["stack", "restart", "--task", "bad/x", "--wait"], env, root)).not.toBe(0);
+    expect(readFileSync(join(root, ".local-run", "restart.log"), "utf8")).toContain("restart failed: invalid task");
+    // a start for another task while running is refused and leaves the recorded target alone
+    expect((await capture(() => main(["stack", "start", "--task", "other"], env, root))).code).toBe(1);
+  } finally {
+    console.error = err;
+  }
+  expect(await portHeld(port)).toBe(true);
+  expect(readFileSync(join(root, ".local-run", "task"), "utf8").trim()).toBe("main");
+}, 60_000);
+
+test("agt thread find without a daemon says how to start it", async () => {
+  const root = twoRepoFolder();
+  const env = { XDG_CONFIG_HOME: isolatedConfigHome() };
+  initProject(root, "demo", env);
+  const errs: string[] = [];
+  const err = console.error;
+  console.error = (...a: unknown[]) => void errs.push(a.join(" "));
+  try {
+    expect(await main(["thread", "find", "--task", "x"], env, root)).toBe(1);
+  } finally {
+    console.error = err;
+  }
+  expect(errs.join("\n")).toContain("the agt daemon is not running: run agt start in ");
+});

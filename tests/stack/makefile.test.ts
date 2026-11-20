@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_CONFIG, ConfigSchema, type Config } from "../../src/config/config.ts";
 import { applyConfig } from "../../src/project/config-apply.ts";
@@ -108,4 +108,22 @@ test("a project Makefile can include agt.mk", () => {
 
 test("MAKEFILE.md for no services names none", () => {
   expect(renderMakefileMd(DEFAULT_CONFIG)).toContain("No services are configured");
+});
+
+test("the committed Makefile without agt.mk (fresh clone) says to run agt init, for help and every target", () => {
+  const root = twoRepoFolder();
+  writeStackMakefiles(root, config(WEB));
+  rmSync(join(root, ".agentthread", "agt.mk"));
+  for (const t of ["help", "start", "stop", "restart", "status", "logs", "wt-new"]) {
+    const r = make(root, [t]);
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr.toString()).toContain("this Makefile needs agt: run agt init in ");
+  }
+});
+
+test("writing the files adds .local-run/ to the project ignore", () => {
+  const root = twoRepoFolder();
+  Bun.spawnSync(["git", "init", "-q"], { cwd: root });
+  writeStackMakefiles(root, config(WEB));
+  expect(readFileSync(join(root, ".gitignore"), "utf8").split("\n")).toContain(".local-run/");
 });

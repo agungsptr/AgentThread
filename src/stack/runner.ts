@@ -170,6 +170,12 @@ export async function startStack(o: StartOptions): Promise<ServiceResult[]> {
   const out = o.out ?? ((l: string) => console.log(l));
   const resolved = resolveTarget(o.root, o.config, { task: o.task, main: o.main });
   mkdirSync(runDir(o.root), { recursive: true });
+  const recorded = readTask(o.root);
+  if ((o.task !== undefined || o.main) && resolved.target !== recorded && resolved.services.some((r) => readPid(o.root, r.name) !== undefined)) {
+    const detail = `already running on ${recorded}; use agt stack restart ${resolved.target === MAIN ? "--main" : `--task ${resolved.target}`}`;
+    out(`stack: FAILED ${detail}`);
+    return [{ name: "stack", outcome: "failed", detail }];
+  }
   writeTask(o.root, resolved.target);
   out(`target: ${resolved.target}`);
   const list = selected(o, resolved.services, o.only !== undefined);
@@ -330,9 +336,11 @@ export async function stackLogs(root: string, config: Config, name: string, opts
 }
 
 export async function restartStack(o: StartOptions): Promise<ServiceResult[]> {
+  // Validate before stopping anything: a bad --task/--only must not leave the stack down.
+  const resolved = resolveTarget(o.root, o.config, { task: o.task, main: o.main });
+  selected(o, resolved.services, o.only !== undefined);
   mkdirSync(runDir(o.root), { recursive: true });
   const log = join(runDir(o.root), "restart.log");
-  writeFileSync(log, "");
   const out = (l: string) => {
     appendFileSync(log, `${l}\n`);
     (o.out ?? ((x: string) => console.log(x)))(l);

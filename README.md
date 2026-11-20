@@ -100,7 +100,7 @@ With services configured and `workflow.stack.restart` / `status` unset, they def
 
 `agt worktree add <thread> <repo> [--from <branch>]` creates `.worktrees/<task>/<repo>` on a new `wip/<task>` from the
 source branch, in the background; the coordinator gets a notice when it is ready or failed. With `worktree_setup`, that
-command runs instead (`sh -c` in the root, at most 5 minutes) and must leave `{path}` checked out on `wip/<task>`. Its
+command runs instead (`sh -c` in the root, at most 5 minutes) and must leave `{path}` checked out on `wip/<task>`. It replaces the built-in copy and install step as well, so it must copy files and install dependencies itself. Its
 placeholders `{root}`, `{task}`, `{repo}`, `{src}` and `{path}` are filled in already shell-quoted: use them unquoted
 (`TASK={task}`, not `TASK="{task}"`).
 

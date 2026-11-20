@@ -38,6 +38,16 @@ export function initProject(root: string, name: string = basename(root), env: Re
   }
 }
 
+/** Adds .local-run/ to the project's .gitignore (the stack runtime dir), for projects with services. */
+export function ensureLocalRunIgnored(root: string): void {
+  if (!isGitRepo(root)) return;
+  const file = join(root, ".gitignore");
+  const current = existsSync(file) ? readFileSync(file, "utf8") : "";
+  if (current.split(/\r?\n/).includes(".local-run/")) return;
+  const sep = current && !current.endsWith("\n") ? "\n" : "";
+  writeFileSync(file, `${current}${sep}.local-run/\n`);
+}
+
 function ensureGitignore(root: string): void {
   const file = join(root, ".gitignore");
   const current = existsSync(file) ? readFileSync(file, "utf8") : "";
