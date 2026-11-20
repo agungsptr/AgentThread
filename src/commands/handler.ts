@@ -313,6 +313,10 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
     }
     case "stage": {
       if (t.legacy) reject("stages apply to task threads");
+      const recordedNa = t.stages[cmd.stage];
+      if (recordedNa?.state === "na" && recordedNa.by === "agt" && (cmd.state === "done" || cmd.state === "approve") && cmd.by !== "user" && actor.role !== "user") {
+        reject(`stage ${cmd.stage} is na: ${recordedNa.reason ?? "ruled out by the config"}; only the user can change it (add --by user)`);
+      }
       if (cmd.state === "approve") {
         if (cmd.stage !== 7) reject("only stage 7 (e2e) is approved");
         if (cmd.by !== "user") reject("approving stage 7 needs --by user");

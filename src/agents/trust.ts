@@ -40,8 +40,8 @@ export const AGY_TRUST_PROMPT: TrustPrompt = {
   marker: ">",
   choice: /Yes, I trust this folder/i,
   refuse: /No, exit/i,
-  // A status line (`auto · <model> · <effort>`) is drawn below the footer.
-  footer: /Navigate\W+enter Confirm(?:\s+auto\b.*)?$/i,
+  // A status line (`<mode> · <model> · <effort>`) is drawn below the footer.
+  footer: /Navigate\W+enter Confirm(?:\s+\S.*)?$/i,
   choiceFirst: true,
   move: "up",
   confirm: "enter",

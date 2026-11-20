@@ -24,6 +24,18 @@ const stage = (n: number, state: string, extra: Record<string, unknown> = {}) =>
 const thread = (s: State) => s.threads.get("001")!;
 
 describe("agt stage", () => {
+  test("a stage agt recorded na stays na for the coordinator; the user may override; others are unchanged", () => {
+    const s = base();
+    s.threads.get("001")!.stages[7] = { state: "na", by: "agt", reason: "no e2e commands in config", ts: "t" };
+    s.threads.get("001")!.stages[8] = { state: "na", by: "agt", reason: "no browser url", ts: "t" };
+    expect(errorOf(run(s, stage(7, "approve")))).toBe("stage 7 is na: no e2e commands in config; only the user can change it (add --by user)");
+    expect(errorOf(run(s, stage(8, "done")))).toBe("stage 8 is na: no browser url; only the user can change it (add --by user)");
+    expect(errorOf(run(s, stage(8, "na", { reason: "still none" })))).toBe("accepted");
+    expect(errorOf(run(s, stage(8, "done"), USER))).toBe("accepted");
+    expect(errorOf(run(s, stage(7, "approve", { by: "user" }), USER))).toBe("accepted");
+    expect(errorOf(run(s, stage(5, "done")))).toBe("accepted");
+  });
+
   test("stages 1-3 done make the current stage 4 delegation, in the brief, sub.thread.md and main", () => {
     const s = base();
     expect(renderBrief({ thread: thread(s), sessions: [] })).toContain("Stage: 1 discussion");

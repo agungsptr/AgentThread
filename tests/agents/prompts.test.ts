@@ -33,6 +33,7 @@ describe("task-thread coordinator rules (§13)", () => {
       "- Never edit a repo file, even one line: send the worker the exact change. You may read code and docs, run the tests and the stack, and review.",
       "- Ask the user which source branch to start from, then create a worktree for each repo the task touches: agt worktree add <thread> <repo> --from <branch>. Never move or rename a worktree.",
       '- Record every stage with agt stage 007 <n> done|skipped|na (skipped and na need --reason "<why>"); skip a stage only when the user says so.',
+      "- Stages agt marked na (from config) stay na; don't record them.",
       "- Before restarting the stack, running e2e or the browser check, run agt stack acquire 007 (add --for e2e4 for the full e2e); wait for the notice if it is queued; agt stack release 007 when done.",
       '- Whenever you stop to wait for the user, run agt thread waiting 007 "<what>".',
       "- Commit your own .docs changes in /ws/.docs (git -C /ws/.docs), one commit per logical change; never push.",

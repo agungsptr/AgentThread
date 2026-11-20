@@ -51,6 +51,7 @@ function coordinatorWorkflowLines(o: PromptInput): string[] {
   const docs = join(o.root, ".docs");
   return [
     `- Record every stage with agt stage ${id} <n> done|skipped|na (skipped and na need --reason "<why>"); skip a stage only when the user says so.`,
+    `- Stages agt marked na (from config) stay na; don't record them.`,
     `- Whenever you stop to wait for the user, run agt thread waiting ${id} "<what>".`,
     `- Commit your own .docs changes in ${docs} (git -C ${docs}), one commit per logical change; never push.`,
     `- ${commitRule(o.config)}`,

@@ -290,3 +290,8 @@ test("agy: No selected moves up and never presses enter while it stays selected"
   expect(r.answered).toBe(false);
   expect(t.keys).toEqual(["up", "up", "up"]);
 });
+
+test("agy: the footer is recognised under any mode's status line", () => {
+  expect(isTrustDialog(agyDialog(true).replace("auto · Gemini", "plan · Gemini"), AGY_TRUST_PROMPT)).toBe(true);
+  expect(isTrustDialog(agyDialog(true).replace(/\n\s+auto ·.*$/, ""), AGY_TRUST_PROMPT)).toBe(true);
+});
