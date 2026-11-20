@@ -86,6 +86,68 @@ const agentsSchema = z
 
 export type RoleAgent = { agent: z.infer<typeof agent>; model?: string; effort?: string };
 
+const SERVICE_NAME = /^[a-z][a-z0-9-]*$/;
+const HEALTH = /^(https?:\/\/\S+|tcp:\d+)$/;
+
+const serviceSchema = z
+  .object({
+    repo: z.string().min(1),
+    dir: z.string().min(1).default("."),
+    start: z.string().min(1),
+    port: z.number().int().min(1).max(65535).optional(),
+    health: z.string().regex(HEALTH, "health must be http(s)://... or tcp:<port>").optional(),
+    migrate: z.string().min(1).optional(),
+    after: z.array(z.string().min(1)).optional(),
+    enabled: z.boolean().default(true),
+  })
+  .strict();
+
+export type ServiceConfig = z.infer<typeof serviceSchema>;
+
+/** Cross-field checks of `workspace.services`: repo exists, unique ports, known and acyclic `after`. */
+function checkServices(
+  w: { repos?: Record<string, unknown> | undefined; services?: Record<string, ServiceConfig> | undefined },
+  ctx: z.RefinementCtx,
+): void {
+  const services = w.services ?? {};
+  const bad = (path: (string | number)[], message: string) => ctx.addIssue({ code: "custom", path: ["services", ...path], message });
+  const ports = new Map<number, string>();
+  for (const [name, s] of Object.entries(services)) {
+    if (!(s.repo in (w.repos ?? {}))) bad([name, "repo"], `unknown repo "${s.repo}" (not in workspace.repos)`);
+    s.after?.forEach((a, i) => {
+      if (!(a in services)) bad([name, "after", i], `unknown service "${a}"`);
+    });
+    if (s.enabled && s.port !== undefined) {
+      const other = ports.get(s.port);
+      if (other !== undefined) bad([name, "port"], `port ${s.port} is already used by service "${other}"`);
+      else ports.set(s.port, name);
+    }
+  }
+  // depth-first cycle search over known `after` edges
+  const state = new Map<string, 1 | 2>();
+  const visit = (n: string, trail: string[]): boolean => {
+    if (state.get(n) === 2) return false;
+    if (state.get(n) === 1) {
+      bad([n, "after"], `dependency cycle: ${[...trail.slice(trail.indexOf(n)), n].join(" -> ")}`);
+      return true;
+    }
+    state.set(n, 1);
+    for (const a of services[n]?.after ?? []) if (a in services && visit(a, [...trail, n])) return true;
+    state.set(n, 2);
+    return false;
+  };
+  for (const n of Object.keys(services)) if (visit(n, [])) break;
+}
+
+/** The stack commands in effect: explicit values win; with services configured they default to `agt stack ...`. */
+export function effectiveStack(config: Config): { restart?: string; status?: string } {
+  const st = config.workflow.stack;
+  const has = Object.keys(config.workspace.services ?? {}).length > 0;
+  const restart = st?.restart ?? (has ? "agt stack restart --task {task}" : undefined);
+  const status = st?.status ?? (has ? "agt stack status" : undefined);
+  return { ...(restart ? { restart } : {}), ...(status ? { status } : {}) };
+}
+
 export const ConfigSchema = z
   .object({
     language: z.enum(["en"]).default("en"),
@@ -141,10 +203,15 @@ export const ConfigSchema = z
                 /** Run in the repo worktree. */
                 unit: z.string().min(1).optional(),
                 typecheck: z.string().min(1).optional(),
+                /** Files copied from the main checkout into each new worktree; missing ones are skipped with a note. */
+                copy: z.array(z.string().trim().min(1)).optional(),
+                /** Run in a new worktree. Unset: detected from the lockfile; "" disables. */
+                install: z.string().optional(),
               })
               .strict(),
           )
           .optional(),
+        services: z.record(z.string().regex(SERVICE_NAME, "service name must match /^[a-z][a-z0-9-]*$/"), serviceSchema).optional(),
         /**
          * Run by `agt worktree add` instead of git worktree add. The placeholders {root} {task} {repo} {src} {path} are
          * filled in already shell-quoted, so they must be used unquoted.
@@ -152,6 +219,7 @@ export const ConfigSchema = z
         worktree_setup: z.string().min(1).optional(),
       })
       .strict()
+      .superRefine(checkServices)
       .default({}),
     /** Project facts for the feature workflow; rendered into the generated skill by `projectConfigSection`. */
     workflow: z

@@ -70,3 +70,17 @@ test("projectConfigSection: a command with {task} says what to put there", () =>
   const noPlaceholder = ConfigSchema.parse({ workflow: { stack: { restart: "make restart" } } });
   expect(projectConfigSection(noPlaceholder, repos)).not.toContain("replace `{task}`");
 });
+
+test("services are listed and stack commands default to agt stack", () => {
+  const c = ConfigSchema.parse({
+    workspace: { repos: { api: { path: "api" } }, services: { web: { repo: "api", start: "x", port: 3000, after: [] }, db: { repo: "api", start: "y", enabled: false } } },
+    workflow: { browser: { urls: ["http://localhost:3000"] } },
+  });
+  const md = projectConfigSection(c, repos, "t1");
+  expect(md).toContain("### Services");
+  expect(md).toContain("| web | api | `.` | 3000 | `tcp:3000` | - | yes |");
+  expect(md).toContain("| db | api | `.` | not configured | not configured | - | no |");
+  expect(md).toContain("- Stack restart: `agt stack restart --task t1`");
+  expect(md).toContain("- Stack status: `agt stack status`");
+  expect(stageNa(c).some((n) => n.stage === 8)).toBe(false);
+});

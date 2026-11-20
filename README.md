@@ -88,6 +88,15 @@ workspace:                              # optional; without repos, the root's ch
   worktree_setup: make wt-new TASK={task} SRC={src} REPOS={repo}
 ```
 
+Per repo, `copy: [.env, e2e/.env.local]` lists files copied from the main checkout into each new worktree (missing ones are
+skipped with a note), and `install: <cmd>` runs in a new worktree (default: detected from the lockfile, `bun install` /
+`yarn install --frozen-lockfile` / `pnpm install --frozen-lockfile` / `npm ci`; `""` disables). `workspace.services.<name>`
+(`^[a-z][a-z0-9-]*$`) describes a process of the local stack: `repo` (must be in `workspace.repos`), `dir` (default `.`),
+`start`, optional `port`, `health` (`http(s)://...` or `tcp:<port>`, default `tcp:<port>` when `port` is set), `migrate`,
+`after: [<service>]` (start order, no cycles) and `enabled` (default true). Ports must be unique among enabled services.
+With services configured and `workflow.stack.restart` / `status` unset, they default to
+`agt stack restart --task {task}` and `agt stack status`; explicit values win.
+
 `agt worktree add <thread> <repo> [--from <branch>]` creates `.worktrees/<task>/<repo>` on a new `wip/<task>` from the
 source branch, in the background; the coordinator gets a notice when it is ready or failed. With `worktree_setup`, that
 command runs instead (`sh -c` in the root, at most 5 minutes) and must leave `{path}` checked out on `wip/<task>`. Its

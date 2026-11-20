@@ -63,3 +63,11 @@ export function stackPrefill(targets: string[]): { restart?: string; status?: st
   const status = ["status", "ps"].find((t) => targets.includes(t));
   return { ...(restart ? { restart: `make ${restart} TASK={task}` } : {}), ...(status ? { status: `make ${status}` } : {}) };
 }
+
+/** The install command for a repo from its lockfile; null when it has no package.json. `install` overrides it ("" disables). */
+export function installCommand(repoPath: string, install?: string): string | null {
+  if (install !== undefined) return install === "" ? null : install;
+  if (!existsSync(join(repoPath, "package.json"))) return null;
+  const pm = packageManager(repoPath);
+  return pm === "bun" ? "bun install" : pm === "npm" ? "npm ci" : `${pm} install --frozen-lockfile`;
+}

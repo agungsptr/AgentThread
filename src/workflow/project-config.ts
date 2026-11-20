@@ -1,4 +1,4 @@
-import type { Config } from "../config/config.ts";
+import { effectiveStack, type Config } from "../config/config.ts";
 
 const NA_E2E = "no e2e commands configured";
 const NA_BROWSER = "no browser URL or stack restart configured";
@@ -9,7 +9,7 @@ export function stageNa(config: Config): { stage: 7 | 8; reason: string }[] {
   const w = config.workflow;
   const out: { stage: 7 | 8; reason: string }[] = [];
   if (!w.e2e?.stage2 && !w.e2e?.stage3 && !w.e2e?.stage4) out.push({ stage: 7, reason: NA_E2E });
-  if (!w.browser?.urls?.length || !w.stack?.restart) out.push({ stage: 8, reason: NA_BROWSER });
+  if (!w.browser?.urls?.length || !effectiveStack(config).restart) out.push({ stage: 8, reason: NA_BROWSER });
   return out;
 }
 
@@ -28,6 +28,7 @@ export function projectConfigSection(config: Config, repos: { name: string; path
   const w = config.workflow;
   // a task thread's copy has `{task}` filled in (task names are shell-safe: ^[a-z0-9][a-z0-9._-]*$); the root copy keeps it
   const code = (v: string | number | undefined): string => codeOf(typeof v === "string" && task !== undefined ? v.replaceAll("{task}", task) : v);
+  const stack = effectiveStack(config);
   const configured = config.workspace.repos ?? {};
   const lines: string[] = ["## Project config (from .agentthread/config.yaml)", ""];
 
@@ -51,9 +52,9 @@ export function projectConfigSection(config: Config, repos: { name: string; path
   lines.push(
     "### Commands",
     "",
-    `- Stack restart: ${code(w.stack?.restart)}`,
-    `- Stack status: ${code(w.stack?.status)}`,
-    ...(task === undefined && w.stack?.restart?.includes("{task}")
+    `- Stack restart: ${code(stack.restart)}`,
+    `- Stack status: ${code(stack.status)}`,
+    ...(task === undefined && stack.restart?.includes("{task}")
       ? ["- In the restart command, replace `{task}` with the thread's task name (the folder under `.worktrees/`) before running it; never run it with the placeholder or an empty value."]
       : []),
     `- E2E stage 2: ${code(w.e2e?.stage2)}`,
@@ -63,6 +64,16 @@ export function projectConfigSection(config: Config, repos: { name: string; path
     `- Read-only prod query: ${code(w.prod_read)}`,
     "",
   );
+
+  const services = Object.entries(config.workspace.services ?? {});
+  if (services.length) {
+    lines.push("### Services", "", "| Service | Repo | Dir | Port | Health | After | Enabled |", "| --- | --- | --- | --- | --- | --- | --- |");
+    for (const [name, s] of services) {
+      const health = s.health ?? (s.port !== undefined ? `tcp:${s.port}` : undefined);
+      lines.push(`| ${[name, s.repo, code(s.dir), val(s.port), code(health), s.after?.length ? s.after.join(", ") : "-", s.enabled ? "yes" : "no"].map((x) => cell(x)).join(" | ")} |`);
+    }
+    lines.push("");
+  }
 
   const m = w.migration;
   lines.push(

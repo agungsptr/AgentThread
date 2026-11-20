@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ConfigSchema, DEFAULT_CONFIG, configHash, configPaths, deepMerge, loadConfig } from "../../src/config/config.ts";
+import { ConfigSchema, DEFAULT_CONFIG, effectiveStack, configHash, configPaths, deepMerge, loadConfig } from "../../src/config/config.ts";
 import { isolatedConfigHome } from "../helpers.ts";
 
 function setup(files: { user?: string; project?: string } = {}) {
@@ -251,4 +251,36 @@ test("workflow defaults", () => {
   expect(w.file_language).toBe("English");
   expect(w.report_words).toEqual({ done: "done", blocked: "blocked" });
   expect(w.stack).toBeUndefined();
+});
+
+const ws = (services: Record<string, unknown>, repos: Record<string, unknown> = { api: { path: "api" } }) =>
+  ConfigSchema.safeParse({ workspace: { repos, services } });
+const msg = (r: ReturnType<typeof ws>) => (r.success ? "" : r.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "));
+
+test("services: valid shape with defaults, repo copy and install", () => {
+  const r = ConfigSchema.parse({
+    workspace: { repos: { api: { path: "api", copy: [".env"], install: "" } }, services: { "api-1": { repo: "api", start: "go run ." , port: 8080 } } },
+  });
+  expect(r.workspace.services!["api-1"]).toEqual({ repo: "api", dir: ".", start: "go run .", port: 8080, enabled: true });
+  expect(r.workspace.repos!.api!.copy).toEqual([".env"]);
+  expect(r.workspace.repos!.api!.install).toBe("");
+});
+
+test("services: validation", () => {
+  expect(ws({ Bad: { repo: "api", start: "x" } }).success).toBe(false);
+  expect(msg(ws({ a: { repo: "nope", start: "x" } }))).toContain('unknown repo "nope"');
+  expect(msg(ws({ a: { repo: "api", start: "x", port: 1 }, b: { repo: "api", start: "x", port: 1 } }))).toContain('port 1 is already used by service "a"');
+  expect(ws({ a: { repo: "api", start: "x", port: 1 }, b: { repo: "api", start: "x", port: 1, enabled: false } }).success).toBe(true);
+  expect(msg(ws({ a: { repo: "api", start: "x", after: ["z"] } }))).toContain('unknown service "z"');
+  expect(msg(ws({ a: { repo: "api", start: "x", after: ["b"] }, b: { repo: "api", start: "x", after: ["a"] } }))).toContain("dependency cycle: a -> b -> a");
+  expect(ws({ a: { repo: "api", start: "x", health: "http://localhost:1/h" }, b: { repo: "api", start: "x", health: "tcp:5432" } }).success).toBe(true);
+  for (const h of ["ftp://x", "tcp:abc", "localhost"]) expect(ws({ a: { repo: "api", start: "x", health: h } }).success).toBe(false);
+});
+
+test("effectiveStack defaults to agt stack commands only when services exist; explicit wins", () => {
+  const svc = { repo: "api", start: "x" };
+  const base = { repos: { api: { path: "api" } }, services: { a: svc } };
+  expect(effectiveStack(ConfigSchema.parse({ workspace: base }))).toEqual({ restart: "agt stack restart --task {task}", status: "agt stack status" });
+  expect(effectiveStack(ConfigSchema.parse({ workspace: base, workflow: { stack: { restart: "make r" } } }))).toEqual({ restart: "make r", status: "agt stack status" });
+  expect(effectiveStack(ConfigSchema.parse({}))).toEqual({});
 });

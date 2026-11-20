@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { prefill, stackPrefill } from "../../src/project/prefill.ts";
+import { installCommand, prefill, stackPrefill } from "../../src/project/prefill.ts";
 
 const dir = (files: Record<string, string>): string => {
   const d = realpathSync(mkdtempSync(join(tmpdir(), "agt-prefill-")));
@@ -46,4 +46,15 @@ test("stackPrefill picks the first restart and status target", () => {
   expect(stackPrefill(["up", "restart", "ps", "status"])).toEqual({ restart: "make restart TASK={task}", status: "make status" });
   expect(stackPrefill(["up", "ps"])).toEqual({ restart: "make up TASK={task}", status: "make ps" });
   expect(stackPrefill(["build"])).toEqual({});
+});
+
+test("installCommand follows the lockfile and honours overrides", () => {
+  const d = mkdtempSync(join(tmpdir(), "inst-"));
+  expect(installCommand(d)).toBeNull();
+  writeFileSync(join(d, "package.json"), "{}");
+  expect(installCommand(d)).toBe("npm ci");
+  writeFileSync(join(d, "yarn.lock"), "");
+  expect(installCommand(d)).toBe("yarn install --frozen-lockfile");
+  expect(installCommand(d, "")).toBeNull();
+  expect(installCommand(d, "make deps")).toBe("make deps");
 });
