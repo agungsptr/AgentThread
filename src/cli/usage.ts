@@ -31,7 +31,7 @@ export const USAGE = `usage: agt <command>
   question <thread> <message...>
   answer <thread> <Q> <text...>
   handoff <thread> (--file <path> | --stdin)
-  worker spawn <thread> --ticket <T> [--agent claude-code|opencode|codex|omp]
+  worker spawn <thread> --ticket <T> [--agent claude-code|opencode|codex|omp|agy]
   worktree add <thread> <repo> [--from <branch>]   a task worktree .worktrees/<task>/<repo> on wip/<task>
   tell <thread|main> <message...>
   tell <thread>/<ticket> <message...>   a task thread's coordinator: the ticket's live worker hears it
