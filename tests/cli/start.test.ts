@@ -25,6 +25,7 @@ function agt(args: string[], extra: Record<string, string> = {}, opts: { herdr?:
     AGT_OPENCODE_BIN: "/nonexistent/opencode",
     AGT_CODEX_BIN: "/nonexistent/codex",
     AGT_OMP_BIN: "/nonexistent/omp",
+    AGT_AGY_BIN: "/nonexistent/agy",
   };
   if (opts.herdr !== false) {
     Object.assign(env, {

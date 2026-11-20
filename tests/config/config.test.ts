@@ -20,6 +20,13 @@ function setup(files: { user?: string; project?: string } = {}) {
   return { root, env, p };
 }
 
+test("agy is accepted for roles and tiers with its efforts, and rejects others", () => {
+  const ok = setup({ project: "agents:\n  roles:\n    worker: { agent: agy, model: gemini-4-neon-high, effort: xhigh }\n  complexity:\n    tiers:\n      big: { agent: agy }\n" });
+  expect(loadConfig(ok.root, ok.env).agents.roles.worker).toEqual({ agent: "agy", model: "gemini-4-neon-high", effort: "xhigh" });
+  const bad = setup({ project: "agents:\n  roles:\n    worker: { agent: agy, effort: ultra }\n" });
+  expect(() => loadConfig(bad.root, bad.env)).toThrow("agents.roles.worker.effort: agy accepts low, medium, high, xhigh, max");
+});
+
 test("an empty HOME still gives an absolute user path", () => {
   expect(configPaths("/repo", { HOME: "" }).user.startsWith("/")).toBe(true);
 });

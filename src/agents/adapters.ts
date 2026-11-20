@@ -26,7 +26,7 @@ export interface AgentAdapter {
   /** The agent's name as people know it, for log lines (e.g. "Claude Code"). */
   displayName: string;
   /** The `--kind` Herdr is given, e.g. "claude". */
-  herdrKind: "claude" | "opencode" | "codex" | "omp";
+  herdrKind: "claude" | "opencode" | "codex" | "omp" | "agy";
   /**
    * Default executable of main's launch by `agt start`, overridden there by AGT_<AGENT>_BIN. Coordinators and workers
    * are started by Herdr from `herdrKind`, which picks the executable itself; the override does not reach them.
@@ -238,11 +238,40 @@ const ompAdapter: AgentAdapter = {
   capabilities: NO_HOOKS,
 };
 
+const agyAdapter: AgentAdapter = {
+  agent: "agy",
+  displayName: "Antigravity",
+  herdrKind: "agy",
+  bin: "agy",
+  // agy reads AGENTS.md itself (and GEMINI.md, .agents/rules/*.md), but not CLAUDE.md.
+  instructionFiles: [],
+  prompt: "flag",
+  launch({ run, config }) {
+    // Pushing is the user's call: a deny rule in the session-only settings (precedence deny > ask > allow). Whether it
+    // still holds under --dangerously-skip-permissions is not stated by the docs; the pre-push hook backs it up.
+    const settings = { permissions: { deny: ["command(git push)"] } };
+    return {
+      args: [
+        ...(run.model ? ["--model", run.model] : []),
+        ...(run.effort ? ["--effort", run.effort] : []),
+        // Not autonomous: no flag, so agy's default mode asks for edits and commands.
+        ...(config.agents.autonomous ? ["--dangerously-skip-permissions"] : []),
+        "--settings", JSON.stringify(settings),
+      ],
+      env: {},
+      processEnv: processEnv(),
+    };
+  },
+  promptArgs: (text) => ["-i", text],
+  capabilities: NO_HOOKS,
+};
+
 const ADAPTERS: Record<AgentKind, AgentAdapter> = {
   "claude-code": claudeAdapter,
   opencode: opencodeAdapter,
   codex: codexAdapter,
   omp: ompAdapter,
+  agy: agyAdapter,
 };
 
 export function adapterFor(agent: AgentKind): AgentAdapter {
@@ -266,6 +295,7 @@ const BIN_ENV: Record<AgentKind, string> = {
   opencode: "AGT_OPENCODE_BIN",
   codex: "AGT_CODEX_BIN",
   omp: "AGT_OMP_BIN",
+  agy: "AGT_AGY_BIN",
 };
 
 /**

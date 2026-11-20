@@ -1,7 +1,7 @@
 export const ROLES = ["user", "main", "coordinator", "worker"] as const;
 export type Role = (typeof ROLES)[number];
 
-export const AGENT_KINDS = ["claude-code", "opencode", "codex", "omp"] as const;
+export const AGENT_KINDS = ["claude-code", "opencode", "codex", "omp", "agy"] as const;
 export type AgentKind = (typeof AGENT_KINDS)[number];
 
 export type SessionRole = "main" | "coordinator" | "worker";

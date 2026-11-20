@@ -8,6 +8,7 @@
 | OpenCode 2.0.27 | `opencode` | `opencode` | env `OPENCODE_CONFIG_CONTENT` = `{"model":"<provider/model>"}` (the TUI has no `--model`) | variant suffix in the same value: `<provider/model>#<effort>` | `--standalone --auto` + `"permission"` in `OPENCODE_CONFIG_CONTENT` | `--prompt <text>` | `AGENTS.md` |
 | Codex 0.164.0 | `codex` | `codex` | `-m <m>` | `-c model_reasoning_effort="<minimal\|low\|medium\|high\|xhigh>"` | `-s workspace-write -a never -c sandbox_workspace_write.network_access=true --add-dir <git common dir>` (coordinator only) `--search -c 'projects={"<root>"={trust_level="trusted"},"<worktree>"={trust_level="trusted"}}'` | positional | `AGENTS.md` |
 | omp 18.13.3 | `omp` | `omp` (standalone binary in `~/.local/bin`; the npm build needs a newer Bun) | `--model <m>` | `--thinking <off\|minimal\|low\|medium\|high\|xhigh\|max\|auto>` | `--approval-mode yolo` | positional | `AGENTS.md` |
+| agy 1.5.13 (Antigravity CLI) | `agy` | `agy` | `--model <id>` (`agy models`) | `--effort <low\|medium\|high\|xhigh\|max>` | `--dangerously-skip-permissions` | `-i <text>` (`--prompt-interactive`) | `AGENTS.md` (read natively) |
 
 Claude Code (2.1.314) in every role: autonomous start (`--permission-mode bypassPermissions` with `skipDangerousModePermissionPrompt`), positional first prompt and the `CLAUDE.md` symlink are verified by the release matrix 2026-10-31 (`happy-claude-code`), and so is the failure message of a missing binary (`edge-missing-binary`).
 
@@ -25,6 +26,7 @@ Checked 2026-10-31 against the installed binaries (`--help` and strings only, no
 - Claude Code: reads `.claude/skills`.
 - omp 18.13.3: has a "Load skills from .claude/skills/*/SKILL.md" provider (also `.codex/skills`, `.opencode/skills`, `.agents/skills`).
 - OpenCode: its config has a Claude compatibility directory next to an `agents` one; its documented skill search includes `.claude/skills`. The binary was not exercised, so this rests on the docs and that string.
+- agy 1.5.13 (docs only, https://antigravity.google/docs/skills.md and /rules.md, fetched 2026-11-21): skills from `.agents/skills` (workspace and parents up to the repo root), so agt's generated skills there are found; `.claude/skills` is not listed. Rules: `AGENTS.md`, `GEMINI.md`, `.agents/rules/*.md`; `CLAUDE.md` is not read, so no instruction symlink is needed.
 - Codex 0.164.0: skill sources are `.agents/skills` and `$CODEX_HOME/skills` (`~/.codex/skills`); no `.claude/skills` string found. agt writes every generated skill (`agt`, `agt-feature-workflow`, `manage-docs`) under `.agents/skills` as well as `.claude/skills`, so Codex reads them from there.
 
 ## Adding an agent
@@ -93,5 +95,11 @@ No agent pushes; the vendors' own rules say so in both autonomy modes:
   when not. Per https://opencode.ai/docs/permissions (fetched 2026-10-24) `*` "matches zero or more of any character",
   so `git push*` covers a bare `git push` as well as `git push <args>` (the docs' own example, `"git push *"`, misses
   the bare form), and "the last matching rule" wins, so the catch-all comes first.
+- agy: `"permissions": {"deny": ["command(git push)"]}` in a session-only `--settings` JSON (precedence Deny > Ask > Allow;
+  `command(git push)` matches `git push` and its extensions; https://antigravity.google/docs/permissions.md, fetched
+  2026-11-21). The docs do not say whether deny rules hold under `--dangerously-skip-permissions` (`always-proceed`),
+  so agt's pre-push hook is the backstop. `--mode auto` is not passed: the docs say `always-proceed` overrides it.
+  Not autonomous: no permission flag, so agy's default mode asks for edits and commands; the deny rule is still passed.
+  Not exercised against a real agy run (never started here).
 - Codex and omp have no per-command deny rule on the command line; Codex workers cannot write the repository's git dir
   at all (see the sandbox scope below).

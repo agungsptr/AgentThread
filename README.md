@@ -1,6 +1,6 @@
 # AgentThread
 
-AgentThread runs a team of coding agents (Claude Code, OpenCode, Codex, omp) on one git repository, inside the Herdr terminal multiplexer.
+AgentThread runs a team of coding agents (Claude Code, OpenCode, Codex, omp, Antigravity) on one git repository, inside the Herdr terminal multiplexer.
 You talk to a **main manager** agent. For each feature or bug it opens a **thread**: a git worktree plus a Herdr tab with a
 **coordinator** agent, which splits the work into tickets and starts **worker** agents (in panes of that tab) to implement them.
 A local daemon (`agt daemon`) keeps the event log and renders the state as Markdown under `.agentthread/`.
@@ -22,9 +22,10 @@ bun link        # puts `agt` on your PATH
 | OpenCode (`opencode`) | see opencode.ai; runs with `--standalone` |
 | Codex (`codex`) | `brew install --cask codex`, then `codex login` |
 | omp (`omp`) | the standalone binary from [omp.sh](https://omp.sh) (the npm build needs a newer Bun than 1.1.34) |
+| Antigravity (`agy`) | Google Antigravity CLI; reads `AGENTS.md` and `.agents/skills` |
 
 Any agent can fill any role (main, coordinator, worker). CLI facts and how to add an agent: [docs/agents.md](docs/agents.md).
-`AGT_CLAUDE_BIN`, `AGT_OPENCODE_BIN`, `AGT_CODEX_BIN` and `AGT_OMP_BIN` override the executable of main's launch only;
+`AGT_CLAUDE_BIN`, `AGT_OPENCODE_BIN`, `AGT_CODEX_BIN`, `AGT_OMP_BIN` and `AGT_AGY_BIN` override the executable of main's launch only;
 coordinators and workers are started by Herdr, which picks the executable itself.
 
 ## Quick start
@@ -157,7 +158,7 @@ committed. A skill your project tracks, or one with a file that lacks the genera
 and is left alone everywhere (the daemon logs `kept the project's own skill <name> at <path>`). Set
 `agents.skill: false` to turn them off; existing generated files are then left as they are. Claude Code reads
 `.claude/skills`, and so does omp, which loads skills from `.claude/skills/*/SKILL.md`; OpenCode's config has a Claude
-compatibility directory, which its docs say covers `.claude/skills`. Codex reads `.agents/skills`.
+compatibility directory, which its docs say covers `.claude/skills`. Codex and Antigravity read `.agents/skills`.
 
 ## Release check
 

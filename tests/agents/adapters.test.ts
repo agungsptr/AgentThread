@@ -14,8 +14,8 @@ const nonAuto = { ...DEFAULT_CONFIG, agents: { ...DEFAULT_CONFIG.agents, autonom
 
 test("adapterFor covers every agent kind with its herdr kind and bin", () => {
   for (const k of AGENT_KINDS) expect(adapterFor(k).agent).toBe(k);
-  expect(AGENT_KINDS.map((k) => adapterFor(k).herdrKind)).toEqual(["claude", "opencode", "codex", "omp"]);
-  expect(AGENT_KINDS.map((k) => adapterFor(k).bin)).toEqual(["claude", "opencode", "codex", "omp"]);
+  expect(AGENT_KINDS.map((k) => adapterFor(k).herdrKind)).toEqual(["claude", "opencode", "codex", "omp", "agy"]);
+  expect(AGENT_KINDS.map((k) => adapterFor(k).bin)).toEqual(["claude", "opencode", "codex", "omp", "agy"]);
   expect(adapterFor("claude-code").instructionFiles).toEqual(["CLAUDE.md"]);
   expect(adapterFor("codex").instructionFiles).toEqual([]);
   expect(adapterFor("claude-code").capabilities).toEqual({ hooks: true, contextSize: true, preCompact: true });
@@ -29,6 +29,25 @@ test("promptArgs", () => {
   for (const k of ["claude-code", "codex", "omp"] as const) expect(adapterFor(k).promptArgs("x")).toEqual(["x"]);
   expect(adapterFor("opencode").promptArgs("x")).toEqual(["--prompt", "x"]);
   expect(adapterFor("opencode").prompt).toBe("flag");
+  expect(adapterFor("agy").promptArgs("x")).toEqual(["-i", "x"]);
+  expect(adapterFor("agy").prompt).toBe("flag");
+});
+
+const AGY_SETTINGS = JSON.stringify({ permissions: { deny: ["command(git push)"] } });
+
+test("agy autonomous: skip permissions, push deny settings, no model or effort by default", () => {
+  const l = adapterFor("agy").launch({ ...base, run: { agent: "agy" } });
+  expect(l.args).toEqual(["--dangerously-skip-permissions", "--settings", AGY_SETTINGS]);
+  expect(l.env).toEqual({});
+  expect(l.processEnv).toEqual({ AGT_AGENT_PROCESS: "1" });
+  expect(adapterFor("agy").capabilities).toEqual({ hooks: false, contextSize: false, preCompact: false });
+  expect(adapterFor("agy").instructionFiles).toEqual([]);
+});
+
+test("agy with model and effort; not autonomous has no skip flag", () => {
+  const { args } = adapterFor("agy").launch({ ...base, run: { agent: "agy", model: "gemini-4-neon-high", effort: "xhigh" } });
+  expect(args).toEqual(["--model", "gemini-4-neon-high", "--effort", "xhigh", "--dangerously-skip-permissions", "--settings", AGY_SETTINGS]);
+  expect(adapterFor("agy").launch({ ...base, config: nonAuto, run: { agent: "agy" } }).args).toEqual(["--settings", AGY_SETTINGS]);
 });
 
 test("claude autonomous: bypassPermissions, skip prompt setting, model and effort, no allowed-tools", () => {

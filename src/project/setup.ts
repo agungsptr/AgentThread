@@ -48,7 +48,7 @@ export async function runSetup(o: {
   env?: Env;
 }): Promise<void> {
   const { ask, detected } = o;
-  if (detected.length === 0) throw new Error("no supported agent found on PATH (claude, opencode, codex or omp)");
+  if (detected.length === 0) throw new Error("no supported agent found on PATH (claude, opencode, codex, omp or agy)");
   const defAgent: AgentKind = detected.includes("claude-code") ? "claude-code" : detected[0]!;
 
   const pick = async (label: string): Promise<Pick> => {

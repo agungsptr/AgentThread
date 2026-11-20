@@ -172,7 +172,7 @@ test("an opencode effort with an empty model re-asks the model", async () => {
   expect(loadConfig(root, env()).agents.roles.main).toEqual({ agent: "opencode", model: "prov/model", effort: "high" });
 });
 
-const NO_BINS = { AGT_CLAUDE_BIN: "/nonexistent/a", AGT_OPENCODE_BIN: "/nonexistent/b", AGT_CODEX_BIN: "/nonexistent/c", AGT_OMP_BIN: "/nonexistent/d" };
+const NO_BINS = { AGT_CLAUDE_BIN: "/nonexistent/a", AGT_OPENCODE_BIN: "/nonexistent/b", AGT_CODEX_BIN: "/nonexistent/c", AGT_OMP_BIN: "/nonexistent/d", AGT_AGY_BIN: "/nonexistent/agy" };
 const HINT = "no supported agent found; install one (see README) and run agt setup";
 
 test("initCommand on a TTY with no agent prints initialized, then the hint, and returns 0", async () => {
@@ -356,4 +356,9 @@ test("workflow: a hand-added repo and its new fields survive a re-run", async ()
   writeFileSync(cfg(root), ["workspace:", "  repos:", "    extra:", "      path: vendor/extra", "      unit: make x", "      pr_order: 4", ""].join("\n"));
   await run(root, {});
   expect(loadConfig(root, env()).workspace.repos?.extra).toEqual({ path: "vendor/extra", unit: "make x", pr_order: 4 });
+});
+
+test("detectAgents finds agy by its bin and AGT_AGY_BIN", () => {
+  expect(detectAgents((b) => (b === "agy" ? "/x/agy" : null), {})).toEqual(["agy"]);
+  expect(detectAgents((b) => (b === "/y/antigravity" ? b : null), { AGT_AGY_BIN: "/y/antigravity" })).toEqual(["agy"]);
 });

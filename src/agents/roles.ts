@@ -10,6 +10,7 @@ export const EFFORTS: Record<AgentKind, readonly string[]> = {
   opencode: [],
   codex: ["minimal", "low", "medium", "high", "xhigh"],
   omp: ["off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"],
+  agy: ["low", "medium", "high", "xhigh", "max"],
 };
 
 export function roleAgent(config: Config, role: SessionRole): RoleAgent {

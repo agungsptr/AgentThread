@@ -301,7 +301,7 @@ describe("project root", () => {
     console.log = () => {};
     console.error = () => {};
     try {
-      expect(await initCommand(root, { ...ENV, AGT_CLAUDE_BIN: "/nonexistent/a", AGT_OPENCODE_BIN: "/nonexistent/b", AGT_CODEX_BIN: "/nonexistent/c", AGT_OMP_BIN: "/nonexistent/d" }, "x", true)).toBe(0);
+      expect(await initCommand(root, { ...ENV, AGT_CLAUDE_BIN: "/nonexistent/a", AGT_OPENCODE_BIN: "/nonexistent/b", AGT_CODEX_BIN: "/nonexistent/c", AGT_OMP_BIN: "/nonexistent/d", AGT_AGY_BIN: "/nonexistent/agy" }, "x", true)).toBe(0);
     } finally {
       [console.log, console.error] = [ol, oe];
     }

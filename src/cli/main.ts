@@ -499,7 +499,7 @@ async function start(root: string, env: Env, argv: string[]): Promise<number> {
   return code;
 }
 
-const AGENT_NAMES: Record<AgentKind, string> = { "claude-code": "Claude Code", opencode: "OpenCode", codex: "Codex", omp: "omp" };
+const AGENT_NAMES: Record<AgentKind, string> = { "claude-code": "Claude Code", opencode: "OpenCode", codex: "Codex", omp: "omp", agy: "Antigravity" };
 
 /** `{ gitCommonDir }` for an agent launched in `root`, or nothing when git cannot tell (the adapter falls back to <root>/.git). */
 function gitCommonDir(root: string): { gitCommonDir?: string } {

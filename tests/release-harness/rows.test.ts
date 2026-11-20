@@ -30,6 +30,7 @@ test("--list includes the workspace rows", () => {
     "ws-happy-worker-opencode",
     "ws-happy-worker-codex",
     "ws-happy-worker-omp",
+    "ws-happy-worker-agy",
     "ws-edge-out-of-ticket",
     "ws-edge-return",
     "ws-edge-out-of-ticket-worker-opencode",
