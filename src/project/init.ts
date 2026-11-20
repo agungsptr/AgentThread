@@ -8,7 +8,7 @@ import { isGitRepo } from "./git.ts";
 import { discoverRepos, isWorkspaceProject } from "./workspace.ts";
 import { paths } from "./paths.ts";
 
-const IGNORE_LINES = [".worktrees/", ".agentthread/*", "!.agentthread/config.yaml"];
+const IGNORE_LINES = [".worktrees/", ".agentthread/*", "!.agentthread/config.yaml", ".local-run/"];
 
 /** The project's config, or the defaults when it is invalid (init never fails on it; the daemon reports it). */
 export function configOrDefault(root: string, env: Record<string, string | undefined> = process.env): Config {

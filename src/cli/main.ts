@@ -24,6 +24,8 @@ import { findRoot } from "../project/root.ts";
 import type { State } from "../state/projection.ts";
 import { USAGE } from "./usage.ts";
 import { guide, isLegacyThread } from "../agents/guide.ts";
+import { formatStatus, restartStack, stackLogs, stackStatus, startStack, stopStack } from "../stack/runner.ts";
+import { hasServices } from "../stack/target.ts";
 
 type Env = Record<string, string | undefined>;
 
@@ -207,6 +209,9 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
     }
     case "stack": {
       const stackRoot = findRoot(cwd, env);
+      if (sub === "start" || sub === "stop" || sub === "restart" || sub === "logs" || (sub === "status" && hasServices(loadConfig(stackRoot, env)))) {
+        return stackServices(stackRoot, env, sub, rest);
+      }
       if (sub === "status") {
         if (rest.length) throw new UsageError("stack status takes no arguments");
         const res = await request(paths(stackRoot).socket, { op: "command", command: { cmd: "stack.status" }, actor: actorFromEnv(env) });
@@ -301,6 +306,42 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
     default:
       throw new UsageError(group ? `unknown command '${group}'` : "");
   }
+}
+
+/** agt stack start|stop|restart|status|logs: the workspace services (CLI only, no daemon). */
+async function stackServices(root: string, env: Env, sub: string, args: string[]): Promise<number> {
+  const config = loadConfig(root, env);
+  const only = (v: unknown) => (typeof v === "string" ? v.split(",").map((x) => x.trim()).filter(Boolean) : undefined);
+  if (sub === "logs") {
+    const { values, positionals } = parse(args, { follow: { type: "boolean", short: "f" }, lines: { type: "string", short: "n" } });
+    if (positionals.length !== 1) throw new UsageError("stack logs needs <service>");
+    const n = values.lines === undefined ? undefined : Number(values.lines);
+    if (n !== undefined && (!Number.isInteger(n) || n < 1)) throw new UsageError("-n needs a positive number");
+    return stackLogs(root, config, positionals[0]!, { ...(n !== undefined ? { lines: n } : {}), follow: !!values.follow });
+  }
+  if (sub === "status") {
+    const { values, positionals } = parse(args, { json: { type: "boolean" } });
+    if (positionals.length) throw new UsageError("stack status takes only --json");
+    const rows = await stackStatus({ root, config });
+    if (values.json) console.log(JSON.stringify(rows, null, 2));
+    else {
+      for (const l of formatStatus(rows, root)) console.log(l);
+      if (await isAlive(paths(root).socket)) {
+        const res = await request(paths(root).socket, { op: "command", command: { cmd: "stack.status" }, actor: actorFromEnv(env) });
+        if (res.ok) {
+          const { holder } = res.result as State["stack"];
+          console.log(holder ? `lock: thread ${holder.thread}${holder.purpose ? ` for ${holder.purpose}` : ""}` : "lock: free");
+        }
+      }
+    }
+    return 0;
+  }
+  const { values, positionals } = parse(args, sub === "stop" ? { only: { type: "string" } } : { task: { type: "string" }, main: { type: "boolean" }, only: { type: "string" } });
+  if (positionals.length) throw new UsageError(`stack ${sub} takes no arguments`);
+  if (values.task !== undefined && values.main) throw new UsageError("--task and --main exclude each other");
+  const o = { root, config, only: only(values.only), task: values.task as string | undefined, main: !!values.main };
+  const results = await (sub === "stop" ? stopStack(o) : sub === "restart" ? restartStack(o) : startStack(o));
+  return results.some((r) => r.outcome === "failed") ? 1 : 0;
 }
 
 function parse(args: string[], options: ParseArgsConfig["options"]) {

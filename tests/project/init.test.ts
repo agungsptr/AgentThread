@@ -18,7 +18,7 @@ test("init creates the event store, gitignore entries and main thread", () => {
   store.close();
   expect(readFileSync(p.mainThread, "utf8")).toContain("# Main Thread — demo");
   const ignore = readFileSync(join(root, ".gitignore"), "utf8");
-  expect(ignore).toContain(".worktrees/\n.agentthread/*\n!.agentthread/config.yaml\n");
+  expect(ignore).toContain(".worktrees/\n.agentthread/*\n!.agentthread/config.yaml\n.local-run/\n");
 });
 
 test("init refuses to run twice", () => {

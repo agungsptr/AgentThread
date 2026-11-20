@@ -23,6 +23,11 @@ export const USAGE = `usage: agt <command>
   ticket return <thread>/<ticket> <what to fix...>   back to its worker (or a fresh one) with the note
   ticket block <thread>/<ticket> --reason <text>
   stage <thread> <1-10> done|skipped|na|approve [--reason <why>] [--by user]   record a task thread's stage (skipped and na need a reason; approve is stage 7, --by user)
+  stack start [--task <slug>|--main] [--only a,b]   start the workspace services (.local-run/); --task runs from .worktrees/<slug>/<repo> where it exists
+  stack stop [--only a,b]               stop them (process group, then whatever still holds the port)
+  stack restart [--task <slug>|--main] [--only a,b]
+  stack status [--json]                 service | state | port | pid | cwd | branch | target (without services: the lock below)
+  stack logs <service> [-f] [-n <lines>]
   stack acquire <thread> [--for e2e4]   take the workspace stack lock, or queue for it (e2e4 needs the user's stage-7 approval)
   stack release <thread>                give the lock back (or leave its queue); the next in the queue gets it
   stack status                          who holds the lock and who waits
