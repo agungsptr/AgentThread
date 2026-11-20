@@ -1,11 +1,11 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, rm } from "node:fs/promises";
+import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { agentEnv, claudeConfigDir } from "../agents/claude.ts";
 import { adapterFor, prepareLaunch } from "../agents/adapters.ts";
 import { bootstrapPrompt } from "../agents/prompts.ts";
-import { agentsMd, writeAgentsFilesAsync, writeThreadDirFiles } from "../agents/agents-md.ts";
+import { addCopiedExcludes, agentsMd, writeAgentsFilesAsync, writeThreadDirFiles } from "../agents/agents-md.ts";
 import { attachDeadline, launchSpawnJob, workersTabOrder, type SpawnJob } from "../agents/spawn-job.ts";
 import { typingUnsafe } from "../agents/trust.ts";
 import { canonical, cleanupThread, type CleanupOutcome } from "./cleanup-job.ts";
@@ -16,7 +16,7 @@ import type { EventBody, Layout } from "../domain/types.ts";
 import { HerdrCli, HerdrError, spawnAsync } from "../herdr/bridge.ts";
 import { addWorktreeAsync, addWorktreeFromAsync } from "../project/git.ts";
 import { installCommand } from "../project/prefill.ts";
-import { copyIntoWorktree } from "../project/worktree-copy.ts";
+import { anchoredExclude, copyIntoWorktree, redactSecrets } from "../project/worktree-copy.ts";
 import { paths } from "../project/paths.ts";
 import { NOTICE_HELD_CAPPED_AT, NOTICE_RETRY_MAX_MS } from "../orchestration/reactor.ts";
 import { threadGitEnv } from "../orchestration/sessions.ts";
@@ -449,29 +449,58 @@ async function addRepoWorktree(e: RepoWorktreeEffect, root: string, config: Conf
   };
   const hadBranch = await branchExists();
   const wasRegistered = await registered();
-  // A worktree a previous job finished but never reported (the daemon stopped first) is adopted as it is.
-  if (wasRegistered && (await onBranch())) return;
+  // The built-in step: the repo's env files from the main checkout (git-ignored in the worktree), then its dependencies.
+  // Copying never overwrites, so running it again is safe.
+  const builtin = async () => {
+    const repoCfg = config.workspace.repos?.[e.repo];
+    const { notes, copied } = await copyIntoWorktree(e.repoPath, e.path, repoCfg?.copy ?? []);
+    for (const note of notes) log?.(`worktree ${e.repo}: ${note}`);
+    if (copied.length) {
+      try {
+        addCopiedExcludes(root, e.repo, copied.map(anchoredExclude));
+      } catch (err) {
+        log?.(`worktree ${e.repo}: could not git-ignore the copied files: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    const install = installCommand(e.path, repoCfg?.install);
+    if (install !== null) {
+      const ran = bg.setupChain.then(() => (bg.stopped ? undefined : runShellGroup(`cd ${shq(e.path)} || exit 1\n${install}`, setupTimeoutMs, bg.groups)));
+      bg.setupChain = ran.catch(() => {});
+      const r = await ran;
+      if (!r) throw new Error("the daemon is stopping");
+      if (r.exitCode !== 0 || r.timedOut) {
+        const tail = redactSecrets(r.stderr.trim().split("\n").slice(-10).join("\n"));
+        const why = bg.stopped ? "the daemon stopped" : r.timedOut ? `timed out after ${Math.round(setupTimeoutMs / 1000)}s` : `exit ${r.exitCode}${tail ? `: ${tail}` : ""}`;
+        throw new Error(`install for ${e.repo} failed (${why})`);
+      }
+    }
+  };
+  // The ready marker lives in the worktree's own git dir, never in the working tree.
+  const markReady = async () => {
+    const gd = await spawnAsync("git", ["-C", e.path, "rev-parse", "--absolute-git-dir"], { ...process.env, GIT_CEILING_DIRECTORIES: dirname(e.path) }, 10_000);
+    if (gd.exitCode === 0) await writeFile(join(gd.stdout.trim(), "agt-ready"), "");
+  };
+  const isReady = async () => {
+    const gd = await spawnAsync("git", ["-C", e.path, "rev-parse", "--absolute-git-dir"], { ...process.env, GIT_CEILING_DIRECTORIES: dirname(e.path) }, 10_000);
+    return gd.exitCode === 0 && existsSync(join(gd.stdout.trim(), "agt-ready"));
+  };
   const hadPath = existsSync(e.path);
   try {
     if (bg.stopped) throw new Error("the daemon is stopping");
     const setup = config.workspace.worktree_setup;
+    // A worktree a previous job created but never reported (the daemon stopped first) is adopted; one without the
+    // ready marker had its copy and install cut short, so that step runs again first (a worktree_setup cannot be re-run).
+    if (wasRegistered && (await onBranch())) {
+      if (!(await isReady())) {
+        if (setup === undefined) await builtin();
+        await markReady();
+      }
+      return;
+    }
     if (setup === undefined) {
       await addWorktreeFromAsync(e.repoPath, e.branch, e.path, e.source);
-      // The built-in step: the repo's env files from the main checkout, then its dependencies.
-      const repoCfg = config.workspace.repos?.[e.repo];
-      for (const note of await copyIntoWorktree(e.repoPath, e.path, repoCfg?.copy ?? [])) log?.(`worktree ${e.repo}: ${note}`);
-      const install = installCommand(e.path, repoCfg?.install);
-      if (install !== null) {
-        const ran = bg.setupChain.then(() => (bg.stopped ? undefined : runShellGroup(`cd ${shq(e.path)} || exit 1\n${install}`, setupTimeoutMs, bg.groups)));
-        bg.setupChain = ran.catch(() => {});
-        const r = await ran;
-        if (!r) throw new Error("the daemon is stopping");
-        if (r.exitCode !== 0 || r.timedOut) {
-          const tail = r.stderr.trim().split("\n").slice(-10).join("\n");
-          const why = bg.stopped ? "the daemon stopped" : r.timedOut ? `timed out after ${Math.round(setupTimeoutMs / 1000)}s` : `exit ${r.exitCode}${tail ? `: ${tail}` : ""}`;
-          throw new Error(`install for ${e.repo} failed (${why})`);
-        }
-      }
+      await builtin();
+      await markReady();
       return;
     }
     const values: Record<string, string> = { root, task: e.branch.replace(/^wip\//, ""), repo: e.repo, src: e.source, path: e.path };
@@ -490,6 +519,7 @@ async function addRepoWorktree(e: RepoWorktreeEffect, root: string, config: Conf
       if (r.pid) killGroup(r.pid);
       throw new Error(`worktree setup for ${e.repo} did not produce ${e.path} on ${e.branch}`);
     }
+    await markReady();
   } catch (err) {
     if (!wasRegistered && (await registered())) {
       const removed = await git(["worktree", "remove", "--force", e.path]);

@@ -197,6 +197,20 @@ function* excludeInCommon(c: Ctx, wt: string, skill: boolean, root: string): Ste
   writeFileSync(info, current);
 }
 
+const COPIED_MARK = "# agt: files copied into worktrees";
+
+/** Adds anchored paths of copied files to the repo's worktree excludes file (they stay when it is regenerated). */
+export function addCopiedExcludes(root: string, repoName: string, add: string[]): void {
+  const file = join(root, ".agentthread", "worktree-excludes", repoName);
+  mkdirSync(dirname(file), { recursive: true });
+  const old = existsSync(file) ? lines(readFileSync(file, "utf8")) : [];
+  while (old.length && old[old.length - 1] === "") old.pop();
+  const has = new Set(old);
+  const fresh = add.filter((l) => !has.has(l));
+  if (!fresh.length) return;
+  writeFileSync(file, [...old, ...(has.has(COPIED_MARK) ? [] : [COPIED_MARK]), ...fresh].join("\n") + "\n");
+}
+
 /**
  * Earlier versions kept one shared excludes file at `<root>/.agentthread/worktree-excludes`, where the per-repo
  * folder now goes: the worktrees of `repo` that still point at it are moved over to `file`, then it is removed.
@@ -232,7 +246,10 @@ function* excludeInWorktree(c: Ctx, root: string, repo: string, repoName: string
   yield* migrateSharedExcludes(c, repo, shared, file);
   const kept = lines((yield* effectiveExcludes(c, repo, [file, shared]))).filter((l) => !EXCLUDE_LINES.includes(l) && !SKILL_EXCLUDES.includes(l));
   while (kept.length && kept[kept.length - 1] === "") kept.pop();
-  const text = [...kept, ...excludeLines(skill)].join("\n") + "\n";
+  // The paths of files copied into worktrees (their own section) survive the file being regenerated.
+  const old = existsSync(file) ? lines(readFileSync(file, "utf8")) : [];
+  const copied = old.includes(COPIED_MARK) ? old.slice(old.indexOf(COPIED_MARK) + 1).filter(Boolean) : [];
+  const text = [...kept, ...excludeLines(skill), ...(copied.length ? [COPIED_MARK, ...copied] : [])].join("\n") + "\n";
   mkdirSync(dirname(file), { recursive: true });
   if (!existsSync(file) || readFileSync(file, "utf8") !== text) writeFileSync(file, text);
 

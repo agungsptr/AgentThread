@@ -26,10 +26,11 @@ async function realWithTail(p: string): Promise<string> {
 /**
  * Copies the listed files from the main checkout into a new worktree (async, daemon-safe). A source must resolve inside
  * the main checkout and its destination inside the worktree (a symlink leading out is refused); the file mode is kept;
- * an existing destination is never overwritten; a missing source is skipped. Returns one note per entry.
+ * an existing destination is never overwritten; a missing source is skipped. Returns one note per entry and the entries it copied.
  */
-export async function copyIntoWorktree(from: string, to: string, files: string[]): Promise<string[]> {
+export async function copyIntoWorktree(from: string, to: string, files: string[]): Promise<{ notes: string[]; copied: string[] }> {
   const notes: string[] = [];
+  const copied: string[] = [];
   const realFrom = await realpath(from);
   const realTo = await realpath(to);
   for (const f of files) {
@@ -69,9 +70,20 @@ export async function copyIntoWorktree(from: string, to: string, files: string[]
       await copyFile(realSrc, dst, constants.COPYFILE_EXCL);
       await chmod(dst, st.mode & 0o7777);
       notes.push(`copy ${f}: copied`);
+      copied.push(relative(to, dst).split(sep).join("/"));
     } catch (e) {
       notes.push(`copy ${f}: failed (${e instanceof Error ? e.message : String(e)})`);
     }
   }
-  return notes;
+  return { notes, copied };
 }
+
+/** An anchored gitignore pattern for a path relative to the worktree root. */
+export const anchoredExclude = (rel: string): string => `/${rel.replace(/^[!#]|[\\*?[\] ]/g, (c) => `\\${c}`)}`;
+
+/** Credential-looking text removed from a log excerpt. */
+export const redactSecrets = (s: string): string =>
+  s
+    .replace(/(:\/\/)[^\s/@]*@/g, "$1***@")
+    .replace(/(_authToken\s*=\s*)\S+/gi, "$1***")
+    .replace(/\b(token|password|passwd|secret|api[_-]?key)(\s*[=:]\s*)[^\s&"']+/gi, "$1$2***");

@@ -329,4 +329,33 @@ describe("the built-in copy and install step", () => {
     expect(existsSync(join(s.path, ".env"))).toBe(false);
     expect(existsSync(join(s.path, "../installed.log"))).toBe(false);
   });
+
+  test("copied files are git-ignored in the worktree", async () => {
+    const s = setup(cfg({ copy: [".env", "e2e/.env.local"], install: "" }));
+    writeFileSync(join(s.api, ".env"), "A=1\n");
+    mkdirSync(join(s.api, "e2e"));
+    writeFileSync(join(s.api, "e2e/.env.local"), "B=2\n");
+    expect((await s.run(s.effect)).ok).toBe(true);
+    expect(existsSync(join(s.path, ".env"))).toBe(true);
+    expect(git(s.path, "status", "--porcelain", "--", ".env", "e2e").out).toBe("");
+  });
+
+  test("an adopted worktree without the ready marker runs copy and install; with it, they are skipped", async () => {
+    const s = setup(cfg({ copy: [".env"], install: "echo run >> ../adopt.log" }));
+    writeFileSync(join(s.api, ".env"), "A=1\n");
+    await addWorktreeFromAsync(s.api, "wip/kyc-1", s.path, "main");
+    expect((await s.run(s.effect)).ok).toBe(true);
+    expect(readFileSync(join(s.path, ".env"), "utf8")).toBe("A=1\n");
+    expect(readFileSync(join(s.path, "../adopt.log"), "utf8")).toBe("run\n");
+    expect((await s.run(s.effect)).ok).toBe(true);
+    expect(readFileSync(join(s.path, "../adopt.log"), "utf8")).toBe("run\n");
+  });
+
+  test("credentials are redacted from an install failure", async () => {
+    const s = setup(cfg({ install: "echo 'GET https://bob:hunter2@reg.example/x' >&2; echo '_authToken=abc123' >&2; echo 'token=t0k password=pw1' >&2; exit 1" }));
+    const r = await s.run(s.effect);
+    expect(r.ok).toBe(false);
+    for (const secret of ["hunter2", "abc123", "t0k", "pw1"]) expect(r.error).not.toContain(secret);
+    expect(r.error).toContain("://***@reg.example");
+  });
 });
