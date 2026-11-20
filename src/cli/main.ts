@@ -159,7 +159,7 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
         return 0;
       }
       if (sub === "apply") {
-        const { values, positionals } = parse(rest, { "dry-run": { type: "boolean" } });
+        const { values, positionals } = parse(rest, { "dry-run": { type: "boolean" }, "no-restart": { type: "boolean" } });
         if (positionals.length !== 1) throw new UsageError("config apply needs <file|->");
         const cfgRoot = findRoot(cwd, env);
         const src = positionals[0]!;
@@ -185,7 +185,18 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
             console.error(`saved .agentthread/config.yaml, but the refresh failed: ${res.refreshError}`);
             return 1;
           }
-          if (res.hashChanged && (await isAlive(paths(cfgRoot).socket))) console.log("config changed: restart the daemon with agt start in the main tab to apply it");
+          if (res.hashChanged && (await isAlive(paths(cfgRoot).socket))) {
+            if (values["no-restart"]) console.log("config changed: restart the daemon with agt start in the main tab to apply it");
+            else {
+              try {
+                await restartDaemon(cfgRoot, env);
+                console.log("restarted the daemon to apply the new config");
+              } catch (e) {
+                console.error(`saved .agentthread/config.yaml, but restarting the daemon failed: ${e instanceof Error ? e.message : String(e)}`);
+                return 1;
+              }
+            }
+          }
         }
         return 0;
       }
@@ -544,6 +555,17 @@ async function stopDaemon(socket: string): Promise<void> {
   await request(socket, { op: "shutdown" });
   for (let i = 0; i < 50 && (await isAlive(socket)); i++) await Bun.sleep(100);
   if (await isAlive(socket)) throw new Error("daemon did not stop");
+}
+
+/**
+ * Stops the running daemon and starts it again from the project root. Used by `config apply`, which may run in an
+ * agent pane: the daemon must not inherit the pane's AGT_* identity (its `daemon run` would be refused as an agent).
+ */
+async function restartDaemon(root: string, env: Env): Promise<void> {
+  await stopDaemon(paths(root).socket);
+  const clean: Env = { ...env };
+  for (const k of ["AGT_THREAD", "AGT_ROLE", "AGT_SESSION", "AGT_AGENT", "AGT_AGENT_PROCESS", "AGT_TICKET", "AGT_TASK"]) delete clean[k];
+  await ensureDaemon(root, clean);
 }
 
 async function start(root: string, env: Env, argv: string[]): Promise<number> {

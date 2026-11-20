@@ -179,3 +179,93 @@ test("config apply - with a terminal stdin is a usage error, not a hang", () => 
   const r = Bun.spawnSync(["script", "-q", "/dev/null", process.execPath, BIN, "config", "apply", "-"], { cwd: root, env: envOf(root), stdout: "pipe", stderr: "pipe", timeout: 15000 });
   expect(r.stdout.toString() + r.stderr.toString()).toContain("config apply - reads the config from stdin");
 });
+
+// config apply with a live daemon: a real daemon in a temp repo, always stopped.
+const TIER_CFG = "agents:\n  complexity:\n    tiers:\n      small: { agent: claude-code }\n";
+const daemonPid = (root: string) => /pid (\d+)/.exec(agt(root, ["daemon", "status"]).out)?.[1];
+const withDaemon = async (body: (root: string) => void | Promise<void>) => {
+  const root = tempRepo();
+  initProject(root, "demo");
+  try {
+    await body(root);
+  } finally {
+    agt(root, ["daemon", "stop"]);
+  }
+};
+const agtEnv = (root: string, args: string[], stdin: string, env: Record<string, string>) => {
+  const r = Bun.spawnSync([process.execPath, BIN, ...args], {
+    cwd: root,
+    env: { ...envOf(root), ...env },
+    stdin: new TextEncoder().encode(stdin),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return { code: r.exitCode, out: r.stdout.toString().trim(), err: r.stderr.toString().trim() };
+};
+const newTier = (root: string) => agt(root, ["thread", "new", "Fix", "--type", "bug", "--tier", "small", "--reason", "tiny", "--now"]);
+
+test("config apply restarts a live daemon so the new config takes effect", () =>
+  withDaemon((root) => {
+    expect(agt(root, ["daemon", "start"]).out).toBe("daemon started");
+    const before = daemonPid(root);
+    const r = agt(root, ["config", "apply", "-"], TIER_CFG);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("restarted the daemon to apply the new config");
+    expect(r.out).not.toContain("restart the daemon with agt start");
+    const after = daemonPid(root);
+    expect(after).toBeDefined();
+    expect(after).not.toBe(before);
+    expect(JSON.parse(newTier(root).out)).toMatchObject({ tier: "small" });
+  }), 30_000);
+
+test("config apply --no-restart keeps the daemon and prints the note", () =>
+  withDaemon((root) => {
+    agt(root, ["daemon", "start"]);
+    const before = daemonPid(root);
+    const r = agt(root, ["config", "apply", "-", "--no-restart"], TIER_CFG);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("config changed: restart the daemon with agt start in the main tab to apply it");
+    expect(daemonPid(root)).toBe(before);
+  }), 30_000);
+
+test("config apply with no daemon running does not start one", () =>
+  withDaemon((root) => {
+    const r = agt(root, ["config", "apply", "-"], TIER_CFG);
+    expect(r.code).toBe(0);
+    expect(r.out).not.toContain("restart");
+    expect(agt(root, ["daemon", "status"]).out).not.toMatch(/pid \d+/);
+  }), 30_000);
+
+test("config apply --dry-run never restarts the daemon", () =>
+  withDaemon((root) => {
+    agt(root, ["daemon", "start"]);
+    const before = daemonPid(root);
+    const r = agt(root, ["config", "apply", "-", "--dry-run"], TIER_CFG);
+    expect(r.code).toBe(0);
+    expect(r.out).not.toContain("restart");
+    expect(daemonPid(root)).toBe(before);
+  }), 30_000);
+
+test("config apply with an unchanged config does not restart", () =>
+  withDaemon((root) => {
+    agt(root, ["config", "apply", "-"], TIER_CFG);
+    agt(root, ["daemon", "start"]);
+    const before = daemonPid(root);
+    const r = agt(root, ["config", "apply", "-"], TIER_CFG);
+    expect(r.code).toBe(0);
+    expect(r.out).not.toContain("restart");
+    expect(daemonPid(root)).toBe(before);
+  }), 30_000);
+
+test("config apply from an agent pane restarts the daemon (and the new daemon is not an agent)", () =>
+  withDaemon((root) => {
+    agt(root, ["daemon", "start"]);
+    const before = daemonPid(root);
+    const pane = { AGT_ROLE: "worker", AGT_THREAD: "t1", AGT_AGENT_PROCESS: "1" };
+    const r = agtEnv(root, ["config", "apply", "-"], TIER_CFG, pane);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("restarted the daemon to apply the new config");
+    const after = daemonPid(root);
+    expect(after).toBeDefined();
+    expect(after).not.toBe(before);
+  }), 30_000);
