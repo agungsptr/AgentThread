@@ -64,10 +64,27 @@ export function stackPrefill(targets: string[]): { restart?: string; status?: st
   return { ...(restart ? { restart: `make ${restart} TASK={task}` } : {}), ...(status ? { status: `make ${status}` } : {}) };
 }
 
-/** The install command for a repo from its lockfile; null when it has no package.json. `install` overrides it ("" disables). */
+/** The install command for a repo, chosen by its lockfile; null when it has no package.json, or no lockfile and no dependencies. `install` overrides it ("" disables). */
 export function installCommand(repoPath: string, install?: string): string | null {
   if (install !== undefined) return install === "" ? null : install;
-  if (!existsSync(join(repoPath, "package.json"))) return null;
-  const pm = packageManager(repoPath);
-  return pm === "bun" ? "bun install" : pm === "npm" ? "npm ci" : `${pm} install --frozen-lockfile`;
+  const pkgPath = join(repoPath, "package.json");
+  if (!existsSync(pkgPath)) return null;
+  const has = (f: string) => existsSync(join(repoPath, f));
+  if (has("bun.lockb") || has("bun.lock")) return "bun install";
+  if (has("yarn.lock")) return "yarn install --frozen-lockfile";
+  if (has("pnpm-lock.yaml")) return "pnpm install --frozen-lockfile";
+  if (has("package-lock.json") || has("npm-shrinkwrap.json")) return "npm ci";
+  let pkg: Record<string, unknown> = {};
+  try {
+    const j: unknown = JSON.parse(readFileSync(pkgPath, "utf8"));
+    if (j && typeof j === "object") pkg = j as Record<string, unknown>;
+  } catch {
+    // unreadable package.json: let npm report it
+    return "npm install";
+  }
+  const hasDeps = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"].some((k) => {
+    const d = pkg[k];
+    return !!d && typeof d === "object" && Object.keys(d).length > 0;
+  });
+  return hasDeps ? "npm install" : null;
 }

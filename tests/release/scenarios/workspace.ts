@@ -261,13 +261,24 @@ async function briefWith(file: string, want: RegExp[], timeoutMs: number): Promi
   }
 }
 
+/** The path of a worktree.added event; throws the failure reason of a worktree.failed one. */
+export function worktreeResult(e: EventOf<"worktree.added"> | EventOf<"worktree.failed">): string {
+  if (e.type === "worktree.failed") throw new Error(`worktree for ${e.payload.repo} failed: ${e.payload.reason}`);
+  return e.payload.path;
+}
+
+/** Waits for the repo's worktree.added or worktree.failed; a failure fails the row at once with its reason. */
+async function waitWorktree(h: H, thread: string, repo: string, ms: number): Promise<string> {
+  return worktreeResult(await h.waitFor(["worktree.added", "worktree.failed"] as const, (e) => e.thread === thread && e.payload.repo === repo, ms, `worktree for ${repo}`));
+}
+
 /** No model calls: the user does what the coordinator would (thread with a task name, a worktree per repo). */
 async function smokeWorktrees(h: H): Promise<void> {
   const task = "kyc-1";
   // A proposed tier that waits an hour: the thread gets no tab and no coordinator, so nothing calls a model.
   const thread = threadIdOf(await h.agtOk(["thread", "new", "KYC smoke", "--type", "feature", "--goal", "workspace worktrees smoke", "--task", task, "--tier", "low", "--reason", "smoke row: no coordinator"]));
   for (const repo of REPOS) await h.agtOk(["worktree", "add", thread, repo]);
-  for (const repo of REPOS) await h.waitFor("worktree.added", (e) => e.thread === thread && e.payload.repo === repo, 120_000, `worktree for ${repo}`);
+  for (const repo of REPOS) await waitWorktree(h, thread, repo, 120_000);
 
   const all = await h.events();
   const created = all.find((e): e is EventOf<"thread.created"> => e.type === "thread.created" && e.thread === thread)!;
@@ -378,7 +389,7 @@ async function stackRunner(h: H): Promise<void> {
   try {
     const thread = threadIdOf(await h.agtOk(["thread", "new", "Stack runner", "--type", "feature", "--goal", "stack runner row", "--task", task, "--tier", "low", "--reason", "stack row: no coordinator"]));
     for (const repo of REPOS) await h.agtOk(["worktree", "add", thread, repo]);
-    for (const repo of REPOS) await h.waitFor("worktree.added", (e) => e.thread === thread && e.payload.repo === repo, 180_000, `worktree for ${repo}`);
+    for (const repo of REPOS) await waitWorktree(h, thread, repo, 180_000);
     for (const repo of REPOS) {
       const wt = join(h.root, ".worktrees", task, repo);
       h.check(`${repo}: .env copied into the worktree`, existsSync(join(wt, ".env")) && readFileSync(join(wt, ".env"), "utf8") === `REPO=${repo}\n`);
@@ -632,7 +643,7 @@ async function edgeStageGates(h: H): Promise<void> {
   // A proposed tier that waits an hour: no tab, no coordinator.
   const thread = threadIdOf(await h.agtOk(["thread", "new", "Stage gates", "--type", "feature", "--goal", "stage gates row", "--task", task, "--tier", "low", "--reason", "stage gates row: no coordinator"]));
   await h.agtOk(["worktree", "add", thread, "api"]);
-  const wt = (await h.waitFor("worktree.added", (e) => e.thread === thread && e.payload.repo === "api", 120_000, "api worktree")).payload.path;
+  const wt = await waitWorktree(h, thread, "api", 120_000);
   const all = await h.events();
   const s8 = latestStage(all, thread, 8);
   h.check("stage 8 is open (a browser URL is configured)", !s8, JSON.stringify(s8 ?? null));
@@ -750,7 +761,7 @@ async function tabShell(h: H): Promise<void> {
   const task = "tabshell";
   const thread = await newTaskThread(h, "Tab shell", task, TAB_SHELL_GOAL);
   await h.agtOk(["worktree", "add", thread, "api"]);
-  const wt = (await h.waitFor("worktree.added", (e) => e.thread === thread && e.payload.repo === "api", 120_000, "api worktree")).payload.path;
+  const wt = await waitWorktree(h, thread, "api", 120_000);
   const attached = await h.waitFor("session.attached", (e, all) => sessionsOf(all, thread, "coordinator").some((c) => c.payload.session === e.payload.session), 240_000, "the coordinator attached");
   const created = (await h.events()).find((e): e is EventOf<"thread.created"> => e.type === "thread.created" && e.thread === thread)!;
   const dir = created.payload.dir ?? join(h.root, ".worktrees", task);

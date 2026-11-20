@@ -22,6 +22,7 @@ import {
   stageNaByAgt,
   WS_ASK_MAIN,
   WS_TASK,
+  worktreeResult,
 } from "../release/scenarios/workspace.ts";
 
 const ids = () => allScenarios().map((s) => s.id);
@@ -319,4 +320,11 @@ test("stack status helpers", () => {
   expect(inTaskWorktree("/r", "t", "api", "/r/.worktrees/t/api/sub")).toBe(true);
   expect(inTaskWorktree("/r", "t", "api", "api")).toBe(false);
   expect(inTaskWorktree("/r", "t", "api", null)).toBe(false);
+});
+
+test("worktreeResult returns the path of an added worktree and throws the reason of a failed one", () => {
+  const added = { seq: 1, type: "worktree.added", thread: "t", payload: { repo: "api", path: "/w/api" } } as unknown as Parameters<typeof worktreeResult>[0];
+  const failed = { seq: 2, type: "worktree.failed", thread: "t", payload: { repo: "web", reason: "install for web failed (exit 1)" } } as unknown as Parameters<typeof worktreeResult>[0];
+  expect(worktreeResult(added)).toBe("/w/api");
+  expect(() => worktreeResult(failed)).toThrow("worktree for web failed: install for web failed (exit 1)");
 });
