@@ -117,7 +117,7 @@ test("thread, ticket and log commands", () => {
   expect(agt(["ticket", "accept", "001/T1"], { env: COORD })).toMatchObject({ code: 1, err: "agt: ticket T1 is done, not in review" });
   expect(agt(["log", "001", "all", "good"], { env: WORKER }).out).toBe("ok");
   const logs = agt(["logs"]).out.split("\n");
-  expect(logs.at(-1)).toMatch(/^\d+ \S+ log\.appended 001 worker:w1$/);
+  expect(logs.at(-1)).toMatch(/^\d\d:\d\d:\d\d 001 worker log\.appended all good$/);
 });
 
 test("permission errors surface from the daemon", () => {
@@ -149,8 +149,49 @@ test("finds the project from a thread directory subdirectory without AGT_ROOT", 
   expect(agt(["log", "001", "from worktree"], { cwd: sub, root: false, env: WORKER }).out).toBe("ok");
 });
 
-test("unknown commands print usage", () => {
-  expect(agt(["frobnicate"]).code).toBe(2);
+test("unknown commands print the error and usage to stderr, exit 2", () => {
+  const r = agt(["frobnicate"]);
+  expect(r.code).toBe(2);
+  expect(r.out).toBe("");
+  expect(r.err).toContain("agt: unknown command 'frobnicate'");
+  expect(r.err).toContain("usage: agt <command>");
+});
+
+test("agt, --help, -h and help print the full usage to stdout, exit 0", () => {
+  for (const args of [[], ["--help"], ["-h"], ["help"]]) {
+    const r = agt(args);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("usage: agt <command>");
+    expect(r.out).toContain("stack restart");
+    expect(r.err).toBe("");
+  }
+});
+
+test("agt help <cmd> and agt <cmd> --help print only that command's lines and never run it", () => {
+  const thread = agt(["thread", "new", "--help"]);
+  expect(thread.code).toBe(0);
+  expect(thread.out).toStartWith("thread new <title...>");
+  expect(thread.out).toContain("--tier <name>");
+  expect(thread.out).not.toContain("thread choose");
+  expect(thread.out).not.toContain("usage: agt");
+  expect(agt(["help", "thread", "new"]).out).toBe(thread.out);
+  expect(agt(["help", "ticket", "files"]).out).toStartWith("ticket files <thread>/<ticket>");
+  expect(agt(["ticket", "files", "-h"]).out.split("\n")).toHaveLength(1);
+  expect(agt(["stack", "restart", "--help"]).out).toStartWith("stack restart");
+  expect(agt(["config", "apply", "-h"]).out).toStartWith("config apply <file|->");
+  expect(agt(["config", "apply", "-h"]).out).not.toContain("config show");
+  expect(agt(["ticket", "claim", "--help"]).out).toStartWith("ticket claim|reopen");
+  expect(agt(["tell", "--help"]).out).toContain("tell <thread|main>");
+  // nothing ran: no thread was created, no daemon needed
+  expect(agt(["thread", "new", "X", "--type", "bug", "--help"]).out).toStartWith("thread new");
+  expect(agt(["thread", "status", "001"]).code).not.toBe(0);
+});
+
+test("help for a command with no usage line prints the full usage", () => {
+  const r = agt(["help", "frobnicate"]);
+  expect(r.code).toBe(0);
+  expect(r.out).toContain("usage: agt <command>");
+  expect(agt(["frobnicate", "--help"]).out).toContain("usage: agt <command>");
 });
 
 test("agt init on a non-TTY prints the setup hint and succeeds", () => {

@@ -60,6 +60,8 @@ test("start → tabs per thread → manual close recovered → done closes tab",
   expect(tabOf("001-oauth-login")).toBe("w1:t2");
   expect(tabOf("002-fix-session-race")).toBe("w1:t3");
 
+  // a live logger (stand-in pid) keeps the next start from re-running its command
+  writeFileSync(join(root, ".agentthread", "logger.pid"), String(process.pid));
   // The user closes 002's tab by hand; the next start reopens exactly that one.
   fake.update((s) => ({ tabs: s.tabs.filter((t) => t !== "w1:t3") }));
   expect(agt(["start", "--no-manager"]).split("\n")).toEqual([

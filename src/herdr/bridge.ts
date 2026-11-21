@@ -192,6 +192,16 @@ export class HerdrCli implements HerdrBridge, PaneScreen {
     }
   }
 
+  paneExists(pane: string): boolean {
+    try {
+      this.call(["pane", "get", pane]);
+      return true;
+    } catch (e) {
+      if (e instanceof HerdrError && (e.code === "pane_not_found" || e.code === "not_found")) return false;
+      throw e;
+    }
+  }
+
   splitPane(o: { pane: string; direction: "right" | "down"; cwd: string; env: Record<string, string> }): string {
     const args = ["pane", "split", o.pane, "--direction", o.direction, "--cwd", o.cwd, "--no-focus", ...envArgs(o.env)];
     return field(args, this.call(args), "pane", "pane_id");

@@ -22,7 +22,8 @@ import { paths } from "../project/paths.ts";
 import { applyConfig, redactEnv, showConfig, workspaceWarnings } from "../project/config-apply.ts";
 import { findRoot } from "../project/root.ts";
 import { project, type State } from "../state/projection.ts";
-import { USAGE } from "./usage.ts";
+import { USAGE, helpRequest } from "./usage.ts";
+import { runLogs } from "./logs.ts";
 import { guide, isLegacyThread } from "../agents/guide.ts";
 import { formatStatus, restartStack, stackLogs, stackStatus, startStack, stopStack } from "../stack/runner.ts";
 import { writeStackMakefiles } from "../stack/makefile.ts";
@@ -56,6 +57,11 @@ function asker(env: Env, cwd: string): Asker | undefined {
 const USER_START_HINT = "agt daemon is started from the project's main tab: run agt start there.";
 
 export async function main(argv: string[], env: Env = process.env, cwd: string = process.cwd()): Promise<number> {
+  const help = helpRequest(argv);
+  if (help) {
+    console.log(help.join("\n"));
+    return 0;
+  }
   try {
     return await run(argv, env, cwd);
   } catch (e) {
@@ -324,8 +330,8 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
     case "event":
       return hookEvent(sub, env, cwd);
     case "logs": {
-      const { values } = parse(argv.slice(1), { follow: { type: "boolean", short: "f" } });
-      return logs(findRoot(cwd, env), Boolean(values.follow));
+      const { values } = parse(argv.slice(1), { follow: { type: "boolean", short: "f" }, all: { type: "boolean" } });
+      return logs(findRoot(cwd, env), Boolean(values.follow), Boolean(values.all));
     }
     default:
       throw new UsageError(group ? `unknown command '${group}'` : "");
@@ -597,6 +603,45 @@ async function restartDaemon(root: string, env: Env): Promise<void> {
   await ensureDaemon(root, clean);
 }
 
+const loggerCommand = () => `${shellQuote(process.execPath)} ${shellQuote(Bun.main)} logs -f`;
+
+const pidAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
+};
+
+const loggerPidFile = (root: string) => join(paths(root).dir, "logger.pid");
+
+/** `agt logs -f` writes its pid to .agentthread/logger.pid; the logger is running while that process lives. */
+function loggerRunning(root: string): boolean {
+  try {
+    const pid = Number(readFileSync(loggerPidFile(root), "utf8").trim());
+    return Number.isInteger(pid) && pid > 0 && pidAlive(pid);
+  } catch {
+    return false;
+  }
+}
+
+/** On an already-set-up layout: recreate a missing logger pane, or re-run `agt logs -f` in one whose process ended. */
+async function ensureLogger(root: string, herdr: HerdrCli, layout: Layout, env: Env): Promise<void> {
+  const socket = paths(root).socket;
+  if (herdr.paneExists(layout.loggerPane)) {
+    if (loggerRunning(root)) return;
+    herdr.runInPane(layout.loggerPane, loggerCommand());
+    console.log(`logger pane ${layout.loggerPane} was not running; restarted it`);
+    return;
+  }
+  const loggerPane = herdr.splitPane({ pane: layout.managerPane, direction: "right", cwd: root, env: { AGT_ROOT: root } });
+  herdr.renamePane(loggerPane, "logger");
+  herdr.runInPane(loggerPane, loggerCommand());
+  await commandOrThrow(socket, { cmd: "layout.register", ...layout, loggerPane, herdrBin: herdr.bin, herdrSocket: env.HERDR_SOCKET_PATH ?? layout.herdrSocket });
+  console.log(`logger pane was gone; recreated it as ${loggerPane}`);
+}
+
 async function start(root: string, env: Env, argv: string[]): Promise<number> {
   const { values } = parse(argv, { "no-manager": { type: "boolean" } });
   const workspace = env.HERDR_WORKSPACE_ID;
@@ -631,12 +676,13 @@ async function start(root: string, env: Env, argv: string[]): Promise<number> {
   const layout = current.result as Layout | null;
   if (layout && herdr.tabExists(layout.mainTab)) {
     console.log(`layout already set up (main tab ${layout.mainTab})`);
+    await ensureLogger(root, herdr, layout, env);
   } else {
     herdr.renameTab(mainTab, config.herdr.main_tab_label);
     herdr.renamePane(managerPane, "main manager");
     const loggerPane = herdr.splitPane({ pane: managerPane, direction: "right", cwd: root, env: { AGT_ROOT: root } });
     herdr.renamePane(loggerPane, "logger");
-    herdr.runInPane(loggerPane, `${shellQuote(process.execPath)} ${shellQuote(Bun.main)} logs -f`);
+    herdr.runInPane(loggerPane, loggerCommand());
     await commandOrThrow(socket, {
       cmd: "layout.register",
       workspace,
@@ -788,18 +834,23 @@ async function daemon(sub: string | undefined, root: string, env: Env): Promise<
   }
 }
 
-async function logs(root: string, follow: boolean): Promise<number> {
+async function logs(root: string, follow: boolean, all: boolean): Promise<number> {
   const socket = paths(root).socket;
-  let seq = 0;
-  while (true) {
-    const res = await request(socket, { op: "events.since", seq });
-    if (!res.ok) throw new Error(res.error);
-    for (const e of res.result as StoredEvent[]) {
-      const who = e.actor.session ? `${e.actor.role}:${e.actor.session}` : e.actor.role;
-      console.log(`${e.seq} ${e.ts} ${e.type} ${e.thread ?? "-"} ${who}`);
-      seq = e.seq;
-    }
-    if (!follow) return 0;
-    await Bun.sleep(500);
+  if (follow) {
+    try {
+      writeFileSync(loggerPidFile(root), String(process.pid));
+    } catch {}
   }
+  return runLogs(
+    {
+      async fetch(seq) {
+        const res = await request(socket, { op: "events.since", seq });
+        if (!res.ok) throw new Error(res.error);
+        return res.result as StoredEvent[];
+      },
+      print: (line) => console.log(line),
+      sleep: (ms) => Bun.sleep(ms),
+    },
+    { follow, all },
+  );
 }
