@@ -50,6 +50,17 @@ bun install
 bun link        # puts `agt` on your PATH
 ```
 
+## Set up with Claude Code (optional)
+
+The repository ships a Claude Code plugin in `plugins/agentthread`:
+
+```
+/plugin marketplace add agungsptr/AgentThread
+/plugin install agentthread@agentthread
+```
+
+Then, in a project folder, run `/agt-setup`. It installs agt if needed, analyses the project and writes the config with one approval.
+
 ## Supported agents
 
 | Agent | `agent:` value | Notes |
