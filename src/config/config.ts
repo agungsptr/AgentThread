@@ -86,6 +86,11 @@ const agentsSchema = z
 
 export type RoleAgent = { agent: z.infer<typeof agent>; model?: string; effort?: string };
 
+/** A squash-branch prefix; `wip` and `thread` are taken by the guard branches (wip/<task>, thread/<id>). */
+const branchPrefix = z
+  .string()
+  .regex(/^[a-z][a-z0-9-]*$/, "branch prefix must match /^[a-z][a-z0-9-]*$/")
+  .refine((p) => p !== "wip" && p !== "thread", "branch prefix cannot be wip or thread (they collide with the guard branches)");
 const SERVICE_NAME = /^[a-z][a-z0-9-]*$/;
 const HEALTH = /^(https?:\/\/\S+|tcp:\d+)$/;
 
@@ -241,9 +246,9 @@ export const ConfigSchema = z
         /** The squash branch prefix per thread type (defaults: feature feat, bug fix, chore chore): `<prefix>/<task>`. */
         branch_prefix: z
           .object({
-            feature: z.string().regex(/^[a-z][a-z0-9-]*$/, "branch prefix must match /^[a-z][a-z0-9-]*$/").optional(),
-            bug: z.string().regex(/^[a-z][a-z0-9-]*$/, "branch prefix must match /^[a-z][a-z0-9-]*$/").optional(),
-            chore: z.string().regex(/^[a-z][a-z0-9-]*$/, "branch prefix must match /^[a-z][a-z0-9-]*$/").optional(),
+            feature: branchPrefix.optional(),
+            bug: branchPrefix.optional(),
+            chore: branchPrefix.optional(),
           })
           .strict()
           .optional(),

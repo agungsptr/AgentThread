@@ -6,7 +6,7 @@ import { handle, type HandleResult } from "../../src/commands/handler.ts";
 import { CommandSchema } from "../../src/commands/schema.ts";
 import type { Actor, StoredEvent } from "../../src/domain/types.ts";
 import { applyEvent, emptyState, type State } from "../../src/state/projection.ts";
-import { INIT, USER, stateOf, threadCreated } from "../helpers.ts";
+import { INIT, USER, stateOf, taskThreadCreated, threadCreated } from "../helpers.ts";
 
 const COORD: Actor = { role: "coordinator", thread: "001", session: "c1" };
 const worker = (session: string, ticket?: string): Actor => ({ role: "worker", thread: "001", session, ticket });
@@ -206,6 +206,16 @@ describe("thread.status", () => {
     const s = stateOf(INIT, threadCreated("001", { status: "in_progress" }));
     const r = run(s, { cmd: "thread.status", thread: "001", status: "in_progress" }, COORD);
     expect(r).toMatchObject({ ok: true, events: [], result: { unchanged: true, message: "already in_progress" } });
+  });
+
+  test("a coordinator cannot close a task thread; main, the user and a legacy coordinator can", () => {
+    const task = () => stateOf(INIT, taskThreadCreated("001", "t1", { status: "review" }));
+    expect(errorOf(run(task(), { cmd: "thread.status", thread: "001", status: "done" }, COORD))).toBe(
+      'only main or the user close a thread: agt tell main "001: merged into <source> in <repos> (verified)"',
+    );
+    expect(errorOf(run(task(), { cmd: "thread.status", thread: "001", status: "done" }, { role: "main" }))).toBe("accepted");
+    expect(errorOf(run(task(), { cmd: "thread.status", thread: "001", status: "done" }))).toBe("accepted");
+    expect(errorOf(run(stateOf(INIT, threadCreated("001", { status: "review" })), { cmd: "thread.status", thread: "001", status: "done" }, COORD))).toBe("accepted");
   });
 
   test("illegal transition is rejected", () => {

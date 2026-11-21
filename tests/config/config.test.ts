@@ -20,6 +20,12 @@ function setup(files: { user?: string; project?: string } = {}) {
   return { root, env, p };
 }
 
+test("workflow.branch_prefix refuses wip and thread", () => {
+  expect(ConfigSchema.safeParse({ workflow: { branch_prefix: { bug: "wip" } } }).success).toBe(false);
+  expect(ConfigSchema.safeParse({ workflow: { branch_prefix: { chore: "thread" } } }).success).toBe(false);
+  expect(ConfigSchema.safeParse({ workflow: { branch_prefix: { bug: "hotfix" } } }).success).toBe(true);
+});
+
 test("agy is accepted for roles and tiers with its efforts, and rejects others", () => {
   const ok = setup({ project: "agents:\n  roles:\n    worker: { agent: agy, model: gemini-4-neon-high, effort: xhigh }\n  complexity:\n    tiers:\n      big: { agent: agy }\n" });
   expect(loadConfig(ok.root, ok.env).agents.roles.worker).toEqual({ agent: "agy", model: "gemini-4-neon-high", effort: "xhigh" });

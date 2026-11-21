@@ -1,5 +1,5 @@
 import { squashBranch } from "../domain/branches.ts";
-import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_CONFIG, type Config } from "../config/config.ts";
 import { gitTrail, type GitTrail } from "../project/gittrail.ts";
@@ -40,7 +40,8 @@ export function writeAll(
       mkdirSync(join(dir, "tickets"), { recursive: true });
       for (const k of t.tickets) if (k.files) writeAtomic(join(dir, "tickets", `${k.id}.files`), k.files.map((f) => `${f}\n`).join(""));
       // The coordinator's commit hook reads the squash branch from this file without the daemon (so it survives a restart).
-      if (t.task !== undefined) writeAtomic(join(dir, "squash-branch"), `${squashBranch(t.type, t.task, config.workflow.branch_prefix)}\n`);
+      // Written once, never overwritten: an older thread keeps the branch its coordinator already made.
+      if (t.task !== undefined && !existsSync(join(dir, "squash-branch"))) writeAtomic(join(dir, "squash-branch"), `${squashBranch(t.type, t.task, config.workflow.branch_prefix)}\n`);
       // The squash gate: the coordinator's commit hook on the squash branch reads this file without the daemon.
       const s8 = t.stages[8]?.state;
       if (s8 === "done" || s8 === "na" || s8 === "skipped") writeAtomic(join(dir, "stage8"), `${s8}\n`);

@@ -74,6 +74,7 @@ export function noticeDelivery(s: Session): Extract<Effect, { kind: "notice.deli
     pane: s.pane,
     text: s.notices.join("\n"),
     count: s.notices.length,
+    texts: [...s.notices],
     ...(s.polledStart ? { unconfirmed: true as const } : {}),
     ...(s.noticeHeldCount ? { held: s.noticeHeldCount } : {}),
   };

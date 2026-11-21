@@ -852,8 +852,18 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
     }
     case "notice.delivered": {
       const s = sessionOf(state, ev.seq, ev.payload.session);
-      if (s.rotation && s.notices.slice(0, ev.payload.count).some(isHandoffRequest)) s.rotation.deliveredAt = ev.ts;
-      s.notices.splice(0, ev.payload.count);
+      const texts = ev.payload.texts;
+      if (texts) {
+        // Remove one first-equal occurrence per delivered text: a notice queued while the delivery was in flight stays.
+        if (s.rotation && texts.some(isHandoffRequest)) s.rotation.deliveredAt = ev.ts;
+        for (const x of texts) {
+          const i = s.notices.indexOf(x);
+          if (i >= 0) s.notices.splice(i, 1);
+        }
+      } else {
+        if (s.rotation && s.notices.slice(0, ev.payload.count).some(isHandoffRequest)) s.rotation.deliveredAt = ev.ts;
+        s.notices.splice(0, ev.payload.count);
+      }
       delete s.noticeHeldAt;
       endHeldStretch(s);
       if (isLive(s)) {

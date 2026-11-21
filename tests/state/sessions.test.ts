@@ -142,3 +142,26 @@ test("a first start seen by the poller and then by the agent's hook stays idle; 
   );
   expect(resumed.sessions.get(S1)!.status).toBe("active");
 });
+
+test("notice.delivered with texts removes the delivered notices, not a handoff request queued meanwhile", () => {
+  const H = "HANDOFF REQUEST: write the handoff";
+  const base: EventBody[] = [
+    INIT,
+    threadCreated("001"),
+    created(S1, "coordinator"),
+    { type: "session.attached", thread: "001", payload: { session: S1, pane: "w1:p2" } },
+    { type: "session.started", thread: "001", payload: { session: S1 } },
+    { type: "agent.idle", thread: "001", payload: { session: S1 } },
+    { type: "notice.queued", thread: "001", payload: { session: S1, text: "A" } },
+    { type: "notice.queued", thread: "001", payload: { session: S1, text: "B" } },
+    { type: "session.rotation_requested", thread: "001", payload: { session: S1, reason: "context" } },
+    { type: "notice.queued", thread: "001", payload: { session: S1, text: H } },
+    { type: "notice.delivered", thread: "001", payload: { session: S1, count: 2, texts: ["A", "B"] } },
+  ];
+  const s = stateOf(...base).sessions.get(S1)!;
+  expect(s.notices).toEqual([H]);
+  expect(s.rotation?.deliveredAt).toBeUndefined();
+  const s2 = stateOf(...base, { type: "notice.delivered", thread: "001", payload: { session: S1, count: 1, texts: [H] } }).sessions.get(S1)!;
+  expect(s2.notices).toEqual([]);
+  expect(s2.rotation?.deliveredAt).toBeDefined();
+});

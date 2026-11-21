@@ -1,6 +1,6 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { stringify } from "yaml";
@@ -620,7 +620,10 @@ const loggerPidFile = (root: string) => join(paths(root).dir, "logger.pid");
 function loggerRunning(root: string): boolean {
   try {
     const pid = Number(readFileSync(loggerPidFile(root), "utf8").trim());
-    return Number.isInteger(pid) && pid > 0 && pidAlive(pid);
+    if (!(Number.isInteger(pid) && pid > 0 && pidAlive(pid))) return false;
+    // A recycled pid belongs to some other process: the logger's command line contains `logs`.
+    const r = spawnSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8" });
+    return r.status === 0 && /\blogs\b/.test(r.stdout);
   } catch {
     return false;
   }
@@ -838,7 +841,16 @@ async function logs(root: string, follow: boolean, all: boolean): Promise<number
   const socket = paths(root).socket;
   if (follow) {
     try {
-      writeFileSync(loggerPidFile(root), String(process.pid));
+      const pf = loggerPidFile(root);
+      writeFileSync(pf, String(process.pid));
+      // Remove the file on the way out, but only while it still holds this process's pid.
+      const own = () => {
+        try {
+          if (readFileSync(pf, "utf8").trim() === String(process.pid)) rmSync(pf, { force: true });
+        } catch {}
+      };
+      process.on("exit", own);
+      for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => { own(); process.exit(0); });
     } catch {}
   }
   return runLogs(

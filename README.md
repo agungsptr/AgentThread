@@ -39,7 +39,7 @@ agt start       # run inside a Herdr pane: sets up the main tab, then opens the 
 agt setup       # re-run the per-project wizard: agent, model and effort per role, and complexity tiers
 ```
 
-`agt`, `agt --help` and `agt help` print the usage; `agt help <command>` or `agt <command> --help` (also two-word commands such as
+`agt`, `agt --help` and `agt help` print the usage (`-h`/`--help` anywhere before a `--` prints help instead of running the command; arguments after `--` never do); `agt help <command>` or `agt <command> --help` (also two-word commands such as
 `thread new` or `stack restart`) print only that command's lines and never run it.
 
 The logger pane (right of the main manager) runs `agt logs -f`: one line per event, `HH:MM:SS <thread|main> <role> <event> <summary>`

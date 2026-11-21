@@ -365,7 +365,7 @@ function hookStub(guardDir: string): string {
           SF=$(agt_thread_file squash-branch); SB=
           [ -n "$SF" ] && SB=$(head -n 1 "$SF" 2>/dev/null)
           [ -n "$SB" ] || SB="feat/\${AGT_TASK:-<task>}"
-          [ "$B" = "$SB" ] || { echo "${COORDINATOR_BRANCH_MESSAGE_PREFIX}$SB." >&2; exit 1; }
+          [ "$B" = "$SB" ] || [ "$B" = "feat/\${AGT_TASK:-<task>}" ] || { echo "${COORDINATOR_BRANCH_MESSAGE_PREFIX}$SB." >&2; exit 1; }
           [ -n "$(agt_thread_file stage8)" ] || { echo "${STAGE8_PREFIX}\${AGT_THREAD:-<thread>}${STAGE8_SUFFIX}" >&2; exit 1; } ;;`,
     "      esac ;;",
     "  esac",

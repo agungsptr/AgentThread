@@ -305,7 +305,7 @@ export function createEffectRunner(opts: {
         }
         try {
           await bridge.agentPrompt(effect.pane, effect.text);
-          return [{ type: "notice.delivered", ...(effect.thread ? { thread: effect.thread } : {}), payload: { session: effect.session, count: effect.count } }];
+          return [{ type: "notice.delivered", ...(effect.thread ? { thread: effect.thread } : {}), payload: { session: effect.session, count: effect.count, ...(effect.texts ? { texts: effect.texts } : {}) } }];
         } catch (e) {
           return held(`delivery failed: ${e instanceof Error ? e.message : String(e)}`);
         }

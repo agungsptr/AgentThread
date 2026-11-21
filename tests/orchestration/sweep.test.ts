@@ -180,7 +180,7 @@ function heldNotice(): State {
   );
   return s;
 }
-const DELIVER: Effect = { kind: "notice.deliver", session: C, thread: "001", agent: "claude-code", pane: "w1:p2", text: "Tell from main.", count: 1 };
+const DELIVER: Effect = { kind: "notice.deliver", session: C, thread: "001", agent: "claude-code", pane: "w1:p2", text: "Tell from main.", count: 1, texts: ["Tell from main."] };
 
 test("a held notice is delivered again by the sweep once 10s have passed since the attempt, until it goes", () => {
   const s = heldNotice();

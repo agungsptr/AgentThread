@@ -177,3 +177,10 @@ export async function waitWorktreeAdded(root: string): Promise<void> {
     return r.ok && (r.result as StoredEvent[]).some((e) => e.type === "worktree.added");
   }, 10_000);
 }
+
+/** A stand-in logger process: its command line contains `logs`, which is how agt recognises a running `agt logs -f`. */
+export function loggerStandIn(): number {
+  const p = Bun.spawn(["sh", "-c", "sleep 30; :", "logs"], { stdio: ["ignore", "ignore", "ignore"] });
+  process.on("exit", () => p.kill());
+  return p.pid;
+}

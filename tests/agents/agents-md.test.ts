@@ -559,10 +559,15 @@ describe("branch-aware commit guard and no-push hook", () => {
     test("a bug thread: the coordinator commits on fix/<task> and is refused on feat/<task>", () => {
       const ok = setup("fix/t1", "fix/t1");
       expect(commit(ok.wt, CENV(ok.root)).exitCode).toBe(0);
-      const bad = setup("feat/t1", "fix/t1");
+      const bad = setup("chore/t1", "fix/t1");
       const r = commit(bad.wt, CENV(bad.root));
       expect(r.exitCode).not.toBe(0);
       expect(err(r)).toContain("AgentThread: the coordinator commits only the squash on fix/t1.");
+    });
+
+    test("an older bug thread whose coordinator already made feat/<task> is still allowed", () => {
+      const old = setup("feat/t1", "fix/t1");
+      expect(commit(old.wt, CENV(old.root)).exitCode).toBe(0);
     });
 
     test("a thread without the file (older agt) keeps feat/<task>; fix/<task> is refused there", () => {
@@ -578,8 +583,12 @@ describe("branch-aware commit guard and no-push hook", () => {
       writeAll(root, state, undefined, () => undefined);
       const file = join(root, ".agentthread", "threads", "001-thread-001", "squash-branch");
       expect(readFileSync(file, "utf8")).toBe("fix/t1\n");
+      // Written once: a later config change never rewrites it.
       writeAll(root, state, ConfigSchema.parse({ workflow: { branch_prefix: { bug: "hotfix" } } }), () => undefined);
-      expect(readFileSync(file, "utf8")).toBe("hotfix/t1\n");
+      expect(readFileSync(file, "utf8")).toBe("fix/t1\n");
+      const fresh = tempRepo();
+      writeAll(fresh, state, ConfigSchema.parse({ workflow: { branch_prefix: { bug: "hotfix" } } }), () => undefined);
+      expect(readFileSync(join(fresh, ".agentthread", "threads", "001-thread-001", "squash-branch"), "utf8")).toBe("hotfix/t1\n");
     });
   });
 

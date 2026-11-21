@@ -136,7 +136,7 @@ export type EventBody =
   | { type: "session.failed"; thread?: string; payload: { session: string; reason: string } }
   | { type: "worker.queued"; thread: string; payload: { ticket: string; agent?: AgentKind } }
   | { type: "notice.queued"; thread?: string; payload: { session: string; text: string } }
-  | { type: "notice.delivered"; thread?: string; payload: { session: string; count: number } }
+  | { type: "notice.delivered"; thread?: string; payload: { session: string; count: number; /** The delivered notices; absent in older events (then the first `count` are removed). */ texts?: string[] } }
   /** A notice delivery that did not type (a trust dialog, an unread screen, a Herdr error): the sweep retries it. */
   | { type: "notice.held"; thread?: string; payload: { session: string; reason: string } }
   /** The sweep told the coordinator that a worker sits idle with its ticket unfinished (once per idle stretch). */

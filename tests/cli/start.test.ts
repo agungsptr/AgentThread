@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { systemPrompt } from "../../src/agents/prompts.ts";
 import { shellQuote } from "../../src/herdr/bridge.ts";
 import { initProject } from "../../src/project/init.ts";
-import { FAKE_AGENT, FAKE_HERDR, fakeHerdrState, isolatedConfigHome, tempRepo, SPAWN_TEST_ENV } from "../helpers.ts";
+import { FAKE_AGENT, FAKE_HERDR, fakeHerdrState, isolatedConfigHome, loggerStandIn, tempRepo, SPAWN_TEST_ENV } from "../helpers.ts";
 
 const BIN = join(import.meta.dir, "../../bin/agt");
 
@@ -102,7 +102,7 @@ test("a second start recreates a missing logger pane", () => {
   expect(calls).toContainEqual(["pane", "rename", "w1:p2", "logger"]);
   expect(calls).toContainEqual(["pane", "run", "w1:p2", LOGGER_CMD()]);
   // the new pane is the registered one: the next start finds it and its (stub) process
-  writeFileSync(join(root, ".agentthread", "logger.pid"), String(process.pid));
+  writeFileSync(join(root, ".agentthread", "logger.pid"), String(loggerStandIn()));
   fake.update(() => ({ calls: [] }));
   agt(["start", "--no-manager"]);
   expect(fake.read().calls.filter((c) => c[1] === "split" || c[1] === "run")).toEqual([]);
@@ -120,7 +120,7 @@ test("a second start re-runs the logger command when its process ended", () => {
 
 test("a second start leaves a running logger alone", () => {
   agt(["start", "--no-manager"]);
-  writeFileSync(join(root, ".agentthread", "logger.pid"), String(process.pid));
+  writeFileSync(join(root, ".agentthread", "logger.pid"), String(loggerStandIn()));
   fake.update(() => ({ calls: [] }));
   agt(["start", "--no-manager"]);
   expect(fake.read().calls.filter((c) => c[1] === "run" || c[1] === "split")).toEqual([]);

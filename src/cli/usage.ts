@@ -45,7 +45,7 @@ export const USAGE = `usage: agt <command>
   event started|active|idle|compacting|ended   (used by Claude Code hooks)
   guide [main|coordinator|worker|all]   how to use agt in a role (default: $AGT_ROLE, else all)
   logs [-f] [--all]   print the event log as readable lines (HH:MM:SS thread role event summary), hiding heartbeat events; -f follows and survives daemon restarts; --all shows every event
-  help [<command>]   this text, or only the lines of one command (also agt <command> --help)`;
+  help [<command>]   this text, or only the lines of one command (also agt <command> --help; -h/--help anywhere before a -- prints help)`;
 
 /** The USAGE line (with its continuation lines) of the command that starts with `prefix`. */
 export function usageLines(prefix: string): string[] {
@@ -86,10 +86,13 @@ export function helpLines(words: string[]): string[] {
 export function helpRequest(argv: string[]): string[] | undefined {
   const full = USAGE.split("\n");
   if (argv.length === 0 || (argv.length === 1 && (argv[0] === "--help" || argv[0] === "-h" || argv[0] === "help"))) return full;
+  // `--` ends the options: what follows it never asks for help.
+  const dd = argv.indexOf("--");
+  const opts = dd < 0 ? argv : argv.slice(0, dd);
   const words = (xs: string[]) => xs.filter((a) => !a.startsWith("-")).slice(0, 2);
   let target: string[] | undefined;
   if (argv[0] === "help") target = words(argv.slice(1));
-  else if (argv[0] !== "__spawn" && argv.some((a) => a === "--help" || a === "-h")) target = words(argv);
+  else if (argv[0] !== "__spawn" && opts.some((a) => a === "--help" || a === "-h")) target = words(opts);
   if (!target) return undefined;
   const lines = helpLines(target);
   return lines.length ? lines : full;

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { helpRequest } from "../../src/cli/usage.ts";
 import { isolatedConfigHome, repoName, tempRepo } from "../helpers.ts";
 
 const BIN = join(import.meta.dir, "../../bin/agt");
@@ -165,6 +166,11 @@ test("agt, --help, -h and help print the full usage to stdout, exit 0", () => {
     expect(r.out).toContain("stack restart");
     expect(r.err).toBe("");
   }
+});
+
+test("args after -- never trigger help", () => {
+  expect(helpRequest(["tell", "main", "--", "-h"])).toBeUndefined();
+  expect(helpRequest(["tell", "--help", "--", "x"])).toBeDefined();
 });
 
 test("agt help <cmd> and agt <cmd> --help print only that command's lines and never run it", () => {

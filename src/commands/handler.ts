@@ -43,7 +43,7 @@ export type Effect =
     }
   /** `unconfirmed`: only Herdr's poll says the agent started (it may list an agent at a startup dialog idle). */
   /** `agent` is the session's: only its adapter's trust dialog holds the delivery. */
-  | { kind: "notice.deliver"; session: string; thread?: string; agent: AgentKind; pane: string; text: string; count: number; unconfirmed?: true; /** Holds so far in this stretch (the session's noticeHeldCount), when any. */ held?: number }
+  | { kind: "notice.deliver"; session: string; thread?: string; agent: AgentKind; pane: string; text: string; count: number; /** Copy of the queued notices delivered (so a notice queued meanwhile is not dropped). */ texts?: string[]; unconfirmed?: true; /** Holds so far in this stretch (the session's noticeHeldCount), when any. */ held?: number }
   | { kind: "pane.close"; pane: string }
   | { kind: "session.probe"; session: string; thread?: string; pane: string };
 
@@ -293,6 +293,9 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
 
   switch (cmd.cmd) {
     case "thread.status":
+      if (cmd.status === "done" && actor.role === "coordinator" && !t.legacy) {
+        reject(`only main or the user close a thread: agt tell main "${t.id}: merged into <source> in <repos> (verified)"`);
+      }
       return threadStatus(state, t, cmd.status, cmd.reason, ctx);
     case "thread.choose": {
       const proposal = t.tierProposal ?? reject(`thread ${t.id} is not waiting for a tier`);

@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
 import { initProject } from "../../src/project/init.ts";
-import { FAKE_HERDR, fakeHerdrState, isolatedConfigHome, tempRepo, SPAWN_TEST_ENV } from "../helpers.ts";
+import { FAKE_HERDR, fakeHerdrState, isolatedConfigHome, loggerStandIn, tempRepo, SPAWN_TEST_ENV } from "../helpers.ts";
 
 const BIN = join(import.meta.dir, "../../bin/agt");
 let root: string;
@@ -61,7 +61,7 @@ test("start → tabs per thread → manual close recovered → done closes tab",
   expect(tabOf("002-fix-session-race")).toBe("w1:t3");
 
   // a live logger (stand-in pid) keeps the next start from re-running its command
-  writeFileSync(join(root, ".agentthread", "logger.pid"), String(process.pid));
+  writeFileSync(join(root, ".agentthread", "logger.pid"), String(loggerStandIn()));
   // The user closes 002's tab by hand; the next start reopens exactly that one.
   fake.update((s) => ({ tabs: s.tabs.filter((t) => t !== "w1:t3") }));
   expect(agt(["start", "--no-manager"]).split("\n")).toEqual([
