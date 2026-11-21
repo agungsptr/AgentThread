@@ -44,7 +44,7 @@ Why use it:
 The package is private (not published to npm). Install from a clone:
 
 ```sh
-git clone <this repository> agentthread
+git clone https://github.com/agungsptr/AgentThread.git agentthread
 cd agentthread
 bun install
 bun link        # puts `agt` on your PATH
