@@ -34,9 +34,9 @@ type Report = { cmd: "worktree.report"; thread: string; repo: string; ok: boolea
 function setup(config: Config, setupTimeoutMs?: number) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "agt-ws-")));
   const api = repo(join(root, "api"));
-  const dir = join(root, ".worktrees", "kyc-1");
+  const dir = join(root, ".worktrees", "pay-1");
   mkdirSync(dir, { recursive: true });
-  const thread = { id: "001", title: "KYC", slug: "kyc", task: "kyc-1", dir, worktrees: {}, legacy: false } as unknown as Thread;
+  const thread = { id: "001", title: "PAY", slug: "pay", task: "pay-1", dir, worktrees: {}, legacy: false } as unknown as Thread;
   const logs: string[] = [];
   let reported: (r: Report) => void = () => {};
   const runner = createEffectRunner({
@@ -55,11 +55,11 @@ function setup(config: Config, setupTimeoutMs?: number) {
     return report;
   };
   const path = join(dir, "api");
-  const effect = { kind: "git.worktree.add", thread: "001", repo: "api", repoPath: api, path, branch: "wip/kyc-1", source: "main" } as const;
+  const effect = { kind: "git.worktree.add", thread: "001", repo: "api", repoPath: api, path, branch: "wip/pay-1", source: "main" } as const;
   const nothingLeft = () => {
     expect(existsSync(path)).toBe(false);
-    expect(git(api, "rev-parse", "--verify", "--quiet", "refs/heads/wip/kyc-1").ok).toBe(false);
-    expect(git(api, "worktree", "list").out).not.toContain("kyc-1");
+    expect(git(api, "rev-parse", "--verify", "--quiet", "refs/heads/wip/pay-1").ok).toBe(false);
+    expect(git(api, "worktree", "list").out).not.toContain("pay-1");
   };
   return { root, api, path, run, effect, logs, nothingLeft };
 }
@@ -70,16 +70,16 @@ describe("git.worktree.add (repo form)", () => {
   test("without a setup command: git worktree add -b wip/<task> from the source, then AGENTS.md", async () => {
     const s = setup(ConfigSchema.parse({}));
     expect(await s.run(s.effect)).toEqual({ cmd: "worktree.report", thread: "001", repo: "api", ok: true });
-    expect(git(s.path, "rev-parse", "--abbrev-ref", "HEAD").out).toBe("wip/kyc-1");
-    expect(readFileSync(join(s.path, "AGENTS.md"), "utf8")).toContain(`thread 001 ("KYC")`);
+    expect(git(s.path, "rev-parse", "--abbrev-ref", "HEAD").out).toBe("wip/pay-1");
+    expect(readFileSync(join(s.path, "AGENTS.md"), "utf8")).toContain(`thread 001 ("PAY")`);
     expect(git(s.path, "status", "--porcelain").out).toBe("");
   });
 
   test("a setup command is used instead of git, with the placeholders filled in", async () => {
     const s = setup(withSetup("echo {root}/{task}/{repo}/{src}/{path} > {root}/setup.log && git -C {root}/{repo} worktree add -q -b wip/{task} {path} {src}"));
     expect(await s.run(s.effect)).toEqual({ cmd: "worktree.report", thread: "001", repo: "api", ok: true });
-    expect(readFileSync(join(s.root, "setup.log"), "utf8")).toBe(`${s.root}/kyc-1/api/main/${s.path}\n`);
-    expect(git(s.path, "rev-parse", "--abbrev-ref", "HEAD").out).toBe("wip/kyc-1");
+    expect(readFileSync(join(s.root, "setup.log"), "utf8")).toBe(`${s.root}/pay-1/api/main/${s.path}\n`);
+    expect(git(s.path, "rev-parse", "--abbrev-ref", "HEAD").out).toBe("wip/pay-1");
     expect(existsSync(join(s.path, "AGENTS.md"))).toBe(true);
   });
 
@@ -97,13 +97,13 @@ describe("git.worktree.add (repo form)", () => {
 
   test("a setup command that does not produce the worktree fails with the verification message", async () => {
     const s = setup(withSetup("true"));
-    expect((await s.run(s.effect)).error).toContain(`worktree setup for api did not produce ${s.path} on wip/kyc-1`);
+    expect((await s.run(s.effect)).error).toContain(`worktree setup for api did not produce ${s.path} on wip/pay-1`);
     s.nothingLeft();
   });
 
   test("a setup command that leaves the worktree on another branch is undone", async () => {
     const s = setup(withSetup("git -C {root}/{repo} worktree add -q -b other {path} {src}"));
-    expect((await s.run(s.effect)).error).toContain(`worktree setup for api did not produce ${s.path} on wip/kyc-1`);
+    expect((await s.run(s.effect)).error).toContain(`worktree setup for api did not produce ${s.path} on wip/pay-1`);
     s.nothingLeft();
   });
 
@@ -115,9 +115,9 @@ describe("git.worktree.add (repo form)", () => {
 
   test("an existing wip/<task> branch is kept when the add fails", async () => {
     const s = setup(ConfigSchema.parse({}));
-    git(s.api, "branch", "wip/kyc-1");
+    git(s.api, "branch", "wip/pay-1");
     expect((await s.run(s.effect)).error).toContain("git worktree add failed");
-    expect(git(s.api, "rev-parse", "--verify", "--quiet", "refs/heads/wip/kyc-1").ok).toBe(true);
+    expect(git(s.api, "rev-parse", "--verify", "--quiet", "refs/heads/wip/pay-1").ok).toBe(true);
     expect(existsSync(s.path)).toBe(false);
   });
 });
@@ -137,12 +137,12 @@ describe("the setup command's process group", () => {
 describe("I2 and the cheap fixes", () => {
   test("a path already registered on wip/<task> is adopted: no setup run, AGENTS.md and the guard written", async () => {
     const s = setup(withSetup("touch {root}/ran; exit 1"));
-    expect(git(s.api, "worktree", "add", "-q", "-b", "wip/kyc-1", s.path, "main").ok).toBe(true);
+    expect(git(s.api, "worktree", "add", "-q", "-b", "wip/pay-1", s.path, "main").ok).toBe(true);
     expect(await s.run(s.effect)).toEqual({ cmd: "worktree.report", thread: "001", repo: "api", ok: true });
     expect(existsSync(join(s.root, "ran"))).toBe(false);
     expect(existsSync(join(s.path, "AGENTS.md"))).toBe(true);
     expect(git(s.path, "config", "--worktree", "--get", "core.hooksPath").out).toBe(join(s.root, ".agentthread", "hooks"));
-    expect(git(s.path, "rev-parse", "--abbrev-ref", "HEAD").out).toBe("wip/kyc-1");
+    expect(git(s.path, "rev-parse", "--abbrev-ref", "HEAD").out).toBe("wip/pay-1");
   });
 
   test("a registered path on another branch is not adopted", async () => {
@@ -154,7 +154,7 @@ describe("I2 and the cheap fixes", () => {
 
   test("verification needs a registered worktree: a separate repo at the path on wip/<task> fails and is removed", async () => {
     const s = setup(withSetup("git init -q -b wip/{task} {path} && git -C {path} -c user.name=T -c user.email=t@example.com commit -q --allow-empty -m x"));
-    expect((await s.run(s.effect)).error).toContain(`worktree setup for api did not produce ${s.path} on wip/kyc-1`);
+    expect((await s.run(s.effect)).error).toContain(`worktree setup for api did not produce ${s.path} on wip/pay-1`);
     s.nothingLeft();
   });
 
@@ -186,7 +186,7 @@ describe("I2 and the cheap fixes", () => {
     const reports: Report[] = [];
     const runner = createEffectRunner({ root: s.root, config: withSetup(cmd), layout: () => undefined, thread: () => undefined, log: () => {}, report: (r) => void reports.push(r) });
     await runner(s.effect);
-    await runner({ ...s.effect, repo: "web", repoPath: join(s.root, "web"), path: join(s.root, ".worktrees", "kyc-1", "web") });
+    await runner({ ...s.effect, repo: "web", repoPath: join(s.root, "web"), path: join(s.root, ".worktrees", "pay-1", "web") });
     for (let i = 0; i < 100 && reports.length < 2; i++) await Bun.sleep(50);
     expect(reports.map((r) => r.ok)).toEqual([true, true]);
     // never interleaved (either may go first: each job asks git a few things before it queues its setup)
@@ -203,7 +203,7 @@ describe("I2 and the cheap fixes", () => {
     await runner(s.effect);
     for (let i = 0; i < 100 && reports.length < 2; i++) await Bun.sleep(50);
     expect(reports.map((r) => r.ok)).toEqual([true, true]);
-    expect(git(s.path, "rev-parse", "--abbrev-ref", "HEAD").out).toBe("wip/kyc-1");
+    expect(git(s.path, "rev-parse", "--abbrev-ref", "HEAD").out).toBe("wip/pay-1");
   });
 });
 
@@ -257,7 +257,7 @@ describe("the built-in copy and install step", () => {
     writeFileSync(join(same.api, ".gitignore"), "node_modules\n");
     expect((await same.run(same.effect)).ok).toBe(true);
     expect(lstatSync(join(same.path, "node_modules")).isSymbolicLink()).toBe(true);
-    expect(existsSync(join(same.root, ".worktrees/kyc-1/installs.log"))).toBe(false);
+    expect(existsSync(join(same.root, ".worktrees/pay-1/installs.log"))).toBe(false);
     expect(git(same.path, "status", "--porcelain").out).toBe("");
 
     const diff = setup(cfg({ link: ["node_modules"], install: "echo run >> ../installs.log" }));
@@ -268,7 +268,7 @@ describe("the built-in copy and install step", () => {
     writeFileSync(join(diff.api, "yarn.lock"), "edited\n");
     expect((await diff.run(diff.effect)).ok).toBe(true);
     expect(existsSync(join(diff.path, "node_modules"))).toBe(false);
-    expect(readFileSync(join(diff.root, ".worktrees/kyc-1/installs.log"), "utf8")).toBe("run\n");
+    expect(readFileSync(join(diff.root, ".worktrees/pay-1/installs.log"), "utf8")).toBe("run\n");
     expect(diff.logs.some((l) => l.includes("link node_modules: not linked") && l.includes("yarn.lock"))).toBe(true);
   });
 
@@ -382,7 +382,7 @@ describe("the built-in copy and install step", () => {
   test("an adopted worktree without the ready marker runs copy and install; with it, they are skipped", async () => {
     const s = setup(cfg({ copy: [".env"], install: "echo run >> ../adopt.log" }));
     writeFileSync(join(s.api, ".env"), "A=1\n");
-    await addWorktreeFromAsync(s.api, "wip/kyc-1", s.path, "main");
+    await addWorktreeFromAsync(s.api, "wip/pay-1", s.path, "main");
     expect((await s.run(s.effect)).ok).toBe(true);
     expect(readFileSync(join(s.path, ".env"), "utf8")).toBe("A=1\n");
     expect(readFileSync(join(s.path, "../adopt.log"), "utf8")).toBe("run\n");

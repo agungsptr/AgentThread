@@ -101,7 +101,7 @@ test("commitMessageProblems names each banned marker", () => {
   expect(commitMessageProblems("feat: drop the Co-Authored-By trailer from the template")).toEqual([]);
   expect(commitMessageProblems("feat: x, see .DOCS/specs")).toEqual([".docs/"]);
   expect(commitMessageProblems("feat: x\n\n🤖 Generated with [Claude Code]")).toEqual(["Generated with"]);
-  expect(commitMessageProblems("feat: x, see .docs/specs/kyc.md")).toEqual([".docs/"]);
+  expect(commitMessageProblems("feat: x, see .docs/specs/pay.md")).toEqual([".docs/"]);
   expect(commitMessageProblems("feat: x (T1, T12)")).toEqual(["T<n>"]);
   expect(commitMessageProblems("feat: x for T1234")).toEqual(["T<n>"]);
   // Not a ticket id: a longer number, part of a word, or a lower-case t.

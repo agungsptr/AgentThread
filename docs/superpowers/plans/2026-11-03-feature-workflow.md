@@ -33,8 +33,8 @@
   - Never read or print credentials, or the contents of the Claude/omp config.
 - **Legacy threads** (`t.legacy`) keep every old behavior.
 - **Source files.** The workflow snapshot's source is the user's files, which may be read and copied:
-  - `~/.agents/my-marketplace/plugins/my-skills/skills/feature-workflow/` (`SKILL.md`, `templates/spec.md`, `templates/ticket.md`, `templates/release.md`);
-  - `~/.agents/my-marketplace/plugins/my-skills/skills/multi-repo-doc/templates/manage-docs-SKILL.md`.
+  - the user's personal skills plugin (`feature-workflow/`) (`SKILL.md`, `templates/spec.md`, `templates/ticket.md`, `templates/release.md`);
+  - the user's personal skills plugin (`multi-repo-doc/templates/manage-docs-SKILL.md`).
 
   `templates/project-config.md` is **not** copied: config replaces it.
 - **Generated skill names:**
@@ -86,7 +86,7 @@
 
 ## Review Focus
 
-1. **A project-owned skill named `manage-docs`** (Zentro has one) **is never overwritten or hidden.** agt logs that it kept it. Test in Task 3.
+1. **A project-owned skill named `manage-docs`** (the reference project has one) **is never overwritten or hidden.** agt logs that it kept it. Test in Task 3.
 2. **A commit message carrying `Co-Authored-By:`, `Generated with`, a `.docs/` path, a ticket id like `T3`, or a configured banned word is refused for agents.** The user is never refused, even in a shell opened in a thread's tab, whose env carries `AGT_ROLE=coordinator`. Test in Task 5.
 3. **`agt thread cleanup` never deletes uncommitted work.** A worktree with modified or untracked (not ignored) files stops the cleanup before anything is removed. Test in Task 7.
 4. **Re-running `agt setup` keeps every value already configured.** Each one is offered as the default, and blank keeps it. Test in Task 2.

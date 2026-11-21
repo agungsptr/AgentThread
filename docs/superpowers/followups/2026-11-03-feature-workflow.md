@@ -16,7 +16,7 @@ Source: the SDD ledger for docs/superpowers/plans/2026-11-03-feature-workflow.md
 - **Cleanup and unsquashed work.** `wip/<task>` is deleted only if `feat/<task>` exists or wip has no commits outside other local branches. Otherwise cleanup stops before removing anything, with a hint to delete the branch by hand if it was merged another way.
 - **Cleanup method.** Cleanup runs plain `git worktree remove`, without `--force`, after a porcelain check of every worktree. It unregisters only its own stale worktree entry. Status changes, cancel and `worktree add` are rejected while a cleanup runs.
 - **Waiting.** A thread stays `waiting` until the coordinator goes idle and then gets a turn from the user. A notice agt delivers does not count as that turn.
-- **Project-owned skills.** A skill owned at the workspace root (for example Zentro's `manage-docs`) also counts as owned in thread dirs and repo worktrees. agt removes its own marked copy there and logs `kept the project's own skill …`.
+- **Project-owned skills.** A skill owned at the workspace root (for example a project's own `manage-docs`) also counts as owned in thread dirs and repo worktrees. agt removes its own marked copy there and logs `kept the project's own skill …`.
 - **Status after the squash.** The coordinator no longer sets `review` itself: `agt stage <id> 10 done` does it after the squash.
 - **Hook stubs on upgrade.** The daemon refreshes the shared hook stub at start. The README says to restart the daemon and running agents after an upgrade.
 

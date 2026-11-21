@@ -6,7 +6,7 @@ import { guide } from "../../src/agents/guide.ts";
 import { bootstrapPrompt, systemPrompt } from "../../src/agents/prompts.ts";
 import { type Config, DEFAULT_CONFIG } from "../../src/config/config.ts";
 
-const TASK = { id: "007", title: "KYC reject", slug: "kyc-reject", dir: "/ws/.worktrees/kyc-reject", task: "kyc-reject" };
+const TASK = { id: "007", title: "PAY reject", slug: "pay-reject", dir: "/ws/.worktrees/pay-reject", task: "pay-reject" };
 const LEGACY = { id: "002", title: "Fix race", slug: "fix-race", worktree: "/repo/.worktrees/002-fix-race" };
 
 const workflow = (w: Partial<Config["workflow"]>): Config => ({ ...DEFAULT_CONFIG, workflow: { ...DEFAULT_CONFIG.workflow, ...w } });
@@ -82,9 +82,9 @@ describe("task-thread coordinator rules (§13)", () => {
 
 describe("task-thread worker rules (§13)", () => {
   test("name its ticket file, the self-check, the report words and the commit rule", () => {
-    const p = worker(ZENTRO, ".docs/shared/issues/kyc-reject/02-api.md").split("\n");
+    const p = worker(ZENTRO, ".docs/shared/issues/pay-reject/02-api.md").split("\n");
     for (const line of [
-      "Your ticket file is /ws/.docs/shared/issues/kyc-reject/02-api.md. You may append evidence under ## Comments there; it is the only file outside your worktree you may write.",
+      "Your ticket file is /ws/.docs/shared/issues/pay-reject/02-api.md. You may append evidence under ## Comments there; it is the only file outside your worktree you may write.",
       "Validate your own work first: run the ticket's tests and checks before you report it done.",
       'End your summary with SELESAI or TERHALANG.',
       COMMIT_RULE.slice(2),
@@ -105,9 +105,9 @@ describe("task-thread worker rules (§13)", () => {
   test("AGENTS.md (shared by every worker) says where the ticket file is named; the bootstrap names it", () => {
     const md = agentsMd({ root: "/ws", thread: TASK, config: ZENTRO });
     expect(md).toContain("Your ticket file, if your ticket has one, is named in your first prompt. You may append evidence under ## Comments there; it is the only file outside your worktree you may write.");
-    const boot = bootstrapPrompt({ root: "/ws", role: "worker", thread: TASK, ticket: "T2", ticketDoc: ".docs/shared/issues/kyc-reject/02-api.md" });
+    const boot = bootstrapPrompt({ root: "/ws", role: "worker", thread: TASK, ticket: "T2", ticketDoc: ".docs/shared/issues/pay-reject/02-api.md" });
     expect(boot).toBe(
-      "You are the worker for ticket T2 of thread 007. Read /ws/.agentthread/threads/007-kyc-reject/brief.md, then follow AGENTS.md.\nYour ticket file is /ws/.docs/shared/issues/kyc-reject/02-api.md.",
+      "You are the worker for ticket T2 of thread 007. Read /ws/.agentthread/threads/007-pay-reject/brief.md, then follow AGENTS.md.\nYour ticket file is /ws/.docs/shared/issues/pay-reject/02-api.md.",
     );
     const withNotice = bootstrapPrompt({ root: "/ws", role: "worker", thread: TASK, ticket: "T2", ticketDoc: "x.md" }, "start", "Ticket T2 was returned.");
     expect(withNotice.split("\n")).toEqual([expect.stringContaining("follow AGENTS.md."), "Your ticket file is /ws/x.md.", "Ticket T2 was returned."]);
@@ -116,7 +116,7 @@ describe("task-thread worker rules (§13)", () => {
 
 test("a task coordinator's only repo commit is the squash", () => {
   const p = coordinator(DEFAULT_CONFIG);
-  expect(p).toContain("- Workers commit their tickets on wip/kyc-reject. You never edit repo files; your only repo commit is the squash on feat/kyc-reject: in each repo worktree,");
+  expect(p).toContain("- Workers commit their tickets on wip/pay-reject. You never edit repo files; your only repo commit is the squash on feat/pay-reject: in each repo worktree,");
   expect(p).not.toContain("You never edit or commit repo files");
 });
 
@@ -176,7 +176,7 @@ describe("idle and unblock rules (task threads only)", () => {
 describe("stack restart rule", () => {
   const withServices = { ...DEFAULT_CONFIG, workspace: { ...DEFAULT_CONFIG.workspace, repos: { a: { path: "a" } }, services: { web: { repo: "a", dir: ".", start: "x", enabled: true } } } } as unknown as Config;
   test("a task coordinator is told agt stack restart --task <task> when services exist", () => {
-    expect(coordinator(withServices)).toContain("agt stack restart --task kyc-reject");
+    expect(coordinator(withServices)).toContain("agt stack restart --task pay-reject");
     expect(coordinator(DEFAULT_CONFIG)).not.toContain("agt stack restart");
   });
 });
@@ -195,7 +195,7 @@ describe("language rule (chat_language) comes first", () => {
 
   test("a rotated coordinator's bootstrap starts with it; a first bootstrap and a legacy thread do not", () => {
     const boot = bootstrapPrompt({ root: "/ws", role: "coordinator", thread: TASK, config: ZENTRO }, "handoff");
-    expect(boot).toBe(`${RULE}\nYou are the new coordinator of thread 007; the previous session ended. Read /ws/.agentthread/threads/007-kyc-reject/brief.md, then follow AGENTS.md.`);
+    expect(boot).toBe(`${RULE}\nYou are the new coordinator of thread 007; the previous session ended. Read /ws/.agentthread/threads/007-pay-reject/brief.md, then follow AGENTS.md.`);
     expect(bootstrapPrompt({ root: "/ws", role: "coordinator", thread: LEGACY, config: ZENTRO }, "handoff")).toBe(bootstrapPrompt({ root: "/ws", role: "coordinator", thread: LEGACY }, "handoff"));
   });
 

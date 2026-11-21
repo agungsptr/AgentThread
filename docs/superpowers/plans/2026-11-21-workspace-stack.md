@@ -2,14 +2,14 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development. Steps use checkbox (`- [ ]`) syntax.
 
-**Goal:** agt owns the generic part of the workspace tooling that Zentro v4 keeps in `Makefile` + `.scripts/` + `.local-run/`. The user describes services in config, and agt then provides:
+**Goal:** agt owns the generic part of the workspace tooling that the reference project keeps in `Makefile` + `.scripts/` + `.local-run/`. The user describes services in config, and agt then provides:
 - a stack runner (`agt stack start|stop|restart|status|logs`) that works on the main checkouts or on a task's worktrees;
 - worktrees that come ready to run (env files copied, dependencies installed);
 - a thin generated `Makefile` + `MAKEFILE.md` so `make restart TASK=…` keeps working.
 
 Project-specific extras (Caddy, deploy, …) stay project scripts. A service can be any command.
 
-**Reference:** the Zentro v4 tooling summary (`.scripts/1-start-all-services.sh`, `6-restart-services.sh`, `7-worktree-new.sh`, `9-status.sh`, `.local-run/`). The behaviour below mirrors it.
+**Reference:** the the reference project tooling summary (`.scripts/1-start-all-services.sh`, `6-restart-services.sh`, `7-worktree-new.sh`, `9-status.sh`, `.local-run/`). The behaviour below mirrors it.
 
 **Tech Stack:** TypeScript on Bun, `bun:test`. The stack commands are CLI-only: no daemon needed, and no `Bun.spawnSync` on daemon paths.
 

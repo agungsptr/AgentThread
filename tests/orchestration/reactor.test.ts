@@ -340,7 +340,7 @@ test("replaying the log gives the same coordinator notices as the live run", () 
 
 test("a worker queued for a ticket whose repo has no worktree starts when worktree.added arrives", () => {
   n = 0;
-  const s = stateOf(INIT, taskThreadCreated("001", "kyc-1", { maxWorkers: 1 }), { type: "thread.tab_opened", thread: "001", payload: { tab: "w1:t2", rootPane: "w1:p2" } });
+  const s = stateOf(INIT, taskThreadCreated("001", "pay-1", { maxWorkers: 1 }), { type: "thread.tab_opened", thread: "001", payload: { tab: "w1:t2", rootPane: "w1:p2" } });
   apply(
     s,
     { type: "session.created", thread: "001", payload: { session: C, role: "coordinator", agent: "claude-code", name: "c" } },
@@ -348,7 +348,7 @@ test("a worker queued for a ticket whose repo has no worktree starts when worktr
     { type: "ticket.created", thread: "001", payload: { ticket: "T1", title: "x", scope: ["a"], repo: "api", files: ["a"] } },
     { type: "worker.queued", thread: "001", payload: { ticket: "T1" } },
   );
-  const added = apply(s, { type: "worktree.added", thread: "001", payload: { repo: "api", path: "/repo/.worktrees/kyc-1/api", branch: "wip/kyc-1", source: "main" } });
+  const added = apply(s, { type: "worktree.added", thread: "001", payload: { repo: "api", path: "/repo/.worktrees/pay-1/api", branch: "wip/pay-1", source: "main" } });
   const r = react(s, added, ctx());
-  expect(r.effects.find((e) => e.kind === "agent.spawn")).toMatchObject({ ticket: "T1", cwd: "/repo/.worktrees/kyc-1/api" });
+  expect(r.effects.find((e) => e.kind === "agent.spawn")).toMatchObject({ ticket: "T1", cwd: "/repo/.worktrees/pay-1/api" });
 });

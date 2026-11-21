@@ -140,9 +140,9 @@ adapterFor(agent: AgentKind): AgentAdapter
     - the `--settings` JSON has `skipDangerousModePermissionPrompt: true` and the existing hooks;
     - there is no `--allowed-tools`.
   - **Claude**, `autonomous:false`: keeps today's `--permission-mode <config>` and `--allowed-tools`.
-  - **OpenCode**, worker, `{model:"myrouter/gemini-flash", effort:"high"}`:
+  - **OpenCode**, worker, `{model:"myrouter/gemini-flash-3.8", effort:"high"}`:
     - args are `["--auto"]`;
-    - the env `OPENCODE_CONFIG_CONTENT` parses to `{model:"myrouter/gemini-flash#high", permission:{"*":"allow", external_directory:"allow", doom_loop:"allow"}}`.
+    - the env `OPENCODE_CONFIG_CONTENT` parses to `{model:"myrouter/gemini-flash-3.8#high", permission:{"*":"allow", external_directory:"allow", doom_loop:"allow"}}`.
   - **OpenCode**, no model: the config content has no `model` key.
   - **Codex**, with `{model:"gpt-6.1-sol", effort:"medium"}`, root `/r`, gitCommonDir `/r/.git`: args are exactly `["-m","gpt-6.1-sol","-c",'model_reasoning_effort="medium"',"-s","workspace-write","-a","never","-c","sandbox_workspace_write.network_access=true","--add-dir","/r/.git","--add-dir","/r/.agentthread","--search"]`.
   - **omp**, with `{model:"opus", effort:"high"}`: args are `["--model","opus","--thinking","high","--approval-mode","yolo"]`.

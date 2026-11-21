@@ -502,7 +502,7 @@ agents:
   roles:
     main:        { agent: claude-code, model: claude-opus-5-5, effort: medium }
     coordinator: { agent: claude-code, model: claude-opus-5-5, effort: medium }   # used when no tier is chosen
-    worker:      { agent: opencode,    model: myrouter/gemini-flash, effort: high }
+    worker:      { agent: opencode,    model: myrouter/gemini-flash-3.8, effort: high }
   complexity:
     timeout: 10s
     tiers:
@@ -619,8 +619,8 @@ Known facts, still to be verified in the plan's research step:
 ## 13. Revision 2026-10-31: Multi-repo workspaces and the feature workflow
 
 **Why.** The user's real projects are workspaces of several git repos in one parent folder that is not itself a repo. Examples:
-- `Clients/project-a`, with `web`, `web-fe`, `admin-fe`, `auth`, `auth-fe`, `finance` and `notif`;
-- `Clients/project-b`, with `project-b-api` and `project-b-web`.
+- a parent folder with the repos `api`, `web`, `admin-web`, `auth`, `finance` and `notif`;
+- a parent folder with the repos `backend` and `frontend`.
 
 One task often spans several of these repos (most often an API repo plus its frontend). The user already runs a proven process there by hand: the `feature-workflow` skill, with ten stages, one manager and three workers, one worktree per task per repo, workers that commit, and a manager that squashes. AgentThread must run that same process, with the same results in every project, including new projects set up from scratch. This revision supersedes the single-repo parts of §4, §11.3 and §12 where they conflict.
 
@@ -644,7 +644,7 @@ One task often spans several of these repos (most often an API repo plus its fro
 
 ### 13.3 Threads, worktrees and branches
 - **One thread per task.**
-  - The task name is a slug; the user may give one, such as `kyc-reject-pg`. It must be unique. Otherwise it is derived from the title (my call).
+  - The task name is a slug; the user may give one, such as `pay-reject-pg`. It must be unique. Otherwise it is derived from the title (my call).
   - Thread directory: `<root>/.worktrees/<task>/`. It is not a git repo. It is the coordinator's working directory and holds that thread's `AGENTS.md`/`CLAUDE.md` and the generated skills.
 - **The coordinator creates the worktrees** after asking the user for the source branch (the default comes from config, per repo).
   - Command: `agt worktree add <thread> <repo> [--from <branch>]`, which produces `<root>/.worktrees/<task>/<repo>` on a new `wip/<task>` from the source branch.
@@ -661,7 +661,7 @@ One task often spans several of these repos (most often an API repo plus its fro
 - **brief.md.** The brief's git trail covers each of the task's worktrees.
 
 ### 13.4 The ten stages (the built-in workflow)
-agt carries the content of the user's `feature-workflow` skill, at `~/.agents/my-marketplace/plugins/my-skills/skills/feature-workflow/`, with its templates `spec.md`, `ticket.md`, `release.md` and `project-config.md`. It also carries the content of `manage-docs`. Both are delivered through the coordinator and worker role rules, through `agt guide`, and as skills generated into the thread and worktree directories (§Plan 9 mechanism). One source lives in agt, so the result is the same in every project.
+agt carries the content of the user's `feature-workflow` skill, at the user's personal skills plugin, with its templates `spec.md`, `ticket.md`, `release.md` and `project-config.md`. It also carries the content of `manage-docs`. Both are delivered through the coordinator and worker role rules, through `agt guide`, and as skills generated into the thread and worktree directories (§Plan 9 mechanism). One source lives in agt, so the result is the same in every project.
 
 1. **Task discussion.** The coordinator and the user go story by story, down to file level. Each decision is recorded as `Dn (user|coordinator, date)`. The e2e cases, the browser checklist per role and viewport, and the shared docs affected are all designed here. The source branch is asked here.
 2. **Spec** in `.docs/<area>/issues/<task>/spec.md`. The area is `shared` when the task spans repos. The API contract is read from the controllers.
@@ -687,9 +687,9 @@ agt carries the content of the user's `feature-workflow` skill, at `~/.agents/my
 - **Repos.** `workspace.repos`, and per repo: production and staging branches, the default source branch, and PR order.
 - **Commands.** Worktree setup, stack restart (`{task}` is substituted), stack status, and per-repo unit, typecheck and e2e commands.
 - **Rules.** Banned words in commits and repo files, never-commit paths, and the rule files every agent must read first (for example `.docs/shared/notes/product-decisions.md`).
-- **Report words** for workers' reports: Zentro uses `SELESAI` and `TERHALANG`; the default is `done` and `blocked`.
+- **Report words** for workers' reports: a project can use `SELESAI` and `TERHALANG`; the default is `done` and `blocked`.
 
-Project-owned skills, such as Zentro's `run-stack` and `run-e2e`, stay the project's own. Config only points at them.
+Project-owned skills, such as a project's `run-stack` and `run-e2e`, stay the project's own. Config only points at them.
 
 ### 13.6 Non-goals
 - A Telegram bridge. That is the next feature, after a week of real use.

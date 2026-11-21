@@ -18,14 +18,14 @@ const exec = (state: State, cmd: unknown, actor: Actor = COORD): HandleResult =>
   return r;
 };
 const errorOf = (r: HandleResult) => (r.ok ? "accepted" : r.error);
-const taskBase = () => stateOf(INIT, taskThreadCreated("001", "kyc-1"), { type: "thread.tab_opened", thread: "001", payload: { tab: "w1:t2", rootPane: "w1:p2" } });
+const taskBase = () => stateOf(INIT, taskThreadCreated("001", "pay-1"), { type: "thread.tab_opened", thread: "001", payload: { tab: "w1:t2", rootPane: "w1:p2" } });
 const add = (extra: Record<string, unknown> = {}) => ({ cmd: "ticket.add", thread: "001", title: "Lock", repo: "api", files: ["src/a.ts", "src/b.ts"], ...extra });
 
 describe("ticket.add on a task thread", () => {
   test("records repo, files and doc; scope is the files", () => {
     const s = taskBase();
-    expect(errorOf(exec(s, add({ doc: ".docs/shared/issues/kyc/01-api.md" })))).toBe("accepted");
-    expect(s.threads.get("001")!.tickets[0]).toMatchObject({ id: "T1", repo: "api", files: ["src/a.ts", "src/b.ts"], doc: ".docs/shared/issues/kyc/01-api.md", scope: ["src/a.ts", "src/b.ts"] });
+    expect(errorOf(exec(s, add({ doc: ".docs/shared/issues/pay/01-api.md" })))).toBe("accepted");
+    expect(s.threads.get("001")!.tickets[0]).toMatchObject({ id: "T1", repo: "api", files: ["src/a.ts", "src/b.ts"], doc: ".docs/shared/issues/pay/01-api.md", scope: ["src/a.ts", "src/b.ts"] });
   });
 
   // The doc becomes the worker's only write rule outside its worktree: one plain file under .docs/, never a glob.
@@ -197,8 +197,8 @@ describe("worker.spawn on a task thread", () => {
   test("starts the worker in the repo's worktree", () => {
     const s = taskBase();
     exec(s, add());
-    applyEvent(s, { type: "worktree.added", thread: "001", payload: { repo: "api", path: "/repo/.worktrees/kyc-1/api", branch: "wip/kyc-1", source: "main" }, seq: 99, ts: "2026-10-09T11:00:00.000Z", actor: USER } as StoredEvent);
+    applyEvent(s, { type: "worktree.added", thread: "001", payload: { repo: "api", path: "/repo/.worktrees/pay-1/api", branch: "wip/pay-1", source: "main" }, seq: 99, ts: "2026-10-09T11:00:00.000Z", actor: USER } as StoredEvent);
     const r = run(s, { cmd: "worker.spawn", thread: "001", ticket: "T1" });
-    expect(r.ok && r.effects[0]).toMatchObject({ kind: "agent.spawn", cwd: "/repo/.worktrees/kyc-1/api" });
+    expect(r.ok && r.effects[0]).toMatchObject({ kind: "agent.spawn", cwd: "/repo/.worktrees/pay-1/api" });
   });
 });

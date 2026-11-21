@@ -69,13 +69,13 @@ const make = (root: string, args: string[]) => Bun.spawnSync(["make", "-s", "-f"
 test("targets pass TASK, ONLY, SVC, REPOS and SRC as single argv words", () => {
   const root = twoRepoFolder();
   writeStackMakefiles(root, config(WEB));
-  const agt = fakeAgt(root, "kyc");
+  const agt = fakeAgt(root, "pay");
   const calls = () => readFileSync(join(root, "calls"), "utf8");
-  expect(make(root, [`AGT=${agt}`, "start", "TASK=kyc", "ONLY=web,db"]).exitCode).toBe(0);
+  expect(make(root, [`AGT=${agt}`, "start", "TASK=pay", "ONLY=web,db"]).exitCode).toBe(0);
   expect(make(root, [`AGT=${agt}`, "restart"]).exitCode).toBe(0);
   expect(make(root, [`AGT=${agt}`, "stop", "ONLY=web"]).exitCode).toBe(0);
   expect(make(root, [`AGT=${agt}`, "status"]).exitCode).toBe(0);
-  expect(calls()).toBe("CALL\nstack\nstart\n--task\nkyc\n--only\nweb,db\nCALL\nstack\nrestart\nCALL\nstack\nstop\n--only\nweb\nCALL\nstack\nstatus\n");
+  expect(calls()).toBe("CALL\nstack\nstart\n--task\npay\n--only\nweb,db\nCALL\nstack\nrestart\nCALL\nstack\nstop\n--only\nweb\nCALL\nstack\nstatus\n");
   const evil = "x'; touch pwned; echo '`id`";
   expect(make(root, [`AGT=${agt}`, "logs", `SVC=${evil}`]).exitCode).toBe(0);
   expect(calls().endsWith(`CALL\nstack\nlogs\n${evil}\n`)).toBe(true);
@@ -87,9 +87,9 @@ test("targets pass TASK, ONLY, SVC, REPOS and SRC as single argv words", () => {
 test("wt-new adds a worktree per repo for the task's thread, or says how to create the thread", () => {
   const root = twoRepoFolder();
   writeStackMakefiles(root, config(WEB));
-  const agt = fakeAgt(root, "kyc");
+  const agt = fakeAgt(root, "pay");
   const calls = () => readFileSync(join(root, "calls"), "utf8");
-  const ok = make(root, [`AGT=${agt}`, "wt-new", "TASK=kyc", "REPOS=a,b", "SRC=release/1; touch pwned"]);
+  const ok = make(root, [`AGT=${agt}`, "wt-new", "TASK=pay", "REPOS=a,b", "SRC=release/1; touch pwned"]);
   expect(ok.exitCode).toBe(0);
   expect(calls()).toBe("CALL\nworktree\nadd\n007\na\n--from\nrelease/1; touch pwned\nCALL\nworktree\nadd\n007\nb\n--from\nrelease/1; touch pwned\n");
   expect(existsSync(join(root, "pwned"))).toBe(false);
@@ -97,7 +97,7 @@ test("wt-new adds a worktree per repo for the task's thread, or says how to crea
   expect(none.exitCode).not.toBe(0);
   expect(none.stderr.toString()).toContain("no thread has task other");
   expect(readFileSync(join(root, "calls"), "utf8")).not.toContain("other");
-  expect(make(root, [`AGT=${agt}`, "wt-new", "TASK=kyc"]).exitCode).not.toBe(0);
+  expect(make(root, [`AGT=${agt}`, "wt-new", "TASK=pay"]).exitCode).not.toBe(0);
 });
 
 test("a project Makefile can include agt.mk", () => {

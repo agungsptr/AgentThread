@@ -5,7 +5,7 @@ Source: the SDD ledger for docs/superpowers/plans/2026-11-21-workspace-stack.md 
 ## What shipped
 - **Config.** `workspace.services` (repo, dir, start, port, health, migrate, after, enabled) and, per repo, `copy` and `install`.
   - When services exist, the stack commands default to `agt stack restart --task {task}` and `agt stack status`.
-- **`agt stack start|stop|restart|status|logs`.** The commands are CLI-only and mirror the Zentro v4 tooling:
+- **`agt stack start|stop|restart|status|logs`.** The commands are CLI-only and mirror a reference multi-repo project's tooling:
   - detached starts that write their log and pid to `.local-run/`;
   - HTTP/TCP health waits;
   - a git stamp gating install and migrate;
@@ -42,5 +42,5 @@ The runs also found three bugs, all fixed:
 - **`agt.mk`** is always overwritten, so hand edits are lost. Its header says so.
 - **Option-like values:** `SVC` or `SRC` values that start with `-` are passed through quoted.
 - **Install-time background children** survive a successful install.
-- **Lockfile changes:** no check that the lockfile is unchanged after install (Zentro's `ensure_npm` has one).
+- **Lockfile changes:** no check that the lockfile is unchanged after install (the reference project's `ensure_npm` has one).
 - **Stamp scope:** the stamp reruns install and migrate whenever the repo's `git status` changes.

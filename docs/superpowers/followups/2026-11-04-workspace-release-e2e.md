@@ -8,7 +8,7 @@ Source: the SDD ledger for docs/superpowers/plans/2026-11-04-workspace-release-e
   - The first coordinator's process carries `AGT_AGENT_PROCESS=1`.
   - A pane the user splits in a thread tab does not inherit the tab env, so it has no `AGT_*` variables.
   - The user's commit on `wip/<task>` from that pane passes.
-- **Pending: the OpenCode worker rows** (`ws-happy-worker-opencode` and edge rows with OpenCode workers). They need `AGT_E2E_MODEL_OPENCODE`; the user is to confirm the model (proposed `myrouter/worker`). The user's direction is that e2e focuses on OpenCode workers while agt stays agent-agnostic. There is no omp worker row: in Zentro, omp spent about 2.3× the prompt tokens of OpenCode (`.docs/shared/notes/2026-11-06-worker-harness-omp-vs-opencode.md`).
+- **Pending: the OpenCode worker rows** (`ws-happy-worker-opencode` and edge rows with OpenCode workers). They need `AGT_E2E_MODEL_OPENCODE`; the user is to confirm the model (proposed `myrouter/worker`). The user's direction is that e2e focuses on OpenCode workers while agt stays agent-agnostic. There is no omp worker row: in the reference project, omp spent about 2.3× the prompt tokens of OpenCode (`.docs/shared/notes/2026-11-06-worker-harness-omp-vs-opencode.md`).
 
 ## Product bugs found by the runs, and their fixes
 - **Trust dialog (Task 5).** Claude Code asks to trust each folder agt creates (`.worktrees/<task>/`, repo worktrees): trust of a non-git workspace root is not inherited.

@@ -64,7 +64,7 @@ test("the projection keeps agent, model and effort from session.created", () => 
 function taskBase() {
   return stateOf(
     INIT,
-    taskThreadCreated("001", "kyc-1", { status: "in_progress" }),
+    taskThreadCreated("001", "pay-1", { status: "in_progress" }),
     { type: "thread.tab_opened", thread: "001", payload: { tab: "w1:t2", rootPane: "w1:p2" } },
     { type: "session.created", thread: "001", payload: { session: C, role: "coordinator", name: "c", agent: "claude-code" } },
     { type: "session.attached", thread: "001", payload: { session: C, pane: "w1:p2" } },
@@ -74,11 +74,11 @@ function taskBase() {
 test("a thread with a task: the tab, the coordinator, a replacement and a worker run in the thread directory", () => {
   const s = taskBase();
   const t = s.threads.get("001")!;
-  expect(t).toMatchObject({ task: "kyc-1", dir: "/repo/.worktrees/kyc-1", worktrees: {}, legacy: false });
-  expect(tabEnsure(t, ctx())).toMatchObject({ kind: "herdr.tab.ensure", cwd: "/repo/.worktrees/kyc-1", env: { AGT_TASK: "kyc-1" } });
-  expect(spawnCoordinator(t, ctx()).effects[0]).toMatchObject({ kind: "agent.spawn", cwd: "/repo/.worktrees/kyc-1" });
-  expect(spawnReplacement(t, s.sessions.get(C)!, ctx(), { bootstrap: "handoff" }).effects[0]).toMatchObject({ cwd: "/repo/.worktrees/kyc-1" });
-  expect(spawnWorker(s, t, "T1", ctx()).effects[0]).toMatchObject({ kind: "agent.spawn", cwd: "/repo/.worktrees/kyc-1" });
+  expect(t).toMatchObject({ task: "pay-1", dir: "/repo/.worktrees/pay-1", worktrees: {}, legacy: false });
+  expect(tabEnsure(t, ctx())).toMatchObject({ kind: "herdr.tab.ensure", cwd: "/repo/.worktrees/pay-1", env: { AGT_TASK: "pay-1" } });
+  expect(spawnCoordinator(t, ctx()).effects[0]).toMatchObject({ kind: "agent.spawn", cwd: "/repo/.worktrees/pay-1" });
+  expect(spawnReplacement(t, s.sessions.get(C)!, ctx(), { bootstrap: "handoff" }).effects[0]).toMatchObject({ cwd: "/repo/.worktrees/pay-1" });
+  expect(spawnWorker(s, t, "T1", ctx()).effects[0]).toMatchObject({ kind: "agent.spawn", cwd: "/repo/.worktrees/pay-1" });
 });
 
 test("an old log's thread (branch and worktree) replays as legacy and still runs in its worktree", () => {
@@ -104,7 +104,7 @@ test("a thread-directory thread's tab env stops git at .worktrees; a legacy thre
 
 test("single-repo project: with the ceiling env, git fails in the thread directory but works in a repo worktree inside it", () => {
   const root = tempRepo();
-  const dir = join(root, ".worktrees", "kyc-1");
+  const dir = join(root, ".worktrees", "pay-1");
   mkdirSync(dir, { recursive: true });
   const env = { ...process.env, ...threadGitEnv({ dir }, root) };
   const git = (cwd: string, e: Record<string, string | undefined>, ...a: string[]) => Bun.spawnSync(["git", "-C", cwd, ...a], { env: e, stdout: "pipe", stderr: "pipe" });
@@ -115,17 +115,17 @@ test("single-repo project: with the ceiling env, git fails in the thread directo
   expect(r.stderr.toString()).toContain("not a git repository");
   expect(git(dir, env, "status").exitCode).not.toBe(0);
   const wt = join(dir, "app");
-  expect(git(root, process.env, "worktree", "add", "-q", "-b", "wip/kyc-1", wt).exitCode).toBe(0);
+  expect(git(root, process.env, "worktree", "add", "-q", "-b", "wip/pay-1", wt).exitCode).toBe(0);
   expect(git(wt, env, "rev-parse", "--show-toplevel").stdout.toString().trim()).toBe(wt);
 });
 
 test("a task thread's worker starts in its ticket's repo worktree", () => {
   const s = stateOf(
     INIT,
-    taskThreadCreated("001", "kyc-1"),
+    taskThreadCreated("001", "pay-1"),
     { type: "thread.tab_opened", thread: "001", payload: { tab: "w1:t2", rootPane: "w1:p2" } },
-    { type: "worktree.added", thread: "001", payload: { repo: "api", path: "/repo/.worktrees/kyc-1/api", branch: "wip/kyc-1", source: "main" } },
+    { type: "worktree.added", thread: "001", payload: { repo: "api", path: "/repo/.worktrees/pay-1/api", branch: "wip/pay-1", source: "main" } },
     { type: "ticket.created", thread: "001", payload: { ticket: "T1", title: "x", scope: ["a"], repo: "api", files: ["a"] } },
   );
-  expect(spawnWorker(s, s.threads.get("001")!, "T1", ctx()).effects[0]).toMatchObject({ cwd: "/repo/.worktrees/kyc-1/api" });
+  expect(spawnWorker(s, s.threads.get("001")!, "T1", ctx()).effects[0]).toMatchObject({ cwd: "/repo/.worktrees/pay-1/api" });
 });

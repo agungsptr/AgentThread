@@ -274,9 +274,9 @@ async function waitWorktree(h: H, thread: string, repo: string, ms: number): Pro
 
 /** No model calls: the user does what the coordinator would (thread with a task name, a worktree per repo). */
 async function smokeWorktrees(h: H): Promise<void> {
-  const task = "kyc-1";
+  const task = "pay-1";
   // A proposed tier that waits an hour: the thread gets no tab and no coordinator, so nothing calls a model.
-  const thread = threadIdOf(await h.agtOk(["thread", "new", "KYC smoke", "--type", "feature", "--goal", "workspace worktrees smoke", "--task", task, "--tier", "low", "--reason", "smoke row: no coordinator"]));
+  const thread = threadIdOf(await h.agtOk(["thread", "new", "PAY smoke", "--type", "feature", "--goal", "workspace worktrees smoke", "--task", task, "--tier", "low", "--reason", "smoke row: no coordinator"]));
   for (const repo of REPOS) await h.agtOk(["worktree", "add", thread, repo]);
   for (const repo of REPOS) await waitWorktree(h, thread, repo, 120_000);
 

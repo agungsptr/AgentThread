@@ -1,6 +1,6 @@
-# First real thread on Project B (Plan 16): evaluation, fixes and follow-ups
+# First real thread (Plan 16): evaluation, fixes and follow-ups
 
-Source: an evaluation of thread `001-feature-x` in the user's Project B workspace:
+Source: an evaluation of thread `001` (a 12-ticket integration feature) in the user's multi-repo workspace:
 - event log, daemon.log and thread files;
 - main and coordinator transcripts.
 
@@ -42,7 +42,7 @@ Setup: main and coordinator on Claude Code, workers on Antigravity.
   - The fallback window runs from delivery, with a hard cap of 2× the timeout.
   - The "waiting" notice to main is neutral (a question or a permission), is not duplicated by `thread waiting`, and names the thread tab.
   - `thread status` to the same status is a no-op.
-- **Project B config.** The e2e commands set `E2E_BASE_URL=http://localhost:9002`, because `e2e/.env.e2e` says 9901.
+- **Project config.** The e2e commands set `E2E_BASE_URL` to the port the stack actually serves, because the e2e env file names another one.
 
 ## Deferred
 - **Rotation threshold.** The 140k threshold of an assumed 200k window is reached quickly, because the first turn alone is about 48k. Tune it, or shrink the coordinator's start-up context.

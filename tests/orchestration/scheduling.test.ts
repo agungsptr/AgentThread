@@ -37,9 +37,9 @@ const liveTickets = (s: State) => [...s.sessions.values()].filter((x) => x.role 
 
 function world(maxWorkers = 5): State {
   ids = 0;
-  const s = stateOf(INIT, taskThreadCreated("001", "kyc-1", { maxWorkers }), { type: "thread.tab_opened", thread: "001", payload: { tab: "w1:t2", rootPane: "w1:p2" } });
+  const s = stateOf(INIT, taskThreadCreated("001", "pay-1", { maxWorkers }), { type: "thread.tab_opened", thread: "001", payload: { tab: "w1:t2", rootPane: "w1:p2" } });
   apply(s, [
-    ...["api", "fe"].map((repo): EventBody => ({ type: "worktree.added", thread: "001", payload: { repo, path: `/repo/.worktrees/kyc-1/${repo}`, branch: "wip/kyc-1", source: "main" } })),
+    ...["api", "fe"].map((repo): EventBody => ({ type: "worktree.added", thread: "001", payload: { repo, path: `/repo/.worktrees/pay-1/${repo}`, branch: "wip/pay-1", source: "main" } })),
   ]);
   return s;
 }

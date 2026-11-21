@@ -42,15 +42,15 @@ describe("thread.new", () => {
   });
 
   test("--task names the thread directory: no git worktree, a thread.dir.ensure effect", () => {
-    const r = run(stateOf(INIT), { cmd: "thread.new", title: "Fix login", type: "bug", task: "kyc-1" });
+    const r = run(stateOf(INIT), { cmd: "thread.new", title: "Fix login", type: "bug", task: "pay-1" });
     if (!r.ok) throw new Error(r.error);
-    expect(r.result).toEqual({ thread: "001", task: "kyc-1", dir: "/repo/.worktrees/kyc-1" });
+    expect(r.result).toEqual({ thread: "001", task: "pay-1", dir: "/repo/.worktrees/pay-1" });
     expect(r.effects).toEqual([
-      { kind: "thread.dir.ensure", thread: { id: "001", title: "Fix login", slug: "fix-login", task: "kyc-1", dir: "/repo/.worktrees/kyc-1", type: "bug" } },
+      { kind: "thread.dir.ensure", thread: { id: "001", title: "Fix login", slug: "fix-login", task: "pay-1", dir: "/repo/.worktrees/pay-1", type: "bug" } },
     ]);
     expect(r.effects.some((e) => e.kind === "git.worktree.add")).toBe(false);
     const payload = (r.events[0] as { payload: Record<string, unknown> }).payload;
-    expect(payload).toMatchObject({ task: "kyc-1", dir: "/repo/.worktrees/kyc-1" });
+    expect(payload).toMatchObject({ task: "pay-1", dir: "/repo/.worktrees/pay-1" });
     expect(payload).not.toHaveProperty("worktree");
     expect(payload).not.toHaveProperty("branch");
   });
@@ -64,8 +64,8 @@ describe("thread.new", () => {
 
   test("an explicit task name in use is rejected", () => {
     const s = stateOf(INIT);
-    exec(s, { cmd: "thread.new", title: "Fix login", type: "bug", task: "kyc-1" });
-    expect(errorOf(run(s, { cmd: "thread.new", title: "Other", type: "bug", task: "kyc-1" }))).toBe("task kyc-1 is already used by thread 001");
+    exec(s, { cmd: "thread.new", title: "Fix login", type: "bug", task: "pay-1" });
+    expect(errorOf(run(s, { cmd: "thread.new", title: "Other", type: "bug", task: "pay-1" }))).toBe("task pay-1 is already used by thread 001");
   });
 
   test("a derived task name that is taken gets the first free numeric suffix", () => {
@@ -100,7 +100,7 @@ describe("thread.new", () => {
   });
 
   test("an invalid task name is rejected", () => {
-    for (const task of ["Kyc", "-x", "a/b", "", "x y"]) {
+    for (const task of ["Pay", "-x", "a/b", "", "x y"]) {
       expect(errorOf(run(stateOf(INIT), { cmd: "thread.new", title: "X", type: "bug", task }))).toBe("task name must match ^[a-z0-9][a-z0-9._-]*$");
     }
   });

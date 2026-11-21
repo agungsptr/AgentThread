@@ -52,11 +52,11 @@ describe("claude adapter", () => {
   });
 
   test("§13: a task-thread worker may write its own ticket file only; a ticket without a doc gets no write rule", () => {
-    const tools = allowedTools("worker", DEFAULT_CONFIG, "/ws", { legacy: false, doc: ".docs/shared/issues/kyc/02-api.md" });
-    expect(tools).toContain("Edit(//ws/.docs/shared/issues/kyc/02-api.md)");
-    expect(tools).toContain("Write(//ws/.docs/shared/issues/kyc/02-api.md)");
+    const tools = allowedTools("worker", DEFAULT_CONFIG, "/ws", { legacy: false, doc: ".docs/shared/issues/pay/02-api.md" });
+    expect(tools).toContain("Edit(//ws/.docs/shared/issues/pay/02-api.md)");
+    expect(tools).toContain("Write(//ws/.docs/shared/issues/pay/02-api.md)");
     expect(tools.filter((t) => t.startsWith("Edit(") || t.startsWith("Write("))).toHaveLength(2);
-    expect(tools).toContain("Read(//ws/.docs/shared/issues/kyc/02-api.md)");
+    expect(tools).toContain("Read(//ws/.docs/shared/issues/pay/02-api.md)");
     expect(tools.join(",")).not.toContain(".docs/**");
     expect(tools.some((t) => t.includes("git switch") || t.includes("merge --squash") || t.includes("git -C"))).toBe(false);
     const none = allowedTools("worker", DEFAULT_CONFIG, "/ws", { legacy: false });

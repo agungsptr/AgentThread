@@ -114,7 +114,7 @@
 - **Single-repo projects:** a single-repo project also uses the new layout for new threads, `.worktrees/<task>/<repo>`, where the repo name is the root folder's name (§13.2, my call).
 
 - [ ] **Step 1: Write the failing tests:**
-  - `thread new "Fix login" --task kyc-1` gives `dir` ending `.worktrees/kyc-1`, no `git.worktree.add` effect, and a `thread.dir.ensure` effect;
+  - `thread new "Fix login" --task pay-1` gives `dir` ending `.worktrees/pay-1`, no `git.worktree.add` effect, and a `thread.dir.ensure` effect;
   - a duplicate task is rejected with the exact message;
   - a bad name is rejected with the exact message;
   - the default task is the slug;

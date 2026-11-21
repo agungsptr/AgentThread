@@ -94,8 +94,8 @@ Before a release, the user runs it once with consent.
 
 **Rows:**
 - **`ws-smoke-worktrees`** (no model calls, `--no-manager`):
-  - The scenario runs, as the coordinator would: `agt thread create … --task kyc-1`, then `agt worktree add <id> api` and `web`.
-  - It checks `.worktrees/kyc-1/api` and `/web` on `wip/kyc-1`, the instruction files and the generated skills hidden from `git status`, and brief.md with both `### api` and `### web`.
+  - The scenario runs, as the coordinator would: `agt thread create … --task pay-1`, then `agt worktree add <id> api` and `web`.
+  - It checks `.worktrees/pay-1/api` and `/web` on `wip/pay-1`, the instruction files and the generated skills hidden from `git status`, and brief.md with both `### api` and `### web`.
 - **`ws-happy-claude-code`, `ws-happy-worker-<agent>`.** Main gets the task text plus "create the thread without asking me to confirm". The checks, from the event log and git:
   - `worktree.added` for both repos;
   - at least 2 tickets, each with `repo` and `files`;

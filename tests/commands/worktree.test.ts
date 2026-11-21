@@ -40,9 +40,9 @@ describe("worktree.add in the handler", () => {
   const config = ConfigSchema.parse({ workspace: { repos: { api: { path: "api" }, web: { path: "web", source_branch: "develop" } } } });
   const run = (state: State, cmd: unknown, actor: Actor = USER): HandleResult => handle(state, CommandSchema.parse(cmd), actor, { root: "/repo", config });
   const errorOf = (r: HandleResult) => (r.ok ? "accepted" : r.error);
-  const base = () => stateOf(INIT, taskThreadCreated("001", "kyc-1"), threadCreated("002"));
+  const base = () => stateOf(INIT, taskThreadCreated("001", "pay-1"), threadCreated("002"));
 
-  const REQ = { repo: "api", path: "/repo/.worktrees/kyc-1/api", branch: "wip/kyc-1", source: "main" };
+  const REQ = { repo: "api", path: "/repo/.worktrees/pay-1/api", branch: "wip/pay-1", source: "main" };
   /** Runs a command and applies its events, like the daemon does. */
   const exec = (state: State, cmd: unknown, actor: Actor = USER): HandleResult => {
     const r = run(state, cmd, actor);
@@ -52,7 +52,7 @@ describe("worktree.add in the handler", () => {
   const withCoordinator = () =>
     stateOf(
       INIT,
-      taskThreadCreated("001", "kyc-1"),
+      taskThreadCreated("001", "pay-1"),
       { type: "session.created", thread: "001", payload: { session: "c1", role: "coordinator", agent: "claude-code", name: "coord" } },
       { type: "session.attached", thread: "001", payload: { session: "c1", pane: "p1" } },
     );
@@ -84,7 +84,7 @@ describe("worktree.add in the handler", () => {
     if (!r.ok) throw new Error(r.error);
     expect(r.events).toEqual([
       { type: "worktree.added", thread: "001", payload: REQ },
-      { type: "notice.queued", thread: "001", payload: { session: "c1", text: "Worktree for api is ready at /repo/.worktrees/kyc-1/api on wip/kyc-1." } },
+      { type: "notice.queued", thread: "001", payload: { session: "c1", text: "Worktree for api is ready at /repo/.worktrees/pay-1/api on wip/pay-1." } },
     ]);
     expect(s.threads.get("001")!.worktrees).toEqual({ api: { path: REQ.path, branch: REQ.branch, source: REQ.source } });
     expect(s.threads.get("001")!.worktreeRequests).toEqual({});
@@ -114,7 +114,7 @@ describe("worktree.add in the handler", () => {
   test("the repo's source_branch is the default source", () => {
     const r = run(base(), { cmd: "worktree.add", thread: "001", repo: "web" });
     if (!r.ok) throw new Error(r.error);
-    expect(r.effects[0]).toMatchObject({ source: "develop", branch: "wip/kyc-1", path: "/repo/.worktrees/kyc-1/web" });
+    expect(r.effects[0]).toMatchObject({ source: "develop", branch: "wip/pay-1", path: "/repo/.worktrees/pay-1/web" });
   });
 
   test("rejects an unknown repo", () => {
@@ -122,7 +122,7 @@ describe("worktree.add in the handler", () => {
   });
 
   test("rejects a done thread", () => {
-    const s = stateOf(INIT, taskThreadCreated("001", "kyc-1", { status: "done" }));
+    const s = stateOf(INIT, taskThreadCreated("001", "pay-1", { status: "done" }));
     expect(errorOf(run(s, { cmd: "worktree.add", thread: "001", repo: "api", from: "main" }))).toBe("thread 001 is done");
   });
 
@@ -132,9 +132,9 @@ describe("worktree.add in the handler", () => {
 
   test("rejects a repo already added", () => {
     const s = base();
-    const added = { type: "worktree.added", thread: "001", payload: { repo: "api", path: "/repo/.worktrees/kyc-1/api", branch: "wip/kyc-1", source: "main" } } as const;
-    const st = project([...[INIT, taskThreadCreated("001", "kyc-1"), added].map((b, i) => ({ ...b, seq: i + 1, ts: "2026-10-09T10:00:00.000Z", actor: USER }) as StoredEvent)]);
-    expect(st.threads.get("001")!.worktrees).toEqual({ api: { path: "/repo/.worktrees/kyc-1/api", branch: "wip/kyc-1", source: "main" } });
+    const added = { type: "worktree.added", thread: "001", payload: { repo: "api", path: "/repo/.worktrees/pay-1/api", branch: "wip/pay-1", source: "main" } } as const;
+    const st = project([...[INIT, taskThreadCreated("001", "pay-1"), added].map((b, i) => ({ ...b, seq: i + 1, ts: "2026-10-09T10:00:00.000Z", actor: USER }) as StoredEvent)]);
+    expect(st.threads.get("001")!.worktrees).toEqual({ api: { path: "/repo/.worktrees/pay-1/api", branch: "wip/pay-1", source: "main" } });
     expect(errorOf(run(st, { cmd: "worktree.add", thread: "001", repo: "api", from: "main" }))).toBe("thread 001 already has a worktree for api");
     expect(errorOf(run(s, { cmd: "worktree.add", thread: "001", repo: "api", from: "main" }))).toBe("accepted");
   });
@@ -182,30 +182,30 @@ describe("agt worktree add through the daemon", () => {
       throw new Error("no worktree outcome");
     };
     if (!project(await events()).threads.has("001")) {
-      expect(await cmd({ cmd: "thread.new", title: "KYC", type: "feature", task: "kyc-1" })).toMatchObject({ ok: true });
+      expect(await cmd({ cmd: "thread.new", title: "PAY", type: "feature", task: "pay-1" })).toMatchObject({ ok: true });
     }
     return { cmd, events, outcome };
   }
 
   const nothingLeft = (root: string) => {
-    expect(existsSync(join(root, ".worktrees", "kyc-1", "api"))).toBe(false);
-    expect(sh(join(root, "api"), "rev-parse", "--verify", "--quiet", "refs/heads/wip/kyc-1").ok).toBe(false);
-    expect(sh(join(root, "api"), "worktree", "list").out).not.toContain("kyc-1");
+    expect(existsSync(join(root, ".worktrees", "pay-1", "api"))).toBe(false);
+    expect(sh(join(root, "api"), "rev-parse", "--verify", "--quiet", "refs/heads/wip/pay-1").ok).toBe(false);
+    expect(sh(join(root, "api"), "worktree", "list").out).not.toContain("pay-1");
   };
 
   test("creates .worktrees/<task>/<repo> on wip/<task> from the source; the events and the projection list it", async () => {
     const root = workspace();
     const { cmd, events, outcome } = await start(root);
     const r = await cmd({ cmd: "worktree.add", thread: "001", repo: "api", from: "main" }, COORD);
-    const path = join(root, ".worktrees", "kyc-1", "api");
-    const payload = { repo: "api", path, branch: "wip/kyc-1", source: "main" };
+    const path = join(root, ".worktrees", "pay-1", "api");
+    const payload = { repo: "api", path, branch: "wip/pay-1", source: "main" };
     expect(r).toEqual({ ok: true, result: { ...payload, requested: true } });
     expect(await outcome()).toMatchObject({ type: "worktree.added", thread: "001", payload });
-    expect(sh(path, "rev-parse", "--abbrev-ref", "HEAD").out).toBe("wip/kyc-1");
+    expect(sh(path, "rev-parse", "--abbrev-ref", "HEAD").out).toBe("wip/pay-1");
     expect(sh(path, "rev-parse", "HEAD").out).toBe(sh(join(root, "api"), "rev-parse", "main").out);
     const all = await events();
     expect(all.filter((e) => e.type === "worktree.requested").map((e) => e.payload)).toEqual([payload]);
-    expect(project(all).threads.get("001")!.worktrees).toEqual({ api: { path, branch: "wip/kyc-1", source: "main" } });
+    expect(project(all).threads.get("001")!.worktrees).toEqual({ api: { path, branch: "wip/pay-1", source: "main" } });
     expect(existsSync(join(path, "AGENTS.md"))).toBe(true);
     expect(existsSync(join(path, "CLAUDE.md"))).toBe(true);
     expect(sh(path, "status", "--porcelain").out).toBe("");
@@ -249,9 +249,9 @@ describe("agt worktree add through the daemon", () => {
   test("a request still pending when the daemon starts is marked failed, so it can be requested again", async () => {
     const root = workspace();
     const store = new EventStore(paths(root).db);
-    const path = join(root, ".worktrees", "kyc-1", "api");
-    store.append([taskThreadCreated("001", "kyc-1", { dir: join(root, ".worktrees", "kyc-1") })], USER);
-    store.append([{ type: "worktree.requested", thread: "001", payload: { repo: "api", path, branch: "wip/kyc-1", source: "main" } }], { ...COORD, via: "command" });
+    const path = join(root, ".worktrees", "pay-1", "api");
+    store.append([taskThreadCreated("001", "pay-1", { dir: join(root, ".worktrees", "pay-1") })], USER);
+    store.append([{ type: "worktree.requested", thread: "001", payload: { repo: "api", path, branch: "wip/pay-1", source: "main" } }], { ...COORD, via: "command" });
     store.close();
     const { cmd, events } = await start(root);
     const failed = (await events()).filter((e) => e.type === "worktree.failed");
@@ -285,22 +285,22 @@ describe("I2: a finished but unreported worktree, and stopping the daemon", () =
   test("re-requesting after a finished but unreported job adopts the worktree: AGENTS.md and the guard are rewritten", async () => {
     // a setup that would fail if it ran: adoption must skip it
     const root = workspace(["workspace:", "  worktree_setup: exit 1", ""].join("\n"));
-    const dir = join(root, ".worktrees", "kyc-1");
+    const dir = join(root, ".worktrees", "pay-1");
     const path = join(dir, "api");
     const store = new EventStore(paths(root).db);
-    store.append([taskThreadCreated("001", "kyc-1", { dir })], USER);
-    store.append([{ type: "worktree.requested", thread: "001", payload: { repo: "api", path, branch: "wip/kyc-1", source: "main" } }], { ...COORD, via: "command" });
+    store.append([taskThreadCreated("001", "pay-1", { dir })], USER);
+    store.append([{ type: "worktree.requested", thread: "001", payload: { repo: "api", path, branch: "wip/pay-1", source: "main" } }], { ...COORD, via: "command" });
     store.close();
     // the previous daemon's job finished the worktree but never reported it
     mkdirSync(dir, { recursive: true });
-    expect(sh(join(root, "api"), "worktree", "add", "-q", "-b", "wip/kyc-1", path, "main").ok).toBe(true);
+    expect(sh(join(root, "api"), "worktree", "add", "-q", "-b", "wip/pay-1", path, "main").ok).toBe(true);
     daemon = await startDaemon(root, { log: () => {} });
     expect((await events(root)).filter((e) => e.type === "worktree.failed").length).toBe(1);
     const r = await request(paths(root).socket, { op: "command", command: { cmd: "worktree.add", thread: "001", repo: "api", from: "main" }, actor: COORD });
     expect(r).toMatchObject({ ok: true });
     for (let i = 0; i < 200 && !(await events(root)).some((e) => e.type === "worktree.added" || e.type === "worktree.failed" && (e.payload as { reason: string }).reason !== "the daemon restarted while the worktree was being created; request it again (agt adopts it if it was finished)"); i++) await Bun.sleep(50);
-    expect((await events(root)).filter((e) => e.type === "worktree.added").map((e) => e.payload)).toEqual([{ repo: "api", path, branch: "wip/kyc-1", source: "main" }]);
-    expect(sh(path, "rev-parse", "--abbrev-ref", "HEAD").out).toBe("wip/kyc-1");
+    expect((await events(root)).filter((e) => e.type === "worktree.added").map((e) => e.payload)).toEqual([{ repo: "api", path, branch: "wip/pay-1", source: "main" }]);
+    expect(sh(path, "rev-parse", "--abbrev-ref", "HEAD").out).toBe("wip/pay-1");
     expect(existsSync(join(path, "AGENTS.md"))).toBe(true);
     expect(sh(path, "config", "--worktree", "--get", "core.hooksPath").out).toBe(join(root, ".agentthread", "hooks"));
   });
@@ -308,7 +308,7 @@ describe("I2: a finished but unreported worktree, and stopping the daemon", () =
   test("stop() kills a running setup group: nothing it started acts afterwards", async () => {
     const root = workspace(["workspace:", "  worktree_setup: (sleep 1; touch {root}/marker) & sleep 5", ""].join("\n"));
     daemon = await startDaemon(root, { log: () => {} });
-    expect(await request(paths(root).socket, { op: "command", command: { cmd: "thread.new", title: "KYC", type: "feature", task: "kyc-1" }, actor: USER })).toMatchObject({ ok: true });
+    expect(await request(paths(root).socket, { op: "command", command: { cmd: "thread.new", title: "PAY", type: "feature", task: "pay-1" }, actor: USER })).toMatchObject({ ok: true });
     expect(await request(paths(root).socket, { op: "command", command: { cmd: "worktree.add", thread: "001", repo: "api", from: "main" }, actor: COORD })).toMatchObject({ ok: true });
     await Bun.sleep(300);
     const t0 = Date.now();
@@ -322,13 +322,13 @@ describe("I2: a finished but unreported worktree, and stopping the daemon", () =
 
 test("the coordinator of a thread-directory thread is told to create worktrees; a legacy coordinator is not", () => {
   const rule = "- Ask the user which source branch to start from, then create a worktree for each repo the task touches: agt worktree add <thread> <repo> --from <branch>. Never move or rename a worktree.";
-  const s = stateOf(INIT, taskThreadCreated("001", "kyc-1"), threadCreated("002"));
+  const s = stateOf(INIT, taskThreadCreated("001", "pay-1"), threadCreated("002"));
   expect(systemPrompt({ root: "/repo", role: "coordinator", thread: s.threads.get("001")! }).split("\n")).toContain(rule);
   expect(systemPrompt({ root: "/repo", role: "coordinator", thread: s.threads.get("002")! })).not.toContain("agt worktree add");
 });
 
 test("the coordinator prompt names --repo/--file for a task thread's tickets and --scope for a legacy thread's", () => {
-  const s = stateOf(INIT, taskThreadCreated("001", "kyc-1"), threadCreated("002"));
+  const s = stateOf(INIT, taskThreadCreated("001", "pay-1"), threadCreated("002"));
   const task = systemPrompt({ root: "/repo", role: "coordinator", thread: s.threads.get("001")! });
   expect(task).toContain('agt ticket add 001 "<title>" --repo <r> --file <path>... [--doc <path>].');
   expect(task).not.toContain("--scope");

@@ -102,7 +102,7 @@ tests/...                       # mirrors src/
 - [ ] **Step 1: Initialize git and the Bun project**
 
 ```bash
-cd ~/projects/AgentThread
+cd <repo>
 git init -b main
 ```
 

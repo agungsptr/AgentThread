@@ -87,10 +87,10 @@ test("I1: a claude worker of a task thread, not autonomous, may git add and git 
 // OpenCode 2 TUIs attach to a shared background service by default, whose own config wins over the TUI's
 // OPENCODE_CONFIG_CONTENT (seen in the release e2e: the model setting was ignored); --standalone runs a private server.
 test("opencode: --auto and config content with model variant and permissions", () => {
-  const { args, env } = adapterFor("opencode").launch({ ...base, run: { agent: "opencode", model: "myrouter/gemini-flash", effort: "high" } });
+  const { args, env } = adapterFor("opencode").launch({ ...base, run: { agent: "opencode", model: "myrouter/gemini-flash-3.8", effort: "high" } });
   expect(args).toEqual(["--standalone", "--auto"]);
   expect(JSON.parse(env.OPENCODE_CONFIG_CONTENT!)).toEqual({
-    model: "myrouter/gemini-flash#high",
+    model: "myrouter/gemini-flash-3.8#high",
     permission: { "*": "allow", external_directory: "allow", doom_loop: "allow", bash: { "*": "allow", "git push*": "deny" } },
   });
   const none = adapterFor("opencode").launch({ ...base, run: { agent: "opencode" } });

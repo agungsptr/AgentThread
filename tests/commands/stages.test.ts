@@ -19,7 +19,7 @@ const exec = (state: State, cmd: unknown, actor: Actor = COORD): HandleResult =>
   return r;
 };
 const errorOf = (r: HandleResult) => (r.ok ? "accepted" : r.error);
-const base = () => stateOf(INIT, taskThreadCreated("001", "kyc-1"));
+const base = () => stateOf(INIT, taskThreadCreated("001", "pay-1"));
 const stage = (n: number, state: string, extra: Record<string, unknown> = {}) => ({ cmd: "stage", thread: "001", stage: n, state, ...extra });
 const thread = (s: State) => s.threads.get("001")!;
 

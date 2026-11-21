@@ -39,7 +39,7 @@ const exec = (state: State, cmd: unknown, actor: Actor = COORD, config: Config =
 const errorOf = (r: HandleResult) => (r.ok ? "accepted" : r.error);
 const thread = (s: State) => s.threads.get("001")!;
 const world = (status: "open" | "in_progress" = "in_progress"): State => {
-  const s = stateOf(INIT, taskThreadCreated("001", "kyc-1", { status, title: "Login" }));
+  const s = stateOf(INIT, taskThreadCreated("001", "pay-1", { status, title: "Login" }));
   apply(s, [
     { type: "session.created", thread: "001", payload: { session: C, role: "coordinator", agent: "claude-code", name: "c" } },
     { type: "session.attached", thread: "001", payload: { session: C, pane: "w1:p2" } },

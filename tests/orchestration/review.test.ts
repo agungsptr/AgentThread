@@ -52,7 +52,7 @@ const signal = (s: State, session: string, type: "agent.idle" | "session.active"
 
 const initial = (maxWorkers: number, legacy: boolean): EventBody[] => [
   INIT,
-  legacy ? threadCreated("001", { status: "in_progress", maxWorkers }) : taskThreadCreated("001", "kyc-1", { status: "in_progress", maxWorkers }),
+  legacy ? threadCreated("001", { status: "in_progress", maxWorkers }) : taskThreadCreated("001", "pay-1", { status: "in_progress", maxWorkers }),
   { type: "thread.tab_opened", thread: "001", payload: { tab: "w1:t2", rootPane: "w1:p2" } },
 ];
 
@@ -63,7 +63,7 @@ function world(maxWorkers = 5, legacy = false): State {
   log = [];
   const s = stateOf(...initial(maxWorkers, legacy));
   apply(s, [
-    { type: "worktree.added", thread: "001", payload: { repo: "api", path: "/repo/.worktrees/kyc-1/api", branch: "wip/kyc-1", source: "main" } },
+    { type: "worktree.added", thread: "001", payload: { repo: "api", path: "/repo/.worktrees/pay-1/api", branch: "wip/pay-1", source: "main" } },
     { type: "session.created", thread: "001", payload: { session: C, role: "coordinator", agent: "claude-code", name: "c" } },
     { type: "session.attached", thread: "001", payload: { session: C, pane: "w1:p2" } },
     { type: "session.started", thread: "001", payload: { session: C } },
@@ -238,7 +238,7 @@ describe("ticket return", () => {
     expect(fresh.id).not.toBe(w.id);
     expect(isLive(fresh)).toBe(true);
     const spawn = effects.find((e) => e.kind === "agent.spawn");
-    expect(spawn).toMatchObject({ session: fresh.id, ticket: "T1", cwd: "/repo/.worktrees/kyc-1/api", notice: RETURN });
+    expect(spawn).toMatchObject({ session: fresh.id, ticket: "T1", cwd: "/repo/.worktrees/pay-1/api", notice: RETURN });
     expect(ticketOf(s, "T1")).toMatchObject({ status: "in_progress", assignee: fresh.id });
     // its bootstrap is the normal worker bootstrap followed by the notice
     const thread = s.threads.get("001")!;
@@ -272,7 +272,7 @@ describe("ticket return", () => {
       const fresh = workerOf(s, "T1");
       expect(fresh.id).not.toBe(w.id);
       expect(ticketOf(s, "T1")).toMatchObject({ status: "in_progress", assignee: fresh.id });
-      expect(effects.find((e) => e.kind === "agent.spawn")).toMatchObject({ session: fresh.id, cwd: "/repo/.worktrees/kyc-1/api", notice: RETURN });
+      expect(effects.find((e) => e.kind === "agent.spawn")).toMatchObject({ session: fresh.id, cwd: "/repo/.worktrees/pay-1/api", notice: RETURN });
     });
   }
 
@@ -487,7 +487,7 @@ describe("a worker that exits before claiming its ticket", () => {
       expect(w1.id).not.toBe(w0.id);
       expect(isLive(w1)).toBe(true);
       expect(spawnsFor("T1")).toBe(1);
-      expect(effects.find((e) => e.kind === "agent.spawn")).toMatchObject({ session: w1.id, ticket: "T1", cwd: "/repo/.worktrees/kyc-1/api" });
+      expect(effects.find((e) => e.kind === "agent.spawn")).toMatchObject({ session: w1.id, ticket: "T1", cwd: "/repo/.worktrees/pay-1/api" });
       // one notice per exit (a failure is not reported twice)
       expect(coordNotices(s)).toEqual([respawn(how)]);
       expect(ticketOf(s, "T1").status).toBe("open");

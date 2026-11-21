@@ -10,7 +10,7 @@ import { INIT, stateOf, taskThreadCreated, threadCreated } from "../helpers.ts";
 const taskState = () =>
   stateOf(
     INIT,
-    taskThreadCreated("001", "kyc-1"),
+    taskThreadCreated("001", "pay-1"),
     { type: "ticket.created", thread: "001", payload: { ticket: "T1", title: "Lock", scope: ["src/a.ts", "src/b.ts"], repo: "api", files: ["src/a.ts", "src/b.ts"], doc: "d.md" } },
   );
 
