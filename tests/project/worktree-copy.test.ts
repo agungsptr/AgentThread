@@ -94,3 +94,23 @@ test("lockfilesDiffer compares lockfile content", async () => {
   writeFileSync(join(b, "yarn.lock"), "2");
   expect(await lockfilesDiffer(a, b)).toEqual(["yarn.lock"]);
 });
+
+test("a re-run never clobbers a worker's edit of a skip-worktree file", async () => {
+  const { main, wt } = pair();
+  writeFileSync(join(main, ".env"), "TRACKED=local\n");
+  await copyIntoWorktree(main, wt, [".env"]);
+  writeFileSync(join(wt, ".env"), "worker edit\n");
+  const r = await copyIntoWorktree(main, wt, ["./.env"]);
+  expect(readFileSync(join(wt, ".env"), "utf8")).toBe("worker edit\n");
+  expect(r.copied).toEqual([]);
+  expect(r.notes[0]).toContain("already exists");
+});
+
+test("a directory over the file cap is refused", async () => {
+  const { main, wt } = pair();
+  mkdirSync(join(main, "big"));
+  for (let i = 0; i < 5001; i++) writeFileSync(join(main, "big", `f${i}`), "");
+  const r = await copyIntoWorktree(main, wt, ["big"]);
+  expect(r.copied).toEqual([]);
+  expect(r.notes[0]).toContain("refused (more than 5000 files");
+});

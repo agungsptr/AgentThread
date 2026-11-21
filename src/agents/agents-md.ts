@@ -49,6 +49,7 @@ export function agentsMd(o: { root: string; thread: ThreadRef; config?: Config }
     "## Worker",
     "",
     "Your ticket id (<T> below) is in your first prompt and in $AGT_TICKET.",
+    ...(t.dir === undefined ? [] : ["Tracked files agt copied from the main checkout (a local .env) are marked skip-worktree: they never show in git status. Only if your ticket really changes such a file, run git update-index --no-skip-worktree <file> for that file."]),
     ...worker,
     "",
   ].join("\n");

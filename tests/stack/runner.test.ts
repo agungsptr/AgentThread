@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import { computeStamp } from "../../src/stack/stamp.ts";
@@ -334,4 +334,27 @@ test("per-service env reaches start and migrate, and its values are never printe
   expect(readFileSync(join(root, "start-env.txt"), "utf8").trim()).toBe("s3cr3t-value");
   expect(readFileSync(join(root, "mig-env.txt"), "utf8").trim()).toBe("s3cr3t-value");
   expect(lines.join("\n")).not.toContain("s3cr3t-value");
+});
+
+test("install never runs into a linked node_modules: skipped when the lockfile matches, unlinked and installed when it differs", async () => {
+  for (const differ of [false, true]) {
+    const root = twoRepoFolder();
+    const pa = await freePort();
+    mkdirSync(join(root, "a/node_modules/p"), { recursive: true });
+    writeFileSync(join(root, "a/yarn.lock"), "1");
+    const wt = join(root, ".worktrees", "t1", "a");
+    mkdirSync(wt, { recursive: true });
+    Bun.spawnSync(["git", "-C", wt, "init", "-q", "-b", "wip/t1"]);
+    writeFileSync(join(wt, "yarn.lock"), differ ? "2" : "1");
+    symlinkSync(join(root, "a/node_modules"), join(wt, "node_modules"));
+    const config = cfg({ a: { path: "a", install: "mkdir -p node_modules && echo i > node_modules/installed" } as never }, { api: svc({ repo: "a", start: serverCmd(pa), port: pa }) });
+    guard(root, config);
+    const lines: string[] = [];
+    await startStack({ root, config, ...quiet, task: "t1", out: (l) => lines.push(l) });
+    expect(existsSync(join(root, "a/node_modules/installed"))).toBe(false);
+    expect(readdirSync(join(root, "a/node_modules"))).toEqual(["p"]);
+    expect(existsSync(join(wt, "node_modules/installed"))).toBe(differ);
+    expect(lstatSync(join(wt, "node_modules")).isSymbolicLink()).toBe(false === differ ? true : false);
+    await stopStack({ root, config, ...quiet });
+  }
 });

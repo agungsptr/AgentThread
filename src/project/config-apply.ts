@@ -11,14 +11,24 @@ type Obj = Record<string, unknown>;
 
 const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
 
+/** Service env values may be secrets: shown as *** in `config show` and in the apply diff (keys stay). */
+export function redactEnv(v: unknown): unknown {
+  if (!isObj(v)) return v;
+  const ws = v.workspace;
+  if (!isObj(ws) || !isObj(ws.services)) return v;
+  const services = ws.services;
+  const redacted = Object.fromEntries(Object.entries(services).map(([n, svc]) => [n, isObj(svc) && isObj(svc.env) ? { ...svc, env: Object.fromEntries(Object.keys(svc.env).map((k) => [k, "***"])) } : svc]));
+  return { ...v, workspace: { ...ws, services: redacted } };
+}
+
 /** `agt config show`: the effective config and the files its layers came from. */
 export function showConfig(root: string, env: Env, json: boolean): string {
   const p = configPaths(root, env);
   const config = loadConfig(root, env);
   const sources = { user: { path: p.user, exists: existsSync(p.user) }, project: { path: p.project, exists: existsSync(p.project) } };
-  if (json) return JSON.stringify({ config, sources }, null, 2);
+  if (json) return JSON.stringify({ config: redactEnv(config), sources }, null, 2);
   const note = (n: string, s: { path: string; exists: boolean }) => `# ${n}: ${s.path}${s.exists ? "" : " (not present)"}`;
-  return `${note("user config", sources.user)}\n${note("project config", sources.project)}\n${stringify(config).trimEnd()}`;
+  return `${note("user config", sources.user)}\n${note("project config", sources.project)}\n${stringify(redactEnv(config)).trimEnd()}`;
 }
 
 /**
@@ -70,7 +80,9 @@ export function diffConfig(before: unknown, after: unknown): string[] {
     else if (show(a.get(k)) !== show(v)) lines.push(`~ ${k}: ${show(a.get(k))} -> ${show(v)}`);
   }
   for (const [k, v] of a) if (!b.has(k)) lines.push(`- ${k}: ${show(v)}`);
-  return lines.sort((x, y) => x.slice(2).localeCompare(y.slice(2)));
+  // A service env value may be a secret: the line keeps the key and the kind of change, never the value.
+  const masked = lines.map((l) => (/^[+~-] workspace\.services\.[^.]+\.env\./.test(l) ? `${l.slice(0, l.indexOf(": "))}: ***` : l));
+  return masked.sort((x, y) => x.slice(2).localeCompare(y.slice(2)));
 }
 
 /** Drops null keys from objects (not arrays), recursively. */

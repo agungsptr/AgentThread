@@ -21,7 +21,7 @@ AGT ?= agt
 q = '$(subst ','\\'',$(1))'
 task_flag = $(if $(TASK),--task $(call q,$(TASK)))
 only_flag = $(if $(ONLY),--only $(call q,$(ONLY)))
-migrate_flag = $(if $(MIGRATE),--migrate)
+migrate_flag = $(if $(filter 1 true yes,$(MIGRATE)),--migrate)
 
 .PHONY: help start stop restart status logs wt-new
 

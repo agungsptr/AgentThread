@@ -68,6 +68,11 @@ describe("agentsMd", () => {
   const T = { id: "002", title: "Fix race", slug: "fix-race", worktree: "/repo/.worktrees/002-fix-race" };
   const DIR = "/repo/.agentthread/threads/002-fix-race";
 
+  test("a thread-dir AGENTS.md tells workers about skip-worktree copies; a legacy one is unchanged", () => {
+    expect(agentsMd({ root: "/repo", thread: { ...T, dir: DIR } as never })).toContain("git update-index --no-skip-worktree <file>");
+    expect(agentsMd({ root: "/repo", thread: T })).not.toContain("skip-worktree <file>");
+  });
+
   test("has the common, working-memory, coordinator and worker sections", () => {
     const s = agentsMd({ root: "/repo", thread: T });
     expect(s.startsWith("# AgentThread\n")).toBe(true);

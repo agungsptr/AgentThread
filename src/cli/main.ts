@@ -19,7 +19,7 @@ import { HerdrCli, shellQuote } from "../herdr/bridge.ts";
 import { refreshRootSkill } from "../agents/skill.ts";
 import { initCommand, setupIfNeeded, setupOnTty } from "../project/setup.ts";
 import { paths } from "../project/paths.ts";
-import { applyConfig, showConfig, workspaceWarnings } from "../project/config-apply.ts";
+import { applyConfig, redactEnv, showConfig, workspaceWarnings } from "../project/config-apply.ts";
 import { findRoot } from "../project/root.ts";
 import { project, type State } from "../state/projection.ts";
 import { USAGE } from "./usage.ts";
@@ -149,7 +149,7 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
     }
     case "config": {
       if (sub === undefined) {
-        console.log(stringify(loadConfig(findRoot(cwd, env), env)).trimEnd());
+        console.log(stringify(redactEnv(loadConfig(findRoot(cwd, env), env))).trimEnd());
         return 0;
       }
       if (sub === "show") {

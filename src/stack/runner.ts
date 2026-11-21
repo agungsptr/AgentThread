@@ -1,10 +1,11 @@
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { realpathSync } from "node:fs";
 import type { Config } from "../config/config.ts";
 import { installCommand } from "../project/prefill.ts";
 import { checkHealth, healthTarget, listeners, pidAlive, portHeld, procInfo, sleepMs, waitHealthy } from "./health.ts";
+import { guardLinkedInstall } from "../project/worktree-copy.ts";
 import { computeStamp, readStamp, writeStamp } from "./stamp.ts";
 import { checkOnly, MAIN, readTask, resolveTarget, runDir, startOrder, writeTask, type ResolvedService } from "./target.ts";
 
@@ -213,7 +214,10 @@ export async function startStack(o: StartOptions): Promise<ServiceResult[]> {
     const stamp = computeStamp(r.repoDir, r.cwd);
     if (readStamp(f.stamp) !== stamp) {
       const cmd = installCommand(r.repoDir, o.config.workspace.repos?.[s.repo]?.install);
-      if (cmd && !installed.has(r.repoDir)) {
+      const mainDir = resolve(o.root, o.config.workspace.repos?.[s.repo]?.path ?? s.repo);
+      const guard = cmd && r.repoDir !== mainDir ? await guardLinkedInstall(mainDir, r.repoDir) : { skip: false };
+      if ("note" in guard && guard.note) out(`${name}: ${guard.note}`);
+      if (cmd && !guard.skip && !installed.has(r.repoDir)) {
         out(`${name}: installing (${cmd})`);
         if (!runLogged(cmd, r.repoDir, f.log)) {
           fail(`install failed (see agt stack logs ${name})`);

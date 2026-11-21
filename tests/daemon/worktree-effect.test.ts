@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, unlinkSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConfigSchema, type Config } from "../../src/config/config.ts";
@@ -270,6 +270,22 @@ describe("the built-in copy and install step", () => {
     expect(existsSync(join(diff.path, "node_modules"))).toBe(false);
     expect(readFileSync(join(diff.root, ".worktrees/kyc-1/installs.log"), "utf8")).toBe("run\n");
     expect(diff.logs.some((l) => l.includes("link node_modules: not linked") && l.includes("yarn.lock"))).toBe(true);
+  });
+
+  test("a re-run after the lockfile changed unlinks node_modules and installs, leaving the main checkout's untouched", async () => {
+    const s = setup(cfg({ link: ["node_modules"], install: "mkdir -p node_modules && echo i > node_modules/installed" }));
+    mkdirSync(join(s.api, "node_modules/p"), { recursive: true });
+    writeFileSync(join(s.api, ".gitignore"), "node_modules\n");
+    expect((await s.run(s.effect)).ok).toBe(true);
+    expect(lstatSync(join(s.path, "node_modules")).isSymbolicLink()).toBe(true);
+    expect(existsSync(join(s.api, "node_modules/installed"))).toBe(false);
+    // the worktree is adopted again without the ready marker, with a lockfile that now differs
+    unlinkSync(join(git(s.path, "rev-parse", "--absolute-git-dir").out, "agt-ready"));
+    writeFileSync(join(s.path, "yarn.lock"), "new\n");
+    expect((await s.run(s.effect)).ok).toBe(true);
+    expect(lstatSync(join(s.path, "node_modules")).isSymbolicLink()).toBe(false);
+    expect(existsSync(join(s.path, "node_modules/installed"))).toBe(true);
+    expect(readdirSync(join(s.api, "node_modules"))).toEqual(["p"]);
   });
 
   test("a symlink pointing outside the repo is refused", async () => {

@@ -94,7 +94,8 @@ checkout into each new worktree (missing ones are skipped with a note; an existi
 file the worktree still has unmodified: it is replaced by the local copy and marked `git update-index --skip-worktree`, so it
 never shows in `git status` nor gets staged). `link: [node_modules]` symlinks directories from the main checkout instead; with
 `node_modules` linked, `install` is skipped for the repo unless the lockfile differs from the main checkout's (then it installs
-instead and logs why). Copies and links are git-excluded in the worktree. `agt config show` / `config apply` warn about a `copy`
+instead and logs why; any install, including `agt stack start`, never writes through a node_modules symlink: it is skipped when
+the lockfile matches the main checkout's, else the link is removed first). Other `link` entries are plain symlinks that install does not touch. Copies and links are git-excluded in the worktree. `agt config show` / `config apply` warn about a `copy`
 entry tracked by git and about a `workflow.browser.urls` localhost port that no service uses. Also per repo, `install: <cmd>` runs in a new worktree (default: detected from the lockfile, `bun install` /
 `yarn install --frozen-lockfile` / `pnpm install --frozen-lockfile` / `npm ci`; `""` disables). `workspace.services.<name>`
 (`^[a-z][a-z0-9-]*$`) describes a process of the local stack: `repo` (must be in `workspace.repos`), `dir` (default `.`),

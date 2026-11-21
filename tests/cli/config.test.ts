@@ -59,3 +59,24 @@ test("config show and apply warn about tracked copy entries and browser ports wi
   expect(show.err).toContain("copy app/.env is tracked by git");
   expect(show.err).toContain("port 9001");
 });
+
+test("service env values are redacted in config, config show (yaml and json) and the apply diff", () => {
+  const root = tempRepo();
+  initProject(root, "demo");
+  const patch = join(root, "patch.yaml");
+  writeFileSync(patch, `workspace:\n  repos:\n    app: { path: "." }\n  services:\n    web: { repo: app, start: "true", env: { TOKEN: "hunter2" } }\n`);
+  const dry = agt(root, ["config", "apply", "--dry-run", patch]);
+  expect(dry.out).toContain("workspace.services.web.env.TOKEN: ***");
+  expect(dry.out + dry.err).not.toContain("hunter2");
+  expect(agt(root, ["config", "apply", patch]).code).toBe(0);
+  writeFileSync(patch, `workspace:\n  services:\n    web: { env: { TOKEN: "other-secret" } }\n`);
+  const change = agt(root, ["config", "apply", "--dry-run", patch]);
+  expect(change.out).toContain("~ workspace.services.web.env.TOKEN: ***");
+  expect(change.out).not.toContain("secret");
+  for (const args of [["config"], ["config", "show"], ["config", "show", "--json"]]) {
+    const r = agt(root, args);
+    expect(r.out).toContain("***");
+    expect(r.out).toContain("TOKEN");
+    expect(r.out).not.toContain("hunter2");
+  }
+});
