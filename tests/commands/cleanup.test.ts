@@ -8,7 +8,7 @@ import { ConfigSchema } from "../../src/config/config.ts";
 import { request } from "../../src/daemon/client.ts";
 import { startDaemon, type Daemon } from "../../src/daemon/server.ts";
 import type { Actor, StoredEvent } from "../../src/domain/types.ts";
-import { systemPrompt } from "../../src/agents/prompts.ts";
+import { MAIN_CLEANUP_RULE, systemPrompt } from "../../src/agents/prompts.ts";
 import { initProject } from "../../src/project/init.ts";
 import { paths } from "../../src/project/paths.ts";
 import { project, type State } from "../../src/state/projection.ts";
@@ -322,6 +322,42 @@ describe("agt thread cleanup through the daemon (real git)", () => {
   });
 });
 
-test("main runs cleanup only when the user says the thread is merged", () => {
-  expect(systemPrompt({ root: "/repo", role: "main" }).split("\n")).toContain("- Run agt thread cleanup <id> only when the user says so, after they told you the thread is merged.");
+test("post-merge flow: main closes the thread, restarts the stack on main when it ran the task, then cleans up", () => {
+  const rule = systemPrompt({ root: "/repo", role: "main" }).split("\n").find((l) => l.startsWith("- When a coordinator tells you its thread is merged"))!;
+  expect(rule).toBe(MAIN_CLEANUP_RULE);
+  const at = (s: string) => rule.indexOf(s);
+  expect(at("agt thread status <id> done --reason")).toBeGreaterThan(-1);
+  expect(at("agt thread status <id> done")).toBeLessThan(at("agt stack status"));
+  expect(at("agt stack restart --main")).toBeLessThan(at("agt thread cleanup <id>"));
+  expect(rule).toContain('Ask the user first only when the coordinator reported "unverified"');
+  expect(rule).not.toContain("only when the user says so");
+});
+
+test("post-merge flow: the coordinator verifies, tells main and never runs cleanup", () => {
+  const t = { id: "001", title: "KYC", slug: "kyc", dir: "/repo/.worktrees/kyc-1", task: "kyc-1", type: "bug" as const };
+  const rule = systemPrompt({ root: "/repo", role: "coordinator", thread: t, config: ConfigSchema.parse({}) }).split("\n").find((l) => l.startsWith("- After stage 10, when the user says the PRs are merged"))!;
+  expect(rule).toContain("git merge-base --is-ancestor fix/kyc-1 origin/<source>");
+  expect(rule).toContain("git cherry origin/<source> fix/kyc-1");
+  expect(rule).toContain('agt tell main "001: merged into <source> in <repos> (verified|unverified: <why>)"');
+  expect(rule).toContain("Never run agt thread cleanup yourself.");
+});
+
+describe("the post-merge commands' permissions", () => {
+  const cfg = ConfigSchema.parse({ workspace: { repos: { api: { path: "api" } } } });
+  const run = (state: State, cmd: unknown, actor: Actor) => handle(state, CommandSchema.parse(cmd), actor, { root: "/repo", config: cfg });
+  test("main moves a task thread from review to done, then cleanup is accepted", () => {
+    const s = stateOf(INIT, taskThreadCreated("001", "kyc-1", { status: "review" }), { type: "worktree.added", thread: "001", payload: { repo: "api", path: "/repo/.worktrees/kyc-1/api", branch: "wip/kyc-1", source: "main" } });
+    const r = run(s, { cmd: "thread.status", thread: "001", status: "done", reason: "merged into dev in api (verified)" }, { role: "main" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.events[0]).toMatchObject({ type: "thread.status_changed", payload: { from: "review", to: "done", reason: "merged into dev in api (verified)" } });
+    const done = stateOf(INIT, taskThreadCreated("001", "kyc-1", { status: "done" }), { type: "worktree.added", thread: "001", payload: { repo: "api", path: "/repo/.worktrees/kyc-1/api", branch: "wip/kyc-1", source: "main" } });
+    expect(run(done, { cmd: "thread.cleanup", thread: "001" }, { role: "main" }).ok).toBe(true);
+  });
+
+  test("a coordinator cannot run cleanup", () => {
+    const done = stateOf(INIT, taskThreadCreated("001", "kyc-1", { status: "done" }));
+    const r = run(done, { cmd: "thread.cleanup", thread: "001" }, { role: "coordinator", thread: "001" });
+    expect(r.ok).toBe(false);
+  });
 });

@@ -39,7 +39,7 @@ describe("task-thread coordinator rules (§13)", () => {
       "- Commit your own .docs changes in /ws/.docs (git -C /ws/.docs), one commit per logical change; never push.",
       COMMIT_RULE,
       "- Read these files first: /ws/.docs/shared/notes/product-decisions.md, /ws/.docs/shared/notes/glossary.md.",
-      "- Talk to the user in Bahasa Indonesia; write files in English.",
+      "Write every message to the user — replies, questions, reports, progress and notices — in Bahasa Indonesia. Files, code, commits and agt commands stay in English.",
     ]) {
       expect(p.split("\n")).toContain(line);
     }
@@ -62,14 +62,15 @@ describe("task-thread coordinator rules (§13)", () => {
     );
     expect(p).not.toContain("none of these words");
     expect(p).not.toContain("Read these files first");
-    expect(p).toContain("- Talk to the user in English; write files in English.");
+    expect(p).toContain("Write every message to the user — replies, questions, reports, progress and notices — in English. Files, code, commits and agt commands stay in English.");
+    expect(p).not.toContain("Talk to the user in");
   });
 
   test("the guide carries the new rules (it is built from the prompt)", () => {
     const g = guide({ role: "coordinator", root: "/ws", config: ZENTRO });
     expect(g).toContain(COMMIT_RULE);
     expect(g).toContain('agt thread waiting <thread> "<what>"');
-    expect(g).toContain("- Talk to the user in Bahasa Indonesia; write files in English.");
+    expect(g).toContain("Write every message to the user — replies, questions, reports, progress and notices — in Bahasa Indonesia. Files, code, commits and agt commands stay in English.");
     expect(g).toContain("agt stage <thread> <1-10>");
     expect(g).toContain("agt stack acquire <thread>");
     // a legacy guide has no stages or stack lock
@@ -177,5 +178,53 @@ describe("stack restart rule", () => {
   test("a task coordinator is told agt stack restart --task <task> when services exist", () => {
     expect(coordinator(withServices)).toContain("agt stack restart --task kyc-reject");
     expect(coordinator(DEFAULT_CONFIG)).not.toContain("agt stack restart");
+  });
+});
+
+describe("language rule (chat_language) comes first", () => {
+  const RULE = "Write every message to the user — replies, questions, reports, progress and notices — in Bahasa Indonesia. Files, code, commits and agt commands stay in English.";
+  const lines = (p: string) => p.split("\n");
+
+  test("main: the line after its identity line; the coordinator and worker likewise; none of them twice", () => {
+    for (const p of [systemPrompt({ root: "/ws", role: "main", config: ZENTRO }), coordinator(ZENTRO), worker(ZENTRO)]) {
+      expect(lines(p)[1]).toBe(RULE);
+      expect(lines(p).filter((l) => l.startsWith("Write every message to the user"))).toHaveLength(1);
+      expect(p).not.toContain("Talk to the user in");
+    }
+  });
+
+  test("a rotated coordinator's bootstrap starts with it; a first bootstrap and a legacy thread do not", () => {
+    const boot = bootstrapPrompt({ root: "/ws", role: "coordinator", thread: TASK, config: ZENTRO }, "handoff");
+    expect(boot).toBe(`${RULE}\nYou are the new coordinator of thread 007; the previous session ended. Read /ws/.agentthread/threads/007-kyc-reject/brief.md, then follow AGENTS.md.`);
+    expect(bootstrapPrompt({ root: "/ws", role: "coordinator", thread: LEGACY, config: ZENTRO }, "handoff")).toBe(bootstrapPrompt({ root: "/ws", role: "coordinator", thread: LEGACY }, "handoff"));
+  });
+
+  test("AGENTS.md carries it for the coordinator and the worker; the legacy coordinator, worker and guide do not", () => {
+    expect(agentsMd({ root: "/ws", thread: TASK, config: ZENTRO }).split(RULE).length - 1).toBe(2);
+    expect(systemPrompt({ root: "/repo", role: "coordinator", thread: LEGACY, config: ZENTRO })).not.toContain("Write every message");
+    expect(systemPrompt({ root: "/repo", role: "worker", thread: LEGACY, ticket: "T1", config: ZENTRO })).not.toContain("Write every message");
+    expect(guide({ role: "main", root: "/repo", config: ZENTRO, legacy: true })).not.toContain("Write every message");
+  });
+
+  test("no config: no rule", () => {
+    expect(systemPrompt({ root: "/ws", role: "main" })).not.toContain("Write every message");
+  });
+});
+
+describe("main drafting restraint and the task-thread guide", () => {
+  const main = systemPrompt({ root: "/ws", role: "main", config: DEFAULT_CONFIG }).split("\n");
+
+  test("main keeps criteria to what the user said, asks at most one question, maps words to --type", () => {
+    expect(main).toContain("- When you create a thread, keep the goal and criteria to what the user said: at most 3 short criteria, no invented detail; the coordinator refines them in stage 1.");
+    expect(main).toContain("- Ask at most one clarifying question, and only when the thread's type or its repos are unclear.");
+    expect(main).toContain("- Map the user's words to --type: bug, fix or hotfix is bug; feature or feat is feature; chore, refactor or docs is chore.");
+  });
+
+  test("a task thread's main guide lists the post-merge commands; a legacy one has none of the new rules", () => {
+    const g = guide({ role: "main", root: "/ws", config: DEFAULT_CONFIG, thread: TASK });
+    for (const c of ["agt thread status <id> <status>", "agt stack restart [--task <slug>|--main]", "agt thread cleanup <id>"]) expect(g).toContain(c);
+    const legacy = guide({ role: "main", root: "/ws", config: DEFAULT_CONFIG, legacy: true });
+    expect(legacy).not.toContain("at most 3 short criteria");
+    expect(legacy).not.toContain("agt stack restart");
   });
 });

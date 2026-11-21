@@ -74,7 +74,7 @@ test("reconcile probe → lost → a generated handoff and a fresh coordinator s
   const job = jobs.at(-1)!;
   expect(job.session).not.toBe(c);
   expect(job.args).not.toContain("--resume");
-  expect(job.bootstrap.startsWith("You are the new coordinator of thread 001;")).toBe(true);
+  expect(job.bootstrap.includes("You are the new coordinator of thread 001;")).toBe(true);
   // split from the root pane (own AGT_SESSION env), not started in the lost session's pane
   expect(job.pane).toBeUndefined();
   expect(job.split).toMatchObject({ pane: rootPane(all) });
@@ -91,7 +91,7 @@ test("a coordinator that exited normally is replaced at once; a later reconcile 
   const job = jobs.at(-1)!;
   expect(job.session).not.toBe(c);
   expect(job.args).not.toContain("--resume");
-  expect(job.bootstrap.startsWith("You are the new coordinator of thread 001;")).toBe(true);
+  expect(job.bootstrap.includes("You are the new coordinator of thread 001;")).toBe(true);
   const all = await events();
   expect(job.split).toMatchObject({ pane: rootPane(all) });
   expect(all.find((e) => e.type === "handoff.submitted")).toMatchObject({ payload: { generated: true } });

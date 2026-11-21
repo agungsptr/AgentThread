@@ -1,3 +1,4 @@
+import { DEFAULT_CONFIG } from "../../src/config/config.ts";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -148,7 +149,7 @@ test("agt start launches main with adapterFor(roles.main)", () => {
   const r = agt(["start"], { AGT_OPENCODE_BIN: FAKE_AGENT, FAKE_AGENT_LOG: log, AGT_CLAUDE_BIN: "/nonexistent/claude" });
   expect(r.code).toBe(0);
   const run = JSON.parse(readFileSync(log, "utf8").trim()) as { argv: string[]; cwd: string; env: Record<string, string> };
-  expect(run.argv).toEqual(["--standalone", "--auto", "--prompt", systemPrompt({ root, role: "main" })]);
+  expect(run.argv).toEqual(["--standalone", "--auto", "--prompt", systemPrompt({ root, role: "main", config: DEFAULT_CONFIG })]);
   expect(realpathSync(run.cwd)).toBe(realpathSync(root));
   expect(run.env).toMatchObject({ AGT_ROLE: "main", AGT_AGENT: "opencode", AGT_AGENT_PROCESS: "1" });
   expect(JSON.parse(run.env.OPENCODE_CONFIG_CONTENT!)).toMatchObject({ permission: { "*": "allow" } });
@@ -160,7 +161,7 @@ test("the AGT_<AGENT>_BIN override applies to codex and omp main launches", () =
     const log = join(xdg, `${agent}.jsonl`);
     expect(agt(["start"], { [key]: FAKE_AGENT, FAKE_AGENT_LOG: log }).code).toBe(0);
     const run = JSON.parse(readFileSync(log, "utf8").trim()) as { argv: string[] };
-    expect(run.argv.at(-1)).toBe(systemPrompt({ root, role: "main" }));
+    expect(run.argv.at(-1)).toBe(systemPrompt({ root, role: "main", config: DEFAULT_CONFIG }));
   }
 }, 15_000);
 
@@ -174,7 +175,7 @@ test("agt start prints configWarnings once to stderr", () => {
 test("the SessionStart re-print stays claude-only", () => {
   agt(["daemon", "start"]);
   const main = { AGT_ROLE: "main", AGT_SESSION: "00000000-0000-4000-8000-0000000000aa" };
-  const prompt = systemPrompt({ root, role: "main" });
+  const prompt = systemPrompt({ root, role: "main", config: DEFAULT_CONFIG });
   expect(agt(["event", "started"], { ...main, AGT_AGENT: "claude-code" }, { stdin: JSON.stringify({ source: "clear" }) }).out).toBe(prompt);
   for (const agent of ["opencode", "codex", "omp"]) {
     expect(agt(["event", "started"], { ...main, AGT_AGENT: agent }, { stdin: JSON.stringify({ source: "clear" }) }).out).toBe("");

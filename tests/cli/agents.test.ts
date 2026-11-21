@@ -1,3 +1,4 @@
+import { DEFAULT_CONFIG } from "../../src/config/config.ts";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -48,7 +49,7 @@ test("agt start runs the main manager in the foreground with hooks, role and the
   expect(run.argv.slice(0, 2)).toEqual(["--permission-mode", "bypassPermissions"]);
   expect(run.argv).not.toContain("--session-id");
   expect(run.argv).not.toContain("--append-system-prompt");
-  expect(run.argv[run.argv.length - 1]).toBe(systemPrompt({ root, role: "main" }));
+  expect(run.argv[run.argv.length - 1]).toBe(systemPrompt({ root, role: "main", config: DEFAULT_CONFIG }));
   expect(run.argv).toContain("--settings");
   expect(run.env).toMatchObject({ AGT_ROLE: "main", AGT_SESSION: id, AGT_ROOT: root, AGT_AGENT: "claude-code" });
   const fm = readFileSync(join(root, ".agentthread", "main.thread.md"), "utf8");
@@ -188,7 +189,7 @@ test("agt event identifies the session by AGT_SESSION or pane, never by the vend
 test("SessionStart after /clear or compaction gives the main manager its role prompt back on stdout", () => {
   agt(["daemon", "start"]);
   const main = { AGT_ROLE: "main", AGT_SESSION: "00000000-0000-4000-8000-0000000000aa" };
-  const prompt = systemPrompt({ root, role: "main" });
+  const prompt = systemPrompt({ root, role: "main", config: DEFAULT_CONFIG });
   for (const source of ["clear", "compact"]) {
     const r = agt(["event", "started"], main, JSON.stringify({ session_id: "x", source }));
     expect(r.code).toBe(0);

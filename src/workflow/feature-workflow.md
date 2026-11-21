@@ -89,8 +89,13 @@ ids or private-doc mentions — this overrides any harness attribution reminder.
     **copy** of a production restore (drop it afterwards) before calling it ready. Squash to `<squash-branch>` and verify
     `git diff --stat wip/<task> <squash-branch>` lists only files the source branch changed since the worktree was made
     (`git diff --stat <wip base> <source>`), then re-run the unit suites on the squashed tree, then
-    `agt stage <id> 10 done`; the user pushes and opens PRs. After merge, the user has main run `agt thread cleanup <id>`
-    (never remove worktrees or wip branches by hand); refresh the baseline.
+    `agt stage <id> 10 done`; the user pushes and opens PRs. After merge, when the user says the PRs are merged the coordinator verifies each
+    repo (`git fetch origin <source>`, then `git merge-base --is-ancestor <squash-branch> origin/<source>`, else
+    `git cherry origin/<source> <squash-branch>` shows no `+` line, else "unverified"), releases the stack lock and runs
+    `agt tell main "<id>: merged into <source> in <repos> (verified|unverified: <why>)"`; it never runs cleanup. Main then
+    runs `agt thread status <id> done`, `agt stack restart --main` when the stack runs that thread's task, and
+    `agt thread cleanup <id>` (never remove worktrees or wip branches by hand), and reports to the user; main asks the
+    user first only for "unverified". Refresh the baseline.
 
 ## Manual migration SQL (when the user runs migrations by hand)
 

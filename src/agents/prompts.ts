@@ -41,6 +41,23 @@ const workflowOf = (config: Config | undefined) => ({
   blocked: config?.workflow.report_words.blocked ?? "blocked",
 });
 
+/**
+ * The first rule of the main, task-coordinator and task-worker prompts and of a rotated coordinator's bootstrap: what the
+ * user reads is in the chat language, files, code, commits and agt commands in the file language. Without a config there
+ * is no rule (nothing says which languages).
+ */
+export const LANGUAGE_RULE_START = "Write every message to the user";
+
+export function languageRule(config: Config | undefined): string[] {
+  if (!config) return [];
+  const w = workflowOf(config);
+  return [
+    `${LANGUAGE_RULE_START} — replies, questions, reports, progress and notices — in ${w.chat}.${
+      config.workflow.file_language === undefined ? "" : ` Files, code, commits and agt commands stay in ${w.file}.`
+    }`,
+  ];
+}
+
 /** §13.3: one rule for every commit an agent writes; an empty banned-word list drops its clause. */
 function commitRule(config: Config | undefined): string {
   const { banned } = workflowOf(config);
@@ -62,20 +79,30 @@ function coordinatorWorkflowLines(o: PromptInput): string[] {
     `- ${commitRule(o.config)}`,
     // read_first paths are workspace-root-relative; the coordinator works in the thread directory, so they are shown absolute.
     ...(w.readFirst.length ? [`- Read these files first: ${w.readFirst.map((f) => (isAbsolute(f) ? f : join(o.root, f))).join(", ")}.`] : []),
-    `- Talk to the user in ${w.chat}; write files in ${w.file}.`,
+    `- After stage 10, when the user says the PRs are merged: in each repo worktree run git fetch origin <source>, then check ${sb(o)} is in origin/<source>: git merge-base --is-ancestor ${sb(o)} origin/<source> (merged as is), else git cherry origin/<source> ${sb(o)} printing no line that starts with + (merged under another hash), else it is unverified: say why. Release the stack lock (agt stack release ${id}) if you hold it, then run agt tell main "${id}: merged into <source> in <repos> (verified|unverified: <why>)" and tell the user main will close the thread. Never run agt thread cleanup yourself.`,
   ];
 }
 
-/** Main's rule for `agt thread cleanup` (task threads only: the legacy guide leaves it out). */
-export const MAIN_CLEANUP_RULE = "- Run agt thread cleanup <id> only when the user says so, after they told you the thread is merged.";
+/** Main's post-merge rule (task threads only: the legacy guide leaves it out). */
+export const MAIN_CLEANUP_RULE =
+  '- When a coordinator tells you its thread is merged, or the user says so, run agt thread status <id> done --reason "<merged …>"; then, if agt stack status shows the recorded target is that thread\'s task, run agt stack restart --main; then run agt thread cleanup <id>; then tell the user in one short message what was cleaned and that the stack is back on main. Ask the user first only when the coordinator reported "unverified".';
+
+/** Main's drafting restraint (task threads only: the legacy guide leaves these out). */
+export const MAIN_DRAFT_RULES = [
+  "- When you create a thread, keep the goal and criteria to what the user said: at most 3 short criteria, no invented detail; the coordinator refines them in stage 1.",
+  "- Ask at most one clarifying question, and only when the thread's type or its repos are unclear.",
+  "- Map the user's words to --type: bug, fix or hotfix is bug; feature or feat is feature; chore, refactor or docs is chore.",
+];
 
 export function systemPrompt(o: PromptInput): string {
   if (o.role === "main") {
     return [
       `You are the AgentThread main manager for the project at ${o.root}. You talk with the user.`,
+      ...languageRule(o.config),
       `The state of every thread is in ${paths(o.root).mainThread}; read it whenever you need the big picture.`,
       "When the user describes a feature or a bug, draft a short title, a goal and acceptance criteria and show them to the user.",
       'Only after the user confirms, create the thread with: agt thread new "<title>" --type feature|bug|chore --goal "<goal>" --criteria "<criterion>" (repeat --criteria).',
+      ...MAIN_DRAFT_RULES,
       ...tierPromptLines(o.config),
       'To pass a message to a thread\'s coordinator use: agt tell <thread-id> "<message>".',
       "Do not edit project source files yourself; implementation happens in the thread worktrees.",
@@ -89,6 +116,7 @@ export function systemPrompt(o: PromptInput): string {
   if (o.role === "coordinator") {
     return [
       `You are the coordinator of AgentThread thread ${t.id} ("${t.title}"). ${t.dir === undefined ? `Your working directory is the thread's git worktree ${t.worktree}.` : `Your working directory is the thread directory ${t.dir}; the thread's repo worktrees go inside it.`}`,
+      ...(t.dir === undefined ? [] : languageRule(o.config)),
       `The thread state is in ${dir}/sub.thread.md and ${dir}/board.md. Read them first, and re-read them whenever you get a notification.`,
       "Rules:",
       `- When you start, run: agt thread status ${t.id} in_progress. ${
@@ -129,6 +157,7 @@ export function systemPrompt(o: PromptInput): string {
   }
   return [
     `You are an AgentThread worker for ticket ${o.ticket} of thread ${t.id} ("${t.title}").`,
+    ...(t.dir === undefined ? [] : languageRule(o.config)),
     `Work only inside ${workDir(t)}, and only on the files in your ticket's scope (see ${dir}/board.md).`,
     "Steps:",
     `1. agt ticket claim ${t.id}/${o.ticket}`,
@@ -220,6 +249,6 @@ export function bootstrapPrompt(o: PromptInput, kind: "start" | "handoff" = "sta
         : `\n${o.ticketDoc !== undefined ? `Your ticket file is ${ticketDocPath(o.root, o.ticketDoc)}.` : "Your ticket has no ticket file: write nothing outside your worktree."}`;
     return `You are the worker for ticket ${o.ticket} of thread ${id}. Read ${dir}/brief.md, then follow AGENTS.md.${doc}${notice ? `\n${notice}` : ""}`;
   }
-  if (kind === "handoff") return `You are the new coordinator of thread ${id}; the previous session ended. Read ${dir}/brief.md, then follow AGENTS.md.`;
+  if (kind === "handoff") return `${o.thread!.dir === undefined ? "" : languageRule(o.config).map((l) => `${l}\n`).join("")}You are the new coordinator of thread ${id}; the previous session ended. Read ${dir}/brief.md, then follow AGENTS.md.`;
   return `You are the coordinator of thread ${id}. Read ${dir}/brief.md, then follow AGENTS.md.`;
 }

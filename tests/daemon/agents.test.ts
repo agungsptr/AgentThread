@@ -242,7 +242,7 @@ test("a replacement for an exited coordinator carries the thread's live panes as
   await cmd({ cmd: "session.attached", session: w, pane: "w1:p7" });
   // the coordinator's root pane is closed in Herdr: its session ends and a replacement must not depend on that pane
   await cmd({ cmd: "session.signal", session: c, signal: "ended" });
-  expect(jobs.at(-1)).toMatchObject({ split: { pane: "w1:p1", fallbacks: ["w1:p7"] }, bootstrap: expect.stringMatching(/^You are the new coordinator of thread 001/) });
+  expect(jobs.at(-1)).toMatchObject({ split: { pane: "w1:p1", fallbacks: ["w1:p7"] }, bootstrap: expect.stringContaining("You are the new coordinator of thread 001") });
 });
 
 test("a coordinator whose new pane is still busy (agent_pane_busy) attaches once its shell is ready", async () => {

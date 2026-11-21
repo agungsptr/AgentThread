@@ -228,7 +228,7 @@ export function createEffectRunner(opts: {
         const legacy = t.legacy || t.dir === undefined;
         // A task-thread worker's ticket doc: its bootstrap names it and Claude's allow rules let it write that file only.
         const ticketDoc = legacy || effect.role !== "worker" ? undefined : t.tickets.find((k) => k.id === effect.ticket)?.doc;
-        const prompt = { root: opts.root, role: effect.role, thread: t, ticket: effect.ticket, ...(ticketDoc !== undefined ? { ticketDoc } : {}) };
+        const prompt = { root: opts.root, role: effect.role, thread: t, ticket: effect.ticket, config: opts.config, ...(ticketDoc !== undefined ? { ticketDoc } : {}) };
         const common = await gitCommonDir();
         try {
           const adapter = adapterFor(effect.run.agent);

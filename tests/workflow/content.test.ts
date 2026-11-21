@@ -20,7 +20,9 @@ describe("feature-workflow content", () => {
 
   test("stage 10: after merge, main runs agt thread cleanup; nothing is removed by hand", () => {
     const text = FEATURE_WORKFLOW.replace(/\n\s+/g, " ");
-    expect(text).toContain("After merge, the user has main run `agt thread cleanup <id>` (never remove worktrees or wip branches by hand)");
+    expect(text).toContain("the coordinator verifies each repo");
+    expect(text).toContain("it never runs cleanup. Main then runs `agt thread status <id> done`");
+    expect(text).toContain("`agt thread cleanup <id>` (never remove worktrees or wip branches by hand)");
     expect(text).not.toContain("remove worktrees and `wip/<task>`");
   });
 

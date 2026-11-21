@@ -98,8 +98,8 @@ test("memory survives a lost coordinator; worker flow runs without hooks", async
   expect(started.join(" ")).not.toMatch(/--resume|--session-id/);
   expect(calls.some((x) => x[0] === "pane" && x[1] === "split")).toBe(true);
   const dir = join(root, ".agentthread/threads/001-login");
-  await waitFor(() => prompts().some((p) => p.startsWith("You are the new coordinator of thread 001;")), 10_000);
-  expect(prompts()).toContain(`You are the new coordinator of thread 001; the previous session ended. Read ${dir}/brief.md, then follow AGENTS.md.`);
+  await waitFor(() => prompts().some((p) => p.includes("You are the new coordinator of thread 001;")), 10_000);
+  expect(prompts().some((p) => p.endsWith(`You are the new coordinator of thread 001; the previous session ended. Read ${dir}/brief.md, then follow AGENTS.md.`))).toBe(true);
 
   // a later reconcile (agt start) sees the live replacement and starts nothing more
   const beforeStart = readState().calls.filter((x) => x[0] === "agent" && x[1] === "start").length;
