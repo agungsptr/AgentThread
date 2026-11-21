@@ -527,7 +527,9 @@ async function ticket(sub: string | undefined, args: string[], root: string, env
       });
     }
     case "files": {
-      const res = await request(paths(root).socket, { op: "command", command: { cmd: "ticket.files", ...parseTicketRef(args[0]) }, actor: actorFromEnv(env) });
+      const { values, positionals } = parse(args, { add: { type: "string", multiple: true }, remove: { type: "string", multiple: true } });
+      const change = { ...(values.add ? { add: values.add } : {}), ...(values.remove ? { remove: values.remove } : {}) };
+      const res = await request(paths(root).socket, { op: "command", command: { cmd: "ticket.files", ...parseTicketRef(positionals[0]), ...change }, actor: actorFromEnv(env) });
       if (!res.ok) throw new Error(res.error);
       for (const f of (res.result as { files: string[] }).files) console.log(f);
       return 0;

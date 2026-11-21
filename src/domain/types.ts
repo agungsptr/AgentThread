@@ -82,6 +82,7 @@ export type EventBody =
   | { type: "thread.tier_timer"; thread: string; payload: { state: "paused" | "running" } }
   | { type: "thread.tier_chosen"; thread: string; payload: { tier: string; auto: boolean } }
   | { type: "ticket.created"; thread: string; payload: { ticket: string; title: string; scope: string[]; repo?: string; files?: string[]; doc?: string } }
+  | { type: "ticket.files_changed"; thread: string; payload: { ticket: string; files: string[]; added: string[]; removed: string[] } }
   | { type: "ticket.claimed"; thread: string; payload: { ticket: string; assignee: string } }
   | { type: "ticket.completed"; thread: string; payload: { ticket: string; summary?: string } }
   | { type: "ticket.blocked"; thread: string; payload: { ticket: string; reason: string } }

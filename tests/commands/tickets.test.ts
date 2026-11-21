@@ -4,6 +4,9 @@ import { CommandSchema } from "../../src/commands/schema.ts";
 import { ConfigSchema } from "../../src/config/config.ts";
 import type { Actor, StoredEvent } from "../../src/domain/types.ts";
 import { applyEvent, type State } from "../../src/state/projection.ts";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { INIT, USER, stateOf, taskThreadCreated, threadCreated } from "../helpers.ts";
 
 const COORD: Actor = { role: "coordinator", thread: "001", session: "c1" };
@@ -116,6 +119,71 @@ describe("ticket.files", () => {
     exec(s, add());
     const r = run(s, { cmd: "ticket.files", thread: "001", ticket: "T1" }, USER);
     expect(r.ok && r.result).toEqual({ files: ["src/a.ts", "src/b.ts"] });
+  });
+});
+
+describe("ticket.files --add/--remove", () => {
+  const files = (s: State) => s.threads.get("001")!.tickets[0]!.files;
+  const change = (extra: Record<string, unknown>) => ({ cmd: "ticket.files", thread: "001", ticket: "T1", ...extra });
+  const WORKER: Actor = { role: "worker", thread: "001", ticket: "T1", session: "w1" };
+
+  test("adds and removes, deduped, and emits ticket.files_changed", () => {
+    const s = taskBase();
+    exec(s, add());
+    const r = exec(s, change({ add: ["./src/c.ts", "src/c.ts", "src/a.ts"], remove: ["src/b.ts"] }));
+    expect(r.ok && r.events.map((e) => e.type)).toEqual(["ticket.files_changed"]);
+    expect(r.ok && r.events[0]!.payload).toMatchObject({ files: ["src/a.ts", "src/c.ts"], added: ["src/c.ts"], removed: ["src/b.ts"] });
+    expect(files(s)).toEqual(["src/a.ts", "src/c.ts"]);
+    expect(s.threads.get("001")!.tickets[0]!.scope).toEqual(["src/a.ts", "src/c.ts"]);
+  });
+
+  test("a no-op emits nothing", () => {
+    const s = taskBase();
+    exec(s, add());
+    const r = run(s, change({ add: ["src/a.ts"] }));
+    expect(r.ok && r.events).toEqual([]);
+  });
+
+  test("rejects workers, legacy threads, done tickets, the last file, bad paths and unknown removals", () => {
+    const s = taskBase();
+    exec(s, add());
+    expect(errorOf(run(s, change({ add: ["x.ts"] }), WORKER))).toContain("only the coordinator");
+    expect(errorOf(run(s, change({ remove: ["src/a.ts", "src/b.ts"] })))).toBe("ticket T1 must keep at least one file");
+    expect(errorOf(run(s, change({ remove: ["nope.ts"] })))).toBe("nope.ts is not one of ticket T1's files");
+    expect(errorOf(run(s, change({ add: ["../x.ts"] })))).toBe("file paths are relative to the repo: ../x.ts");
+    expect(errorOf(run(s, change({ add: ["src/"] })))).toBe("--file takes a file, not a directory: src/");
+    const done = taskBase();
+    exec(done, add());
+    exec(done, { cmd: "ticket.claim", thread: "001", ticket: "T1" }, WORKER);
+    exec(done, { cmd: "ticket.done", thread: "001", ticket: "T1", summary: "s" }, WORKER);
+    expect(errorOf(run(done, change({ add: ["x.ts"] })))).toBe("accepted");
+    exec(done, { cmd: "ticket.accept", thread: "001", ticket: "T1" });
+    expect(errorOf(run(done, change({ add: ["x.ts"] })))).toBe("ticket T1 is done; its files cannot change");
+    const legacy = stateOf(INIT, threadCreated("001"));
+    exec(legacy, { cmd: "ticket.add", thread: "001", title: "A", scope: ["a"] });
+    expect(errorOf(run(legacy, change({ add: ["x.ts"] })))).toContain("task threads");
+  });
+
+  test("main and user may change the list; reading still works for a worker", () => {
+    const s = taskBase();
+    exec(s, add());
+    expect(errorOf(run(s, change({ add: ["x.ts"] }), USER))).toBe("accepted");
+    const r = run(s, change({}), WORKER);
+    expect(r.ok && r.result).toEqual({ files: ["src/a.ts", "src/b.ts"] });
+  });
+});
+
+describe("ticket.add title that holds file paths", () => {
+  test("rejects a title word that is a file in the repo, but not normal words", () => {
+    const root = mkdtempSync(join(tmpdir(), "agt-title-"));
+    mkdirSync(join(root, "api", "src"), { recursive: true });
+    writeFileSync(join(root, "api", "src", "z.ts"), "");
+    writeFileSync(join(root, "api", "README.md"), "");
+    const go = (title: string) => errorOf(handle(taskBase(), CommandSchema.parse(add({ title })), COORD, { root, config }));
+    expect(go("Fix src/z.ts too")).toBe('"src/z.ts" looks like a file path in the title; repeat --file for every path: --file a --file b');
+    expect(go("Fix login/logout flow")).toBe("accepted");
+    expect(go("Update docs wording")).toBe("accepted");
+    expect(go("Fix src/missing.ts")).toBe("accepted");
   });
 });
 

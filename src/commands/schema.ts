@@ -54,7 +54,7 @@ export const CommandSchema = z.discriminatedUnion("cmd", [
     files: z.array(z.string()).optional(),
     doc: text.optional(),
   }),
-  z.object({ cmd: z.literal("ticket.files"), thread: threadId, ticket: ticketId }),
+  z.object({ cmd: z.literal("ticket.files"), thread: threadId, ticket: ticketId, add: z.array(z.string()).optional(), remove: z.array(z.string()).optional() }),
   z.object({ cmd: z.literal("ticket.claim"), thread: threadId, ticket: ticketId }),
   z.object({ cmd: z.literal("ticket.done"), thread: threadId, ticket: ticketId, summary: text }),
   z.object({ cmd: z.literal("ticket.block"), thread: threadId, ticket: ticketId, reason: text }),

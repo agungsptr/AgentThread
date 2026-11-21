@@ -16,7 +16,7 @@ export const USAGE = `usage: agt <command>
   thread cleanup <id>   a merged (done) task thread: remove its worktrees and wip/<task> branches, in the background (stops on uncommitted changes)
   ticket add <thread> <title...> --scope <path> [--scope <path>]...            (a legacy thread)
   ticket add <thread> <title...> --repo <repo> --file <path> [--file <path>]... [--doc <path>]   (a task thread; --file takes files, not directories)
-  ticket files <thread>/<ticket>   the repo-relative files the ticket may change
+  ticket files <thread>/<ticket> [--add <path>]... [--remove <path>]...   print the repo-relative files the ticket may change; with --add/--remove the coordinator fixes the list (a task thread, ticket not done; repeat the flag per path); then run ticket reopen for a ticket the commit guard blocked
   ticket claim|reopen <thread>/<ticket>
   ticket done <thread>/<ticket> --summary <text>   (a task thread: the ticket goes to review)
   ticket accept <thread>/<ticket>                  the reviewed ticket is done; its worker ends

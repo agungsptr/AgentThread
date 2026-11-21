@@ -246,7 +246,7 @@ export function actorSession(state: State, actor: Actor): string | undefined {
  * marked `via: "command"`.
  */
 export const COMMAND_OUTPUT_TYPES: ReadonlySet<string> = new Set([
-  "thread.status_changed", "ticket.created", "ticket.claimed", "ticket.completed", "ticket.blocked", "ticket.reopened",
+  "thread.status_changed", "ticket.created", "ticket.files_changed", "ticket.claimed", "ticket.completed", "ticket.blocked", "ticket.reopened",
   "ticket.reviewed", "ticket.accepted", "ticket.returned", "stage.recorded", "log.appended", "decision.recorded", "note.recorded", "progress.recorded", "question.recorded", "question.answered",
   "worker.queued", "thread.waiting", "thread.cleanup_requested",
 ]);
@@ -420,6 +420,14 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       });
       note(t, ev, `${ev.payload.ticket} created: ${ev.payload.title}`);
       break;
+    case "ticket.files_changed": {
+      const k = ticket(ev.payload.ticket);
+      k.files = [...ev.payload.files];
+      k.scope = [...ev.payload.files];
+      const parts = [...ev.payload.added.map((f) => `+${f}`), ...ev.payload.removed.map((f) => `-${f}`)];
+      note(t, ev, `${k.id} files changed: ${parts.join(" ")}`);
+      break;
+    }
     case "ticket.claimed": {
       const k = ticket(ev.payload.ticket);
       k.status = "in_progress";

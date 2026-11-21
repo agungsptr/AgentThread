@@ -197,6 +197,17 @@ describe("ticket accept", () => {
   });
 });
 
+describe("ticket files change", () => {
+  test("a live worker gets the notice with the new list", () => {
+    const s = world();
+    const w = toReview(s);
+    signal(s, w.id, "agent.idle");
+    effects = [];
+    expect(exec(s, { cmd: "ticket.files", thread: "001", ticket: "T1", add: ["src/extra.ts"] }).ok).toBe(true);
+    expect(effects.find((e) => e.kind === "notice.deliver" && e.session === w.id)).toMatchObject({ text: expect.stringMatching(/^Ticket T1 may now change: .*src\/extra\.ts\.$/) });
+  });
+});
+
 describe("ticket return", () => {
   test("with a live worker: the same worker gets the exact notice; the ticket is in_progress", () => {
     const s = world();

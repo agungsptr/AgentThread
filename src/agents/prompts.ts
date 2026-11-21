@@ -112,6 +112,7 @@ export function systemPrompt(o: PromptInput): string {
             `- Before restarting the stack, running e2e or the browser check, run agt stack acquire ${t.id} (add --for e2e4 for the full e2e); wait for the notice if it is queued; agt stack release ${t.id} when done.`,
             ...(o.config && hasServices(o.config) && t.task ? [`- To restart the stack, run agt stack restart --task ${t.task} (it runs in the background; progress is in .local-run/restart.log), still holding the stack lock.`] : []),
             ...coordinatorWorkflowLines(o),
+            `- A ticket's files are its only commit allowlist: pass every path as its own --file (--file a --file b, never --file a b). To fix a wrong list, run agt ticket files ${t.id}/<T> --add <path> --remove <path> (repeat per path; not for a done ticket); then, if the commit guard blocked the worker, agt ticket reopen ${t.id}/<T> and agt worker spawn ${t.id} --ticket <T>.`,
             `- When you accept a ticket that another ticket was blocked on, reopen the blocked one with agt ticket reopen ${t.id}/<T> and start a new worker for it with agt worker spawn ${t.id} --ticket <T> (a blocked worker has ended). To speak to a worker that is still alive, use agt tell ${t.id}/<T> "<message>".`,
           ]),
       `- Record important decisions with agt decide ${t.id} "<decision>" and progress with agt progress ${t.id} "<message>".`,

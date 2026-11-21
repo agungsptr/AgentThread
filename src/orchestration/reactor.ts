@@ -422,6 +422,12 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         else fillWorkers(t.id);
         break;
       }
+      case "ticket.files_changed": {
+        const k = state.threads.get(ev.thread)?.tickets.find((x) => x.id === ev.payload.ticket);
+        const w = k?.assignee ? state.sessions.get(k.assignee) : undefined;
+        if (w && isLive(w) && w.role === "worker") notify(w, `Ticket ${ev.payload.ticket} may now change: ${ev.payload.files.join(", ")}.`);
+        break;
+      }
       case "ticket.blocked":
         fillWorkers(ev.thread);
         notify(coordinatorToNotify(ev.thread), `Ticket ${ev.payload.ticket} is blocked: ${ev.payload.reason}.`);

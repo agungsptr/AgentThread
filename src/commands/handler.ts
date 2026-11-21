@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { DEFAULT_CONFIG, type Config } from "../config/config.ts";
 import { canTransitionThread, canTransitionTicket, scopesOverlap, slugify, validateHandoff } from "../domain/rules.ts";
@@ -71,7 +71,7 @@ const ALLOWED: Record<CommandName, readonly Role[]> = {
   "thread.cleanup": ["user", "main"],
   "thread.cleanup_report": ["user"],
   "ticket.add": ["coordinator"],
-  "ticket.files": ROLES,
+  "ticket.files": ROLES, // changing the list (--add/--remove) is the coordinator's, checked in decide
   "ticket.claim": ["worker"],
   "ticket.done": ["worker"],
   "ticket.block": ["worker"],
@@ -131,6 +131,23 @@ function repoRelative(p: string): string {
   if (!norm) reject(`file paths are relative to the repo: ${p}`);
   if (p.endsWith("/")) reject(`--file takes a file, not a directory: ${p}`);
   return norm;
+}
+
+/**
+ * Whether a ticket title word is an existing file of the ticket's repo (main checkout or the thread's worktree): the
+ * signature of `--file a b c`, where only `a` is the option's value and `b c` fall into the title.
+ */
+function titleWordIsFile(word: string, ctx: HandlerContext, t: Thread, repo: string): boolean {
+  if (!word || word.startsWith("/") || word.split("/").includes("..") || /[\0]/.test(word)) return false;
+  const entry = workspaceReposNoSpawn(ctx.root, ctx.config ?? DEFAULT_CONFIG)[repo];
+  const bases = [t.worktrees[repo]?.path, entry ? resolve(ctx.root, entry.path) : undefined].filter((b): b is string => !!b);
+  return bases.some((b) => {
+    try {
+      return statSync(join(b, word)).isFile();
+    } catch {
+      return false;
+    }
+  });
 }
 
 /**
@@ -305,6 +322,9 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
       if (!cmd.repo || !cmd.files?.length) reject("a task thread's ticket needs --repo <repo> and at least one --file <path>");
       if (!Object.hasOwn(workspaceReposNoSpawn(ctx.root, ctx.config ?? DEFAULT_CONFIG), cmd.repo)) reject(`unknown repo ${cmd.repo}`);
       const files = [...new Set(cmd.files.map(repoRelative))];
+      for (const word of cmd.title.split(/\s+/)) {
+        if (word && !files.includes(word) && titleWordIsFile(word, ctx, t, cmd.repo)) reject(`"${word}" looks like a file path in the title; repeat --file for every path: --file a --file b`);
+      }
       if (cmd.doc !== undefined) checkTicketDoc(cmd.doc);
       return {
         events: [{ type: "ticket.created", thread: t.id, payload: { ticket, title: cmd.title, scope: files, repo: cmd.repo, files, ...(cmd.doc ? { doc: cmd.doc } : {}) } }],
@@ -346,8 +366,24 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
       const reason = state.stack.holder?.thread === t.id ? "released" : state.stack.queue.some((q) => q.thread === t.id) ? "left the queue" : undefined;
       return { events: reason ? [{ type: "stack.released", thread: t.id, payload: { thread: t.id, reason } }] : [] };
     }
-    case "ticket.files":
-      return { events: [], result: { files: findTicket(t, cmd.ticket).files ?? [] } };
+    case "ticket.files": {
+      const k = findTicket(t, cmd.ticket);
+      if (!cmd.add?.length && !cmd.remove?.length) return { events: [], result: { files: k.files ?? [] } };
+      if (actor.role === "worker") reject("only the coordinator (or the user) may change a ticket's files");
+      if (t.legacy) reject("--add and --remove apply to task threads; a legacy thread's ticket has a scope, not a file list");
+      if (k.status === "done") reject(`ticket ${k.id} is done; its files cannot change`);
+      const current = k.files ?? [];
+      const added = [...new Set((cmd.add ?? []).map(repoRelative))];
+      const removed = [...new Set((cmd.remove ?? []).map(repoRelative))];
+      for (const f of removed) if (!current.includes(f)) reject(`${f} is not one of ticket ${k.id}'s files`);
+      const files = [...new Set([...current.filter((f) => !removed.includes(f) || added.includes(f)), ...added])];
+      if (!files.length) reject(`ticket ${k.id} must keep at least one file`);
+      if (files.length === current.length && files.every((f) => current.includes(f))) return { events: [], result: { files } };
+      const clash = t.tickets.find((o) => o.id !== k.id && FILE_HOLDING.includes(o.status) && o.repo === k.repo && scopesOverlap(o.scope, files));
+      if (clash && FILE_HOLDING.includes(k.status)) reject(`these files overlap ticket ${clash.id}`);
+      const net = { added: files.filter((f) => !current.includes(f)), removed: current.filter((f) => !files.includes(f)) };
+      return { events: [{ type: "ticket.files_changed", thread: t.id, payload: { ticket: k.id, files, ...net } }], result: { files } };
+    }
     case "ticket.claim": {
       const k = workerTicket(t, cmd.ticket, actor);
       const session = workerSession(actor);

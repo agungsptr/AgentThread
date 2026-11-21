@@ -145,6 +145,8 @@ which agents started by an older agt do not have.
 `agt worker spawn <thread> --ticket <T> --agent <kind>` runs one worker on another agent than `agents.roles.worker`,
 with that agent's own default model and effort (the role's model and effort are not carried across vendors).
 
+A task thread's ticket lists the repo-relative files its worker may commit (`agt ticket add <thread> "<title>" --repo <r> --file a --file b`; repeat `--file` for every path, `a b` is not two files). The commit guard refuses any other staged file. The coordinator fixes a wrong list with `agt ticket files <thread>/<T> --add <path>... --remove <path>...` (repeat each flag per path; not for a done ticket, and never down to zero files); the ticket's live worker is told. Without flags the command prints the list. A ticket the guard blocked is reopened with `agt ticket reopen` after the fix.
+
 A worker with a question runs `agt question`; the coordinator replies with `agt answer <thread> <Q> "<text>"`. A blocked
 worker is reported to its coordinator. If a session's first settled turn runs no `agt` command (for example because the
 configured model does not exist), the daemon reports `session.stalled` (coordinators and workers only, not main) instead of waiting forever.
