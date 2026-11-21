@@ -1,4 +1,4 @@
-import { handoffRequestPrompt, returnNotice } from "../agents/prompts.ts";
+import { handoffRequestPrompt, isHandoffRequest, returnNotice } from "../agents/prompts.ts";
 import { adapterFor } from "../agents/adapters.ts";
 import { roleAgent } from "../agents/roles.ts";
 import type { Effect } from "../commands/handler.ts";
@@ -53,6 +53,8 @@ const reviewNotice = (thread: string, ticket: string, summary: string | undefine
 
 /** How long after a held or failed notice delivery (notice.held) the sweep tries again: it doubles with each hold in a row. */
 export const NOTICE_RETRY_MS = 10_000;
+/** A blocked notice is skipped for a session that recorded a thread.waiting within this long. */
+const WAITING_DEDUPE_MS = 60_000;
 /** The longest wait between retries of a held stretch; a stuck session keeps being retried at this pace. */
 export const NOTICE_RETRY_MAX_MS = 300_000;
 /** Holds in a stretch after which the session's coordinator hears of it (once). */
@@ -132,7 +134,8 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
   const deliver = (s: Session | undefined) => {
     if (!s || delivered.has(s.id) || rotated.has(s.id)) return;
     // A held stretch is retried by the sweep on its backoff, not by every event that would deliver.
-    if (s.noticeHeldAt && now && Date.parse(now) - Date.parse(s.noticeHeldAt) <= noticeRetryMs(s.noticeHeldCount ?? 1)) return;
+    // A handoff request (always first in the queue) is not held back by the backoff of lower-priority notices.
+    if (s.noticeHeldAt && now && !(s.notices[0] && isHandoffRequest(s.notices[0])) && Date.parse(now) - Date.parse(s.noticeHeldAt) <= noticeRetryMs(s.noticeHeldCount ?? 1)) return;
     const e = noticeDelivery(s);
     if (!e) return;
     delivered.add(s.id);
@@ -620,7 +623,15 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
           const replace = s.ticket ? `, replace it with agt worker spawn ${s.thread} --ticket ${s.ticket}, or ask the user` : " or ask the user";
           notify(coordinatorToNotify(s.thread), `${cap(workerRef(s.ticket, "the worker", "ticket "))} is blocked in pane ${pane}. Check it${replace}.`);
         } else if (s && isLive(s) && s.role !== "main") {
-          notify(liveSessions(state, undefined, "main")[0], `${s.role} for thread ${s.thread} is waiting for approval in pane ${s.pane ?? "unknown"}.`);
+          // Not when this session just said it waits for the user (agt thread waiting): main already heard.
+          const t = s.thread ? state.threads.get(s.thread) : undefined;
+          const lw = t?.lastWaiting;
+          const said = lw?.session === s.id && (t?.waiting?.session === s.id || Date.parse(ev.ts) - Date.parse(lw.at) <= WAITING_DEDUPE_MS);
+          if (!said) {
+            const where = t ? `${s.role} of thread ${t.id} (${t.title})` : `${s.role} of thread ${s.thread}`;
+            const tab = t ? ` the thread tab ${t.id}-${t.slug}` : " the thread tab";
+            notify(liveSessions(state, undefined, "main")[0], `${where} is waiting for the user in its pane: it asked a question or needs a permission. Tell the user to answer it in${tab}.`);
+          }
         }
         break;
       }

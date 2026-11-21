@@ -97,9 +97,15 @@ test("idle timeout: a stale coordinator is rotated with a generated handoff inst
   expect(r.effects.map((e) => e.kind)).toEqual(["agent.spawn"]);
 });
 
+/** The handoff request is queued and delivered to the coordinator's pane at ts. */
+function handoffDelivered(s: State, ts: string) {
+  apply(s, ts, { type: "notice.queued", thread: "001", payload: { session: C, text: `${HANDOFF_REQUEST_PREFIX} x` } }, { type: "notice.delivered", thread: "001", payload: { session: C, count: 1 } });
+}
+
 test("sweep: handoff timeout generates a handoff, or rotates directly when fallback is off", () => {
   const s = base();
   apply(s, "2026-10-11T10:01:00.000Z", { type: "session.rotation_requested", thread: "001", payload: { session: C, reason: "precompact" } });
+  handoffDelivered(s, "2026-10-11T10:01:00.000Z");
   expect(sweep(s, "2026-10-11T10:05:00.000Z", ctx()).events).toEqual([]);
   const late = sweep(s, "2026-10-11T10:07:00.000Z", ctx());
   expect(late.events).toEqual([{ type: "handoff.submitted", thread: "001", payload: { content: expect.stringContaining("did not write a handoff within 5m"), generated: true } }]);
@@ -215,8 +221,9 @@ test("old-log resuming restarts a pending rotation's clock and records resumingA
   expect(sweep(s, "2026-10-11T10:10:00.000Z", ctx())).toEqual({ events: [], effects: [] });
   // attached and started again: the clock counts from the resume
   apply(s, "2026-10-11T10:10:00.000Z", { type: "session.attached", thread: "001", payload: { session: C, pane: "w1:p2" } }, { type: "session.started", thread: "001", payload: { session: C } });
+  handoffDelivered(s, "2026-10-11T10:10:00.000Z");
   expect(sweep(s, "2026-10-11T10:13:00.000Z", ctx()).events).toEqual([]);
-  expect(sweep(s, "2026-10-11T10:15:00.000Z", ctx()).events.map((e) => e.type)).toEqual(["handoff.submitted"]);
+  expect(sweep(s, "2026-10-11T10:15:30.000Z", ctx()).events.map((e) => e.type)).toEqual(["handoff.submitted"]);
 });
 
 test("sweep skips a coordinator without a pane", () => {
@@ -395,4 +402,48 @@ test("a lost-spawn coordinator past the replacement brake is not replaced, and m
   ]);
   expect(r.events.some((e) => e.type === "session.created")).toBe(false);
   expect(r.effects.some((e) => e.kind === "agent.spawn")).toBe(false);
+});
+
+test("a handoff request jumps ahead of queued notices and is delivered despite a hold backoff", () => {
+  const s = base();
+  apply(s, "2026-10-11T10:01:00.000Z", { type: "agent.idle", thread: "001", payload: { session: C } });
+  apply(s, "2026-10-11T10:01:10.000Z",
+    { type: "notice.queued", thread: "001", payload: { session: C, text: "worktree ready" } },
+    { type: "notice.held", thread: "001", payload: { session: C, reason: "x" } },
+    { type: "notice.queued", thread: "001", payload: { session: C, text: "other" } },
+    { type: "notice.queued", thread: "001", payload: { session: C, text: `${HANDOFF_REQUEST_PREFIX} now` } },
+  );
+  expect(s.sessions.get(C)!.notices).toEqual([`${HANDOFF_REQUEST_PREFIX} now`, "worktree ready", "other"]);
+  const ev = apply(s, "2026-10-11T10:01:11.000Z", { type: "agent.idle", thread: "001", payload: { session: C } });
+  const r = react(s, ev, ctx());
+  const d = r.effects.find((e) => e.kind === "notice.deliver") as { text: string; count: number } | undefined;
+  expect(d?.text.startsWith(HANDOFF_REQUEST_PREFIX)).toBe(true);
+  expect(d?.count).toBe(3);
+});
+
+test("a blocked coordinator keeps the handoff request held at the head", () => {
+  const s = base();
+  apply(s, "2026-10-11T10:01:00.000Z", { type: "notice.queued", thread: "001", payload: { session: C, text: "a" } }, { type: "notice.queued", thread: "001", payload: { session: C, text: `${HANDOFF_REQUEST_PREFIX} now` } }, { type: "agent.blocked", thread: "001", payload: { session: C } });
+  expect(s.sessions.get(C)!.notices[0]!.startsWith(HANDOFF_REQUEST_PREFIX)).toBe(true);
+  expect(sweep(s, "2026-10-11T10:30:00.000Z", ctx()).effects.filter((e) => e.kind === "notice.deliver")).toEqual([]);
+});
+
+test("the handoff fallback window runs from delivery, capped at 2x the timeout from the request", () => {
+  const s = base();
+  apply(s, "2026-10-11T10:01:00.000Z", { type: "session.rotation_requested", thread: "001", payload: { session: C, reason: "precompact" } });
+  // not delivered: waits past one timeout, fires at the 2x cap
+  expect(sweep(s, "2026-10-11T10:08:00.000Z", ctx()).events).toEqual([]);
+  expect(sweep(s, "2026-10-11T10:12:00.000Z", ctx()).events.map((e) => e.type)).toEqual(["handoff.submitted"]);
+  // delivered late (10:03): a full 5m window from delivery, not from the request
+  const d = base();
+  apply(d, "2026-10-11T10:01:00.000Z", { type: "session.rotation_requested", thread: "001", payload: { session: C, reason: "precompact" } });
+  handoffDelivered(d, "2026-10-11T10:03:00.000Z");
+  expect(sweep(d, "2026-10-11T10:07:00.000Z", ctx()).events).toEqual([]);
+  expect(sweep(d, "2026-10-11T10:08:30.000Z", ctx()).events.map((e) => e.type)).toEqual(["handoff.submitted"]);
+  // delivered very late (10:09): the 2x cap (10:11) still applies
+  const e = base();
+  apply(e, "2026-10-11T10:01:00.000Z", { type: "session.rotation_requested", thread: "001", payload: { session: C, reason: "precompact" } });
+  handoffDelivered(e, "2026-10-11T10:09:00.000Z");
+  expect(sweep(e, "2026-10-11T10:10:30.000Z", ctx()).events).toEqual([]);
+  expect(sweep(e, "2026-10-11T10:11:30.000Z", ctx()).events.map((x) => x.type)).toEqual(["handoff.submitted"]);
 });

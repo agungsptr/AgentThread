@@ -105,7 +105,7 @@ test("a blocked worker is reported to its coordinator, a blocked coordinator to 
     { session: C, text: "The worker for ticket T1 is blocked in pane w1:p3. Check it, replace it with agt worker spawn 001 --ticket T1, or ask the user." },
   ]);
   const c = react(s, apply(s, USER, { type: "agent.blocked", thread: "001", payload: { session: C } }), ctx());
-  expect(notices(c.events)).toEqual([{ session: M, text: "coordinator for thread 001 is waiting for approval in pane w1:p2." }]);
+  expect(notices(c.events)).toEqual([{ session: M, text: "coordinator of thread 001 (Thread 001) is waiting for the user in its pane: it asked a question or needs a permission. Tell the user to answer it in the thread tab 001-thread-001." }]);
 });
 
 test("old question events without an id get Q1.. in log order", () => {
@@ -179,4 +179,29 @@ test("notices for a worker with no ticket say so and never contain undefined", (
   expect(texts.some((x) => x.includes("from a worker with no ticket:"))).toBe(true);
   expect(texts.some((x) => x.startsWith("A worker with no ticket was lost"))).toBe(true);
   expect(texts.some((x) => x.includes("finished its first turn without running any agt command"))).toBe(true);
+});
+
+test("a blocked coordinator that just said it waits (agt thread waiting) does not also notify main", () => {
+  const s = base();
+  apply(s, { ...COORD }, { type: "thread.waiting", thread: "001", payload: { what: "which db?" } });
+  const out = react(s, apply(s, USER, { type: "agent.blocked", thread: "001", payload: { session: C } }), ctx());
+  expect(notices(out.events)).toEqual([]);
+});
+
+test("the waiting dedupe also covers a wait that ended within 60s, but not an older one or another session", () => {
+  const at = (ts: string, actor: Actor, ...b: EventBody[]) => b.map((x) => { const ev = { ...x, seq: s.lastSeq + 1, ts, actor } as StoredEvent; applyEvent(s, ev); return ev; });
+  const s = base();
+  at("2026-10-11T10:00:00.000Z", COORD, { type: "thread.waiting", thread: "001", payload: { what: "q" } });
+  delete s.threads.get("001")!.waiting; // answered
+  const soon = react(s, at("2026-10-11T10:00:50.000Z", USER, { type: "agent.blocked", thread: "001", payload: { session: C } }), ctx());
+  expect(notices(soon.events)).toEqual([]);
+  at("2026-10-11T10:00:55.000Z", USER, { type: "session.active", thread: "001", payload: { session: C } });
+  const late = react(s, at("2026-10-11T10:02:00.000Z", USER, { type: "agent.blocked", thread: "001", payload: { session: C } }), ctx());
+  expect(notices(late.events)).toHaveLength(1);
+});
+
+test("a repeated blocked event for the same block does not notify main again", () => {
+  const s = base();
+  expect(notices(react(s, apply(s, USER, { type: "agent.blocked", thread: "001", payload: { session: C } }), ctx()).events)).toHaveLength(1);
+  expect(notices(react(s, apply(s, USER, { type: "agent.blocked", thread: "001", payload: { session: C } }), ctx()).events)).toEqual([]);
 });

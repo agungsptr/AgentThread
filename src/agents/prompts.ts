@@ -210,6 +210,7 @@ function tierPromptLines(config: Config | undefined): string[] {
 }
 
 export const HANDOFF_REQUEST_PREFIX = "HANDOFF REQUEST:";
+export const isHandoffRequest = (notice: string): boolean => notice.startsWith(HANDOFF_REQUEST_PREFIX);
 
 export function handoffRequestPrompt(o: { root: string; thread: PromptThread; reason: string }): string {
   const id = o.thread.id;

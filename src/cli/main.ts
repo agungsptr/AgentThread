@@ -421,7 +421,8 @@ async function send(root: string, env: Env, command: object): Promise<number> {
   const actor = actorFromEnv(env);
   const res = await request(paths(root).socket, { op: "command", command, actor });
   if (!res.ok) throw new Error(res.error);
-  console.log(res.result === null ? "ok" : JSON.stringify(res.result));
+  const r = res.result as { unchanged?: boolean; message?: string } | null;
+  console.log(r === null ? "ok" : r?.unchanged && r.message ? r.message : JSON.stringify(res.result));
   return 0;
 }
 

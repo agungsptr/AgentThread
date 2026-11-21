@@ -202,6 +202,12 @@ describe("tickets", () => {
 });
 
 describe("thread.status", () => {
+  test("the same status again is ok with no event", () => {
+    const s = stateOf(INIT, threadCreated("001", { status: "in_progress" }));
+    const r = run(s, { cmd: "thread.status", thread: "001", status: "in_progress" }, COORD);
+    expect(r).toMatchObject({ ok: true, events: [], result: { unchanged: true, message: "already in_progress" } });
+  });
+
   test("illegal transition is rejected", () => {
     expect(errorOf(run(stateOf(INIT, threadCreated("001")), { cmd: "thread.status", thread: "001", status: "done" }))).toBe(
       "thread 001 cannot go open → done",

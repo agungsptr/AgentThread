@@ -55,6 +55,6 @@ test("blocked keeps the status, notes it, and notifies main", () => {
   expect(s.threads.get("001")!.log.at(-1)!.message).toBe("session cccccccc is waiting for approval");
   const out = react(s, [ev], { root: "/repo", config: DEFAULT_CONFIG, newId: () => C });
   expect(out.events).toEqual([
-    { type: "notice.queued", payload: { session: M, text: "coordinator for thread 001 is waiting for approval in pane w1:p2." } },
+    { type: "notice.queued", payload: { session: M, text: "coordinator of thread 001 (Thread 001) is waiting for the user in its pane: it asked a question or needs a permission. Tell the user to answer it in the thread tab 001-thread-001." } },
   ]);
 });

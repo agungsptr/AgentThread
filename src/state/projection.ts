@@ -1,3 +1,4 @@
+import { isHandoffRequest } from "../agents/prompts.ts";
 import { STAGE_NAMES, type Actor, type AgentKind, type Layout, type Role, type SessionRole, type StageBy, type StageState, type StoredEvent, type ThreadStatus, type ThreadType, type TicketStatus } from "../domain/types.ts";
 
 export type SessionStatus = "starting" | "active" | "idle" | "rotated" | "ended" | "failed" | "lost";
@@ -16,7 +17,7 @@ export interface Session {
   notices: string[];
   lastActiveAt?: string;
   contextTokens?: number;
-  rotation?: { reason: string; requestedAt: string };
+  rotation?: { reason: string; requestedAt: string; /** When the handoff request reached the pane (notice.delivered): the fallback window runs from here. */ deliveredAt?: string };
   replaces?: string;
   /** A pane to close once this session attaches elsewhere (the pane of a session it takes over from). */
   retirePane?: string;
@@ -188,7 +189,9 @@ export interface Thread {
    * The coordinator said it waits for the user. `idleSeen` is set by the coordinator's next idle; the turn start after
    * that (the user answering) clears it.
    */
-  waiting?: { what: string; since: string; idleSeen: boolean };
+  waiting?: { what: string; since: string; idleSeen: boolean; session?: string };
+  /** The last agt thread waiting, kept after the wait ends: the blocked notice is not sent for a session that just said it waits. */
+  lastWaiting?: { session?: string; at: string };
   decisions: Entry[];
   findings: Entry[];
   questions: Question[];
@@ -513,7 +516,8 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       break;
     case "thread.waiting":
       // A repeat replaces the text and starts the wait over.
-      t.waiting = { what: ev.payload.what, since: ev.ts, idleSeen: false };
+      t.waiting = { what: ev.payload.what, since: ev.ts, idleSeen: false, ...(ev.actor.session ? { session: ev.actor.session } : {}) };
+      t.lastWaiting = { ...(ev.actor.session ? { session: ev.actor.session } : {}), at: ev.ts };
       note(t, ev, `waiting for the user: ${ev.payload.what}`);
       break;
     case "worker.queued":
@@ -808,7 +812,10 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
         delete s.pane;
         s.resumingAt = ev.ts;
         // A pending rotation's handoff clock restarts: the resumed agent needs time to see the request again.
-        if (s.rotation) s.rotation.requestedAt = ev.ts;
+        if (s.rotation) {
+          s.rotation.requestedAt = ev.ts;
+          delete s.rotation.deliveredAt;
+        }
         threadNote(state, ev, `session ${short(s.id)} resuming`);
       }
       return true;
@@ -836,10 +843,16 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
       return true;
     }
     case "notice.queued":
-      sessionOf(state, ev.seq, ev.payload.session).notices.push(ev.payload.text);
+      {
+      const s = sessionOf(state, ev.seq, ev.payload.session);
+      // A handoff request jumps ahead of every other queued notice (the coordinator's clock is running).
+      if (isHandoffRequest(ev.payload.text)) s.notices.unshift(ev.payload.text);
+      else s.notices.push(ev.payload.text);
       return true;
+    }
     case "notice.delivered": {
       const s = sessionOf(state, ev.seq, ev.payload.session);
+      if (s.rotation && s.notices.slice(0, ev.payload.count).some(isHandoffRequest)) s.rotation.deliveredAt = ev.ts;
       s.notices.splice(0, ev.payload.count);
       delete s.noticeHeldAt;
       endHeldStretch(s);

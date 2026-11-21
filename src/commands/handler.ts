@@ -679,6 +679,8 @@ function checkTier(tier: string, ctx: HandlerContext): void {
 
 function threadStatus(state: State, t: Thread, to: ThreadStatus, reason: string | undefined, ctx: HandlerContext, how: { cancel?: boolean } = {}): Decision {
   if (t.cleanupRequested) reject(cleanupRunning(t));
+  // The same status again (a rotated coordinator re-running its start command) is a no-op, not an error.
+  if (!how.cancel && t.status === to) return { events: [], result: { unchanged: true, message: `already ${to}` } };
   if (!how.cancel && !canTransitionThread(t.status, to)) reject(`thread ${t.id} cannot go ${t.status} → ${to}`);
   if ((to === "open" || to === "in_progress") && !depsDone(state, t.dependsOn)) {
     reject(`thread ${t.id} has unfinished dependencies: ${t.dependsOn.join(", ")}`);

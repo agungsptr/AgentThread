@@ -1,3 +1,4 @@
+import { isHandoffRequest } from "../agents/prompts.ts";
 import type { Effect } from "../commands/handler.ts";
 import { durationMs } from "../config/config.ts";
 import type { EventBody } from "../domain/types.ts";
@@ -94,7 +95,9 @@ export function sweep(state: State, now: string, ctx: ReactorContext): { events:
   for (const s of state.sessions.values()) {
     if (!isLive(s) || failed.has(s.id) || s.blockedNotified) continue;
     const since = s.noticeHeldAt ?? s.idleAt ?? s.lastActiveAt ?? s.createdAt;
-    if (Date.parse(now) - Date.parse(since) <= noticeRetryMs(s.noticeHeldCount ?? 1)) continue;
+    // A queued handoff request is retried on every sweep, whatever the backoff of the notices behind it.
+    const urgent = s.notices[0] !== undefined && isHandoffRequest(s.notices[0]);
+    if (!urgent && Date.parse(now) - Date.parse(since) <= noticeRetryMs(s.noticeHeldCount ?? 1)) continue;
     // Held again and again: the coordinator hears once per stretch (never through the held session's own queue).
     if ((s.noticeHeldCount ?? 0) >= NOTICE_HELD_REPORT_AFTER && !s.noticeHeldReported && s.notices.length > 0) {
       const line = s.noticeHeldReason?.split("\n")[0]?.trim() ?? "";
@@ -120,7 +123,14 @@ export function sweep(state: State, now: string, ctx: ReactorContext): { events:
       events.push({ type: "session.rotation_requested", thread: t0.id, payload: { session: s.id, reason: "age" } });
       continue;
     }
-    if (!s.rotation || Date.parse(now) - Date.parse(s.rotation.requestedAt) <= durationMs(timeout)) continue;
+    if (!s.rotation) continue;
+    // The window runs from the request's delivery to the pane; a request not yet delivered waits, up to 2x the timeout
+    // from the request (the hard cap).
+    const limit = durationMs(timeout);
+    const expired = s.rotation.deliveredAt
+      ? Date.parse(now) - Date.parse(s.rotation.deliveredAt) > limit || Date.parse(now) - Date.parse(s.rotation.requestedAt) > 2 * limit
+      : Date.parse(now) - Date.parse(s.rotation.requestedAt) > 2 * limit;
+    if (!expired) continue;
     const t = s.thread ? state.threads.get(s.thread) : undefined;
     if (!t || liveSessions(state, t.id, "coordinator")[0] !== s) continue; // only the thread's acting coordinator
     if (fallback_generate) {
