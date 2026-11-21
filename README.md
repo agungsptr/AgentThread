@@ -41,7 +41,7 @@ Why use it:
 - [Herdr](https://herdr.dev) (agents run in its panes; `agt start` must run inside a Herdr pane)
 - At least one supported agent CLI, installed and logged in (see [Supported agents](#supported-agents))
 
-The package is private (not published to npm). Install from a clone:
+The package is private (not published to npm). Install from a clone, or let the [`/agt-setup` skill](#set-up-with-claude-code-recommended) do it for you:
 
 ```sh
 git clone https://github.com/agungsptr/AgentThread.git agentthread
@@ -50,16 +50,40 @@ bun install
 bun link        # puts `agt` on your PATH
 ```
 
-## Set up with Claude Code (optional)
+## Set up with Claude Code (recommended)
 
-The repository ships a Claude Code plugin in `plugins/agentthread`:
+The fastest way to get started is the `/agt-setup` skill. The repository doubles as a Claude Code plugin marketplace
+(the plugin lives in [`plugins/agentthread`](plugins/agentthread)). Install it once:
 
 ```
 /plugin marketplace add agungsptr/AgentThread
 /plugin install agentthread@agentthread
 ```
 
-Then, in a project folder, run `/agt-setup`. It installs agt if needed, analyses the project and writes the config with one approval.
+Then open Claude Code in your project or workspace folder and run:
+
+```
+/agt-setup
+```
+
+What it does:
+
+1. **Installs agt when it is missing.** It checks Bun, git, Herdr and your agent CLIs, then (after you say yes) clones
+   this repository to `~/.agentthread/AgentThread`, runs `bun install` and `bun link`. When agt is already installed
+   from a clone that is behind, it offers an update. It never uses `sudo`, never installs Herdr or Bun without asking,
+   and never edits your shell profile.
+2. **Initialises the project** with `agt init --no-setup` (no wizard).
+3. **Analyses the repos read-only:** branches and CI, package scripts and lockfiles, ports and health URLs, migrations,
+   env files to copy into worktrees, existing Makefiles and scripts. It never reads secret values, and never starts
+   services, runs migrations, installs project dependencies, runs tests or commits.
+4. **Shows one proposal** (every value with its evidence) and asks **one batch of questions** for what it cannot infer,
+   such as which agent and model to use per role.
+5. **Applies it** with `agt config apply --dry-run`, shows the diff, then applies on your OK.
+
+When it finishes, run `agt start` inside a Herdr pane. Re-run `/agt-setup` any time: it keeps the existing config and
+only proposes corrections. To get a newer version of the skill, run `/plugin marketplace update agentthread`.
+
+Prefer to do it by hand? Install as above and follow the [Quick start](#quick-start).
 
 ## Supported agents
 
