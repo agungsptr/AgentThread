@@ -159,8 +159,8 @@ test("memory survives a lost coordinator; worker flow runs without hooks", async
   await waitFor(() => fm().sessions.find((x) => x.id === w.id)!.status === "ended", 10_000);
 
   // no hooks ran: every session signal came from the poller (actor "user", no AGT_SESSION), none from `agt event`
-  const signals = agt(["logs"]).split("\n").map((l) => l.split(" ")).filter((f) => ["session.started", "session.active", "agent.idle", "session.ended", "agent.blocked"].includes(f[2]!));
+  const signals = agt(["logs", "--all"]).split("\n").map((l) => l.split(" ")).filter((f) => ["session.started", "session.active", "agent.idle", "session.ended", "agent.blocked"].includes(f[3]!));
   expect(signals.length).toBeGreaterThan(5);
   // (the worker's end is the follow-up of the coordinator's `agt ticket accept`, stored under that command's actor)
-  expect(signals.filter((f) => f[4] !== "user" && !(f[2] === "session.ended" && f[4]!.startsWith("coordinator:")))).toEqual([]);
+  expect(signals.filter((f) => f[2] !== "user" && !(f[3] === "session.ended" && f[2] === "coordinator"))).toEqual([]);
 }, 60_000);

@@ -125,6 +125,10 @@ if (group === "tab" && sub === "close") {
   removePanes(Object.entries(state.paneTab ?? {}).filter(([, t]) => t === target).map(([p]) => p));
   ok({ type: "ok" });
 }
+if (group === "pane" && sub === "get") {
+  if (!state.panes.includes(target ?? "")) fail("pane_not_found", `pane ${target} not found`);
+  ok({ type: "pane_info", pane: { pane_id: target } });
+}
 if (group === "pane" && sub === "split") {
   const from = args.includes("--pane") ? args[args.indexOf("--pane") + 1] : target;
   if (!state.panes.includes(from ?? "")) fail("pane_not_found", "pane not found");

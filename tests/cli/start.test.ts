@@ -85,7 +85,44 @@ test("a second start keeps the existing layout", () => {
   const r = agt(["start", "--no-manager"]);
   expect(r.out.split("\n")[0]).toBe("layout already set up (main tab w1:t0)");
   const after = fake.read().calls.slice(before);
-  expect(after).toEqual([["tab", "get", "w1:t0"]]);
+  expect(after.slice(0, 2)).toEqual([["tab", "get", "w1:t0"], ["pane", "get", "w1:p1"]]);
+});
+
+const LOGGER_CMD = () => `${shellQuote(process.execPath)} ${shellQuote(BIN)} logs -f`;
+
+test("a second start recreates a missing logger pane", () => {
+  agt(["start", "--no-manager"]);
+  fake.update((s) => ({ panes: s.panes.filter((p) => p !== "w1:p1"), calls: [] }));
+  const r = agt(["start", "--no-manager"]);
+  expect(r.code).toBe(0);
+  expect(r.out).toContain("logger pane was gone; recreated it as w1:p2");
+  const calls = fake.read().calls;
+  expect(calls.filter((c) => c[1] === "split")).toEqual([["pane", "split", "w1:p0", "--direction", "right", "--cwd", root, "--no-focus", "--env", `AGT_ROOT=${root}`]]);
+  expect(calls).toContainEqual(["pane", "rename", "w1:p2", "logger"]);
+  expect(calls).toContainEqual(["pane", "run", "w1:p2", LOGGER_CMD()]);
+  // the new pane is the registered one: the next start finds it and its (stub) process
+  writeFileSync(join(root, ".agentthread", "logger.pid"), String(process.pid));
+  fake.update(() => ({ calls: [] }));
+  agt(["start", "--no-manager"]);
+  expect(fake.read().calls.filter((c) => c[1] === "split" || c[1] === "run")).toEqual([]);
+});
+
+test("a second start re-runs the logger command when its process ended", () => {
+  agt(["start", "--no-manager"]);
+  fake.update(() => ({ calls: [] }));
+  // no live logger pid: the pane exists but nothing runs in it
+  const r = agt(["start", "--no-manager"]);
+  expect(r.out).toContain("logger pane w1:p1 was not running; restarted it");
+  expect(fake.read().calls.filter((c) => c[1] === "run")).toEqual([["pane", "run", "w1:p1", LOGGER_CMD()]]);
+  expect(fake.read().calls.filter((c) => c[1] === "split")).toEqual([]);
+});
+
+test("a second start leaves a running logger alone", () => {
+  agt(["start", "--no-manager"]);
+  writeFileSync(join(root, ".agentthread", "logger.pid"), String(process.pid));
+  fake.update(() => ({ calls: [] }));
+  agt(["start", "--no-manager"]);
+  expect(fake.read().calls.filter((c) => c[1] === "run" || c[1] === "split")).toEqual([]);
 });
 
 test("uses the configured main tab label", () => {

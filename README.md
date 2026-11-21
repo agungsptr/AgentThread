@@ -39,6 +39,15 @@ agt start       # run inside a Herdr pane: sets up the main tab, then opens the 
 agt setup       # re-run the per-project wizard: agent, model and effort per role, and complexity tiers
 ```
 
+`agt`, `agt --help` and `agt help` print the usage; `agt help <command>` or `agt <command> --help` (also two-word commands such as
+`thread new` or `stack restart`) print only that command's lines and never run it.
+
+The logger pane (right of the main manager) runs `agt logs -f`: one line per event, `HH:MM:SS <thread|main> <role> <event> <summary>`
+(ticket, stage, status change, session id, message text up to 160 characters). Heartbeat events (session active, idle, compacting,
+checkpoint reminders, notice delivery) are hidden; `agt logs --all` shows everything and `agt logs` without `-f` prints once.
+With `-f` it survives daemon restarts: it prints `waiting for the agt daemon…` once and retries every 2 seconds. Run `agt start` again
+to repair the layout: a closed logger pane is recreated, and one whose `agt logs -f` ended gets the command again.
+
 Non-interactive configuration (for scripts and agent shells; no prompts, no terminal needed):
 
 ```sh

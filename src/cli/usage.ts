@@ -44,7 +44,8 @@ export const USAGE = `usage: agt <command>
   tell <thread>/<ticket> <message...>   a task thread's coordinator: the ticket's live worker hears it
   event started|active|idle|compacting|ended   (used by Claude Code hooks)
   guide [main|coordinator|worker|all]   how to use agt in a role (default: $AGT_ROLE, else all)
-  logs [-f]`;
+  logs [-f] [--all]   print the event log as readable lines (HH:MM:SS thread role event summary), hiding heartbeat events; -f follows and survives daemon restarts; --all shows every event
+  help [<command>]   this text, or only the lines of one command (also agt <command> --help)`;
 
 /** The USAGE line (with its continuation lines) of the command that starts with `prefix`. */
 export function usageLines(prefix: string): string[] {
@@ -54,4 +55,42 @@ export function usageLines(prefix: string): string[] {
   const out = [all[i]!.trim()];
   for (let j = i + 1; j < all.length && /^\s{5,}\S/.test(all[j]!); j++) out.push(all[j]!.trim());
   return out;
+}
+
+/** The USAGE lines (with continuations) of the command spelled by `words`: `thread new`, `ticket claim`, `stack`. Empty when none match. */
+export function helpLines(words: string[]): string[] {
+  const all = USAGE.split("\n");
+  const [w1, w2] = words;
+  if (!w1) return [];
+  const matches = (line: string, second: string | undefined) => {
+    const t = line.trim().split(/\s+/);
+    return t[0] === w1 && (second === undefined || (t[1] ?? "").split("|").includes(second));
+  };
+  for (const second of w2 ? [w2, undefined] : [undefined]) {
+    const out: string[] = [];
+    for (let i = 1; i < all.length; i++) {
+      if (/^\s{2}\S/.test(all[i]!) && matches(all[i]!, second)) {
+        out.push(all[i]!.trim());
+        for (let j = i + 1; j < all.length && /^\s{5,}\S/.test(all[j]!); j++) out.push(all[j]!.trim());
+      }
+    }
+    if (out.length) return out;
+  }
+  return [];
+}
+
+/**
+ * The text to print for `agt`, `agt --help|-h|help` (all usage) and `agt help <cmd>` / `agt <cmd> --help|-h` (that
+ * command's lines, or all usage when none match); undefined when argv is a normal command.
+ */
+export function helpRequest(argv: string[]): string[] | undefined {
+  const full = USAGE.split("\n");
+  if (argv.length === 0 || (argv.length === 1 && (argv[0] === "--help" || argv[0] === "-h" || argv[0] === "help"))) return full;
+  const words = (xs: string[]) => xs.filter((a) => !a.startsWith("-")).slice(0, 2);
+  let target: string[] | undefined;
+  if (argv[0] === "help") target = words(argv.slice(1));
+  else if (argv[0] !== "__spawn" && argv.some((a) => a === "--help" || a === "-h")) target = words(argv);
+  if (!target) return undefined;
+  const lines = helpLines(target);
+  return lines.length ? lines : full;
 }
