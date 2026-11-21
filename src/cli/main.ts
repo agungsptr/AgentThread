@@ -365,10 +365,10 @@ async function stackServices(root: string, env: Env, sub: string, args: string[]
     console.log("no services configured (workspace.services)");
     return 0;
   }
-  const { values, positionals } = parse(args, sub === "stop" ? { only: { type: "string" }, force: { type: "boolean" } } : { task: { type: "string" }, main: { type: "boolean" }, only: { type: "string" }, ...(sub === "restart" ? { wait: { type: "boolean" } } : {}) });
+  const { values, positionals } = parse(args, sub === "stop" ? { only: { type: "string" }, force: { type: "boolean" } } : { task: { type: "string" }, main: { type: "boolean" }, only: { type: "string" }, migrate: { type: "boolean" }, ...(sub === "restart" ? { wait: { type: "boolean" } } : {}) });
   if (positionals.length) throw new UsageError(`stack ${sub} takes no arguments`);
   if (values.task !== undefined && values.main) throw new UsageError("--task and --main exclude each other");
-  const o = { root, config, only: only(values.only), task: values.task as string | undefined, main: !!values.main, force: !!values.force };
+  const o = { root, config, only: only(values.only), task: values.task as string | undefined, main: !!values.main, force: !!values.force, migrate: !!values.migrate };
   if (sub === "restart" && !values.wait) {
     // Detached into its own session so the restart survives the caller's pane; progress goes to .local-run/restart.log.
     // Validate here so a bad --task/--only is a usage error now, not a silent failure in the child.
@@ -382,7 +382,7 @@ async function stackServices(root: string, env: Env, sub: string, args: string[]
     mkdirSync(runDir(root), { recursive: true });
     appendFileSync(log, "restart requested\n");
     const fd = openSync(log, "a");
-    const flags = [...(values.task !== undefined ? ["--task", values.task] : []), ...(values.main ? ["--main"] : []), ...(values.only !== undefined ? ["--only", values.only] : [])];
+    const flags = [...(values.task !== undefined ? ["--task", values.task] : []), ...(values.main ? ["--main"] : []), ...(values.only !== undefined ? ["--only", values.only] : []), ...(values.migrate ? ["--migrate"] : [])];
     const child = spawn(process.execPath, [AGT_BIN, "stack", "restart", "--wait", ...flags], { cwd: root, env: { ...process.env, ...env, AGT_ROOT: root }, detached: true, stdio: ["ignore", fd, fd] });
     child.on("error", () => {});
     child.unref();

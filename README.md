@@ -93,7 +93,9 @@ Per repo, `copy: [.env, e2e/.env.local]` lists files copied from the main checko
 skipped with a note), and `install: <cmd>` runs in a new worktree (default: detected from the lockfile, `bun install` /
 `yarn install --frozen-lockfile` / `pnpm install --frozen-lockfile` / `npm ci`; `""` disables). `workspace.services.<name>`
 (`^[a-z][a-z0-9-]*$`) describes a process of the local stack: `repo` (must be in `workspace.repos`), `dir` (default `.`),
-`start`, optional `port`, `health` (`http(s)://...` or `tcp:<port>`, default `tcp:<port>` when `port` is set), `migrate`,
+`start`, optional `port`, `health` (`http(s)://...` or `tcp:<port>`, default `tcp:<port>` when `port` is set), `migrate` (opt-in: runs only with
+`agt stack start|restart --migrate` / `make start MIGRATE=1`, or on a changed checkout when `migrate_on_start: true`), `env: {KEY: value}`
+(merged over the inherited environment for `start` and `migrate`; values are never printed),
 `after: [<service>]` (start order, no cycles) and `enabled` (default true). Ports must be unique among enabled services.
 With services configured and `workflow.stack.restart` / `status` unset, they default to
 `agt stack restart --task {task}` and `agt stack status`; explicit values win.

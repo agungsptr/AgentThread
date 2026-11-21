@@ -261,7 +261,7 @@ test("services: valid shape with defaults, repo copy and install", () => {
   const r = ConfigSchema.parse({
     workspace: { repos: { api: { path: "api", copy: [".env"], install: "" } }, services: { "api-1": { repo: "api", start: "go run ." , port: 8080 } } },
   });
-  expect(r.workspace.services!["api-1"]).toEqual({ repo: "api", dir: ".", start: "go run .", port: 8080, enabled: true });
+  expect(r.workspace.services!["api-1"]).toEqual({ repo: "api", dir: ".", start: "go run .", port: 8080, migrate_on_start: false, enabled: true });
   expect(r.workspace.repos!.api!.copy).toEqual([".env"]);
   expect(r.workspace.repos!.api!.install).toBe("");
 });
@@ -283,4 +283,14 @@ test("effectiveStack defaults to agt stack commands only when services exist; ex
   expect(effectiveStack(ConfigSchema.parse({ workspace: base }))).toEqual({ restart: "agt stack restart --task {task}", status: "agt stack status" });
   expect(effectiveStack(ConfigSchema.parse({ workspace: base, workflow: { stack: { restart: "make r" } } }))).toEqual({ restart: "make r", status: "agt stack status" });
   expect(effectiveStack(ConfigSchema.parse({}))).toEqual({});
+});
+
+test("services: env keys are validated and migrate_on_start defaults to false", () => {
+  const svc = { repo: "api", start: "x" };
+  expect(ws({ a: { ...svc, env: { NODE_ENV: "development", _X1: "" } } }).success).toBe(true);
+  expect(ws({ a: { ...svc, env: { "1BAD": "x" } } }).success).toBe(false);
+  expect(ws({ a: { ...svc, env: { "A-B": "x" } } }).success).toBe(false);
+  expect(ws({ a: { ...svc, env: { A: 1 } } }).success).toBe(false);
+  const r = ws({ a: svc });
+  expect(r.success && r.data.workspace.services!.a!.migrate_on_start).toBe(false);
 });

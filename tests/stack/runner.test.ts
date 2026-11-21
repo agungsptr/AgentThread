@@ -89,11 +89,11 @@ test("a second start skips running services; --only limits", async () => {
   expect(only.map((r) => [r.name, r.outcome])).toEqual([["api", "started"]]);
 });
 
-test("install and migrate run only when the stamp changed", async () => {
+test("install and migrate (migrate_on_start) run only when the stamp changed", async () => {
   const root = tempRepo();
   const port = await freePort();
   const repo = root.split("/").pop()!;
-  const config = cfg({ [repo]: { path: "." } }, { web: svc({ repo, start: serverCmd(port), port, migrate: "echo m >> migrations.txt" }) });
+  const config = cfg({ [repo]: { path: "." } }, { web: svc({ repo, start: serverCmd(port), port, migrate: "echo m >> migrations.txt", migrate_on_start: true }) });
   config.workspace.repos = { [repo]: { path: ".", install: "echo i >> installs.txt" } } as Config["workspace"]["repos"];
   guard(root, config);
   await startStack({ root, config, ...quiet });
@@ -118,6 +118,7 @@ test("a failing migrate stops that service only and exits as failed", async () =
   const [pa, pb] = [await freePort(), await freePort()];
   const config = twoServices(root, pa, pb);
   config.workspace.services!.api!.migrate = "exit 3";
+  config.workspace.services!.api!.migrate_on_start = true;
   config.workspace.services!.api!.after = [];
   guard(root, config);
   const res = await startStack({ root, config, ...quiet });
@@ -305,4 +306,32 @@ test("the stamp covers the whole repo, is recomputed after install, and is not c
 
 test("temp dirs are registered with the leak guard", () => {
   expect(createdTempDirs.size).toBeGreaterThan(0);
+});
+
+test("migrate is opt-in: not run by default, run later by --migrate, and a failure shows only keys", async () => {
+  const root = tempRepo();
+  const port = await freePort();
+  const repo = root.split("/").pop()!;
+  const config = cfg({ [repo]: { path: "." } }, { web: svc({ repo, start: serverCmd(port), port, migrate: "echo m >> migrations.txt" }) });
+  guard(root, config);
+  await startStack({ root, config, ...quiet });
+  expect(existsSync(join(root, "migrations.txt"))).toBe(false);
+  await stopStack({ root, config, ...quiet });
+  await startStack({ root, config, ...quiet, migrate: true });
+  expect(readFileSync(join(root, "migrations.txt"), "utf8").trim().split("\n").length).toBe(1);
+});
+
+test("per-service env reaches start and migrate, and its values are never printed", async () => {
+  const root = tempRepo();
+  const port = await freePort();
+  const repo = root.split("/").pop()!;
+  const config = cfg({ [repo]: { path: "." } }, {
+    web: svc({ repo, start: `echo "$AGT_T" > start-env.txt; ${serverCmd(port)}`, port, migrate: 'echo "$AGT_T" > mig-env.txt', env: { AGT_T: "s3cr3t-value" } }),
+  });
+  guard(root, config);
+  const lines: string[] = [];
+  await startStack({ root, config, ...quiet, migrate: true, out: (l) => lines.push(l) });
+  expect(readFileSync(join(root, "start-env.txt"), "utf8").trim()).toBe("s3cr3t-value");
+  expect(readFileSync(join(root, "mig-env.txt"), "utf8").trim()).toBe("s3cr3t-value");
+  expect(lines.join("\n")).not.toContain("s3cr3t-value");
 });

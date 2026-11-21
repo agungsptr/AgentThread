@@ -4,12 +4,12 @@ import { join } from "node:path";
 import { DEFAULT_CONFIG, ConfigSchema, type Config } from "../../src/config/config.ts";
 import { applyConfig } from "../../src/project/config-apply.ts";
 import { initProject } from "../../src/project/init.ts";
-import { MAKEFILE_MARKER, renderMakefile, renderMakefileMd, writeStackMakefiles } from "../../src/stack/makefile.ts";
+import { MAKEFILE_MARKER, renderMk, renderMakefile, renderMakefileMd, writeStackMakefiles } from "../../src/stack/makefile.ts";
 import { isolatedConfigHome, twoRepoFolder } from "../helpers.ts";
 
 const config = (services: Record<string, unknown>): Config =>
   ConfigSchema.parse({ ...DEFAULT_CONFIG, workspace: { repos: { a: { path: "a" }, b: { path: "b" } }, services } });
-const WEB = { web: { repo: "a", dir: "app", start: "bun run dev", port: 3000, migrate: "bun migrate", after: ["db"] }, db: { repo: "b", start: "run-db", port: 5432, enabled: false } };
+const WEB = { web: { repo: "a", dir: "app", start: "bun run dev", port: 3000, migrate: "bun migrate", env: { NODE_ENV: "development", TOKEN: "hunter2" }, after: ["db"] }, db: { repo: "b", start: "run-db", port: 5432, enabled: false } };
 
 test("absent files are written; a marker file is rewritten from the config", () => {
   const root = twoRepoFolder();
@@ -17,8 +17,10 @@ test("absent files are written; a marker file is rewritten from the config", () 
   expect(readFileSync(join(root, "Makefile"), "utf8")).toBe(renderMakefile());
   expect(readFileSync(join(root, "Makefile"), "utf8").startsWith(MAKEFILE_MARKER)).toBe(true);
   const md = readFileSync(join(root, "MAKEFILE.md"), "utf8");
-  expect(md).toContain("| web | a | app | `bun run dev` | 3000 | tcp:3000 | `bun migrate` | db | yes |");
-  expect(md).toContain("| db | b | . | `run-db` | 5432 | tcp:5432 | - | - | no |");
+  expect(md).toContain("| web | a | app | `bun run dev` | 3000 | tcp:3000 | `bun migrate` | no | NODE_ENV, TOKEN | db | yes |");
+  expect(md).not.toContain("hunter2");
+  expect(renderMk()).toContain("--migrate");
+  expect(md).toContain("| db | b | . | `run-db` | 5432 | tcp:5432 | - | no | - | - | no |");
   expect(md).toContain(".local-run/");
   writeStackMakefiles(root, config({ api: { repo: "a", start: "x" } }));
   const md2 = readFileSync(join(root, "MAKEFILE.md"), "utf8");

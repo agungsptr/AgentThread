@@ -97,6 +97,10 @@ const serviceSchema = z
     port: z.number().int().min(1).max(65535).optional(),
     health: z.string().regex(HEALTH, "health must be http(s)://... or tcp:<port>").optional(),
     migrate: z.string().min(1).optional(),
+    /** Run `migrate` on every start whose checkout state changed. Default false: migrations run only with `agt stack start|restart --migrate`. */
+    migrate_on_start: z.boolean().default(false),
+    /** Extra environment for start and migrate, merged over the inherited one. Values may be secrets: never printed. */
+    env: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "env key must match /^[A-Za-z_][A-Za-z0-9_]*$/"), z.string()).optional(),
     after: z.array(z.string().min(1)).optional(),
     enabled: z.boolean().default(true),
   })

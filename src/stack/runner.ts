@@ -25,7 +25,7 @@ export type StackOptions = {
   force?: boolean;
 };
 
-export type StartOptions = StackOptions & { task?: string | undefined; main?: boolean | undefined };
+export type StartOptions = StackOptions & { task?: string | undefined; main?: boolean | undefined; /** Run each selected service's `migrate` now. */ migrate?: boolean | undefined };
 
 export type ServiceResult = { name: string; outcome: "started" | "skipped" | "failed" | "stopped"; detail?: string };
 
@@ -33,6 +33,8 @@ const files = (root: string, name: string) => ({
   pid: join(runDir(root), `${name}.pid`),
   log: join(runDir(root), `${name}.log`),
   stamp: join(runDir(root), `${name}.stamp`),
+  /** The checkout state at the last migrate that actually ran (absent or older: a migrate is pending). */
+  migrated: join(runDir(root), `${name}.migrated`),
 });
 
 /** The pid file: pid, process group and start time of the process, so a recycled pid is not mistaken for it. */
@@ -70,19 +72,19 @@ export function logTail(root: string, name: string, lines = 20): string[] {
 }
 
 /** Runs a shell command in cwd with stdout and stderr appended to the service log. True when it exits 0. */
-function runLogged(cmd: string, cwd: string, logFile: string): boolean {
+function runLogged(cmd: string, cwd: string, logFile: string, env: Record<string, string | undefined> = process.env): boolean {
   const fd = openSync(logFile, "a");
   try {
-    return spawnSync("sh", ["-c", cmd], { cwd, stdio: ["ignore", fd, fd] }).status === 0;
+    return spawnSync("sh", ["-c", cmd], { cwd, stdio: ["ignore", fd, fd], env }).status === 0;
   } finally {
     closeSync(fd);
   }
 }
 
-function spawnDetached(cmd: string, cwd: string, logFile: string): number {
+function spawnDetached(cmd: string, cwd: string, logFile: string, env: Record<string, string | undefined> = process.env): number {
   const fd = openSync(logFile, "a");
   try {
-    const child = spawn("sh", ["-c", cmd], { cwd, detached: true, stdio: ["ignore", fd, fd], env: process.env });
+    const child = spawn("sh", ["-c", cmd], { cwd, detached: true, stdio: ["ignore", fd, fd], env });
     child.on("error", () => {});
     child.unref();
     if (child.pid === undefined) throw new Error("spawn failed");
@@ -207,7 +209,9 @@ export async function startStack(o: StartOptions): Promise<ServiceResult[]> {
       fail(`port ${s.port} is held by another process (pid ${listeners(s.port).join(", ") || "unknown"}); run agt stack stop`);
       continue;
     }
-    if (readStamp(f.stamp) !== computeStamp(r.repoDir, r.cwd)) {
+    const svcEnv = { ...process.env, ...(s.env ?? {}) };
+    const stamp = computeStamp(r.repoDir, r.cwd);
+    if (readStamp(f.stamp) !== stamp) {
       const cmd = installCommand(r.repoDir, o.config.workspace.repos?.[s.repo]?.install);
       if (cmd && !installed.has(r.repoDir)) {
         out(`${name}: installing (${cmd})`);
@@ -217,16 +221,21 @@ export async function startStack(o: StartOptions): Promise<ServiceResult[]> {
         }
         installed.add(r.repoDir);
       }
-      if (s.migrate) {
+      writeStamp(f.stamp, computeStamp(r.repoDir, r.cwd)); // after install, which may touch the tree
+    }
+    if (s.migrate) {
+      // Opt-in: --migrate always runs it; migrate_on_start runs it when the state changed since the last migrate that ran.
+      const pending = readStamp(f.migrated) !== stamp;
+      if (o.migrate || (s.migrate_on_start && pending)) {
         out(`${name}: migrating (${s.migrate})`);
-        if (!runLogged(s.migrate, r.cwd, f.log)) {
+        if (!runLogged(s.migrate, r.cwd, f.log, svcEnv)) {
           fail(`migrate failed (see agt stack logs ${name})`);
           continue;
         }
-      }
-      writeStamp(f.stamp, computeStamp(r.repoDir, r.cwd)); // after install and migrate, which may touch the tree
+        writeStamp(f.migrated, computeStamp(r.repoDir, r.cwd));
+      } else if (pending) out(`${name}: migrate not run (opt-in); use --migrate to run it`);
     }
-    const newPid = spawnDetached(s.start, r.cwd, f.log);
+    const newPid = spawnDetached(s.start, r.cwd, f.log, svcEnv);
     writePidFile(o.root, name, newPid);
     const target = healthTarget(s);
     const t0 = (o.now ?? Date.now)();

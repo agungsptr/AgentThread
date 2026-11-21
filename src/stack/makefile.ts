@@ -21,26 +21,27 @@ AGT ?= agt
 q = '$(subst ','\\'',$(1))'
 task_flag = $(if $(TASK),--task $(call q,$(TASK)))
 only_flag = $(if $(ONLY),--only $(call q,$(ONLY)))
+migrate_flag = $(if $(MIGRATE),--migrate)
 
 .PHONY: help start stop restart status logs wt-new
 
 help:
 	@printf '%s\\n' \\
-	  'start   [TASK=<slug>] [ONLY=a,b]            start the services (TASK: that task worktrees; default: the recorded target)' \\
+	  'start   [TASK=<slug>] [ONLY=a,b] [MIGRATE=1]  start the services (TASK: that task worktrees; default: the recorded target)' \\
 	  'stop    [ONLY=a,b]                          stop the services' \\
-	  'restart [TASK=<slug>] [ONLY=a,b]            stop, then start, in the background (progress: .local-run/restart.log)' \\
+	  'restart [TASK=<slug>] [ONLY=a,b] [MIGRATE=1]  stop, then start, in the background (progress: .local-run/restart.log)' \\
 	  'status                                      service table and the stack lock' \\
 	  'logs    SVC=<name>                          tail a service log' \\
 	  'wt-new  TASK=<slug> REPOS=a,b [SRC=<branch>]  add worktrees to the thread of that task'
 
 start:
-	@$(AGT) stack start $(task_flag) $(only_flag)
+	@$(AGT) stack start $(task_flag) $(only_flag) $(migrate_flag)
 
 stop:
 	@$(AGT) stack stop $(only_flag)
 
 restart:
-	@$(AGT) stack restart $(task_flag) $(only_flag)
+	@$(AGT) stack restart $(task_flag) $(only_flag) $(migrate_flag)
 
 status:
 	@$(AGT) stack status
@@ -78,7 +79,7 @@ export function renderMakefileMd(config: Config): string {
   const services = Object.entries(config.workspace.services ?? {});
   const rows = services.map(
     ([n, s]) =>
-      `| ${n} | ${s.repo} | ${cell(s.dir)} | \`${cell(s.start)}\` | ${cell(s.port)} | ${cell(s.health ?? (s.port !== undefined ? `tcp:${s.port}` : undefined))} | ${s.migrate ? `\`${cell(s.migrate)}\`` : "-"} | ${s.after?.length ? s.after.join(", ") : "-"} | ${s.enabled === false ? "no" : "yes"} |`,
+      `| ${n} | ${s.repo} | ${cell(s.dir)} | \`${cell(s.start)}\` | ${cell(s.port)} | ${cell(s.health ?? (s.port !== undefined ? `tcp:${s.port}` : undefined))} | ${s.migrate ? `\`${cell(s.migrate)}\`` : "-"} | ${s.migrate_on_start ? "yes" : "no"} | ${s.env && Object.keys(s.env).length ? Object.keys(s.env).join(", ") : "-"} | ${s.after?.length ? s.after.join(", ") : "-"} | ${s.enabled === false ? "no" : "yes"} |`,
   );
   return `${MAKEFILE_MD_MARKER}
 # Makefile targets
@@ -89,7 +90,7 @@ Generated from \`.agentthread/config.yaml\`. Edit the config (\`workspace.servic
 
 | target | what it does |
 | --- | --- |
-| \`make start\` | \`agt stack start\`: install, migrate when the stamp changed, start each service in order and wait until healthy |
+| \`make start\` | \`agt stack start\`: install when the checkout state changed, migrate only with \`MIGRATE=1\` (or a service with \`migrate_on_start\`), start each service in order and wait until healthy |
 | \`make stop\` | \`agt stack stop\` |
 | \`make restart\` | \`agt stack restart\`: stop then start, detached; progress in \`.local-run/restart.log\` |
 | \`make status\` | \`agt stack status\`: service table and the stack lock |
@@ -101,6 +102,7 @@ Generated from \`.agentthread/config.yaml\`. Edit the config (\`workspace.servic
 
 - \`TASK\`: a task slug; \`start\` and \`restart\` run that task's worktrees (default: the recorded target, else the main checkout). \`wt-new\` takes the task whose thread gets the worktrees.
 - \`ONLY\`: comma-separated services for \`start\`, \`stop\` and \`restart\`.
+- \`MIGRATE\`: set (\`MIGRATE=1\`) to pass \`--migrate\` to \`start\` and \`restart\`, which runs each service's \`migrate\` command. Migrations never run otherwise unless the service sets \`migrate_on_start: true\`.
 - \`SVC\`: the service for \`logs\`.
 - \`REPOS\`: comma-separated repos for \`wt-new\`. \`SRC\`: the source branch for \`wt-new\` (\`--from\`).
 - \`AGT\`: the agt command (default \`agt\`).
@@ -109,14 +111,14 @@ Values are passed to agt as single arguments (quoted), never interpreted by the 
 
 ## Services
 
-${services.length ? `| service | repo | dir | start | port | health | migrate | after | enabled |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n${rows.join("\n")}` : "No services are configured (`workspace.services`)."}
+${services.length ? `| service | repo | dir | start | port | health | migrate | migrate on start | env keys | after | enabled |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n${rows.join("\n")}` : "No services are configured (`workspace.services`)."}
 
 ## .local-run/
 
 At the project root, git-ignored:
 
 - \`<service>.pid\` and \`<service>.log\`: the running process and its output.
-- \`<service>.stamp\`: the checkout state at the last install/migrate; they rerun when it changes.
+- \`<service>.stamp\`: the checkout state at the last install; install reruns when it changes. \`<service>.migrated\` is the same for the last migrate that ran.
 - \`task\`: the current target, a task slug or \`main\`.
 - \`restart.log\`: output of the last \`make restart\`.
 `;
