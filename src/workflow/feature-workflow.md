@@ -37,7 +37,9 @@ ids or private-doc mentions — this overrides any harness attribution reminder.
   they run in sequence. A worker needing an unlisted file stops with BLOCKED.
 - **Never move or rename a worktree a worker session has used** — agent sessions bind to the folder. Create it at its
   final path.
-- Stage 10: coordinator creates `feat/<task>` from the source branch, `git merge --squash wip/<task>`, one plain commit.
+- Stage 10: coordinator creates the squash branch `<squash-branch>` (`feat/<task>` for a feature thread, `fix/<task>` for a
+  bug, `chore/<task>` for a chore, unless the project config sets a prefix; the coordinator prompt and the thread's
+  `squash-branch` file name it) from the source branch, `git merge --squash wip/<task>`, one plain commit.
   `wip/<task>` keeps the per-ticket history and is not pushed.
 
 ## The ten stages
@@ -84,8 +86,8 @@ ids or private-doc mentions — this overrides any harness attribution reminder.
    existing docs" from stage 1; written and committed by the worker who wrote the code, reviewed like code.
 10. **Release + handover:** `release.md` from [templates/release.md](templates/release.md) — what ships, PR targets and
     merge order, deploy order, **manual migration SQL**, post-deploy checks, rollback. Simulate every migration on a
-    **copy** of a production restore (drop it afterwards) before calling it ready. Squash to `feat/<task>` and verify
-    `git diff --stat wip/<task> feat/<task>` lists only files the source branch changed since the worktree was made
+    **copy** of a production restore (drop it afterwards) before calling it ready. Squash to `<squash-branch>` and verify
+    `git diff --stat wip/<task> <squash-branch>` lists only files the source branch changed since the worktree was made
     (`git diff --stat <wip base> <source>`), then re-run the unit suites on the squashed tree, then
     `agt stage <id> 10 done`; the user pushes and opens PRs. After merge, the user has main run `agt thread cleanup <id>`
     (never remove worktrees or wip branches by hand); refresh the baseline.

@@ -107,6 +107,18 @@ describe("prompts", () => {
     expect(p).not.toContain("git add and git commit");
   });
 
+  test("the squash branch follows the thread type and the config's prefix override", () => {
+    const t = { id: "002", title: "Fix race", slug: "fix-race", dir: "/repo/.worktrees/fix-race", task: "fix-race" };
+    const bug = systemPrompt({ root: "/repo", role: "coordinator", thread: { ...t, type: "bug" as const } });
+    expect(bug).toContain("the squash on fix/fix-race: in each repo worktree, git switch -c fix/fix-race <source>");
+    expect(bug).not.toContain("feat/fix-race");
+    const chore = systemPrompt({ root: "/repo", role: "coordinator", thread: { ...t, type: "chore" as const } });
+    expect(chore).toContain("git switch -c chore/fix-race <source>");
+    const config = ConfigSchema.parse({ workflow: { branch_prefix: { bug: "hotfix" } } });
+    expect(systemPrompt({ root: "/repo", role: "coordinator", thread: { ...t, type: "bug" as const }, config })).toContain("git switch -c hotfix/fix-race <source>");
+    expect(ConfigSchema.safeParse({ workflow: { branch_prefix: { bug: "Hot/Fix" } } }).success).toBe(false);
+  });
+
   test("coordinator prompt names its thread, files and commands", () => {
     const p = systemPrompt({ root: "/repo", role: "coordinator", thread: T });
     for (const s of [`thread 002 ("Fix race")`, T.worktree, `${DIR}/sub.thread.md`, `${DIR}/board.md`, "agt ticket add 002", "agt worker spawn 002 --ticket <T>", "HANDOFF REQUEST", "git commit", "agt thread status 002 review", '- Plan before you spawn: split the work into the largest set of tickets that can run in parallel without touching the same files (usually 2–4). Use one ticket only when the work is genuinely a single change. Add each with: agt ticket add 002 "<title>" --scope <path> [--scope <path>].', "- Spawn a worker for every ticket that is ready, all at once, with agt worker spawn 002 --ticket <T>; the daemon queues any beyond max-workers.", "- Do not implement tickets yourself: every change to project files is made by a worker. You may read code and docs, run the tests and the stack, review and commit.", 'answer each with agt answer <thread> <Q> "<answer>". Only you and the main manager ever ask the user.']) {

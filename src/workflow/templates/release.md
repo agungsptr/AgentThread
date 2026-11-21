@@ -1,6 +1,6 @@
 # Release — <task title>
 
-Status: <ready — squashed on `feat/<task>`, waiting for the user's push and PR (date)>
+Status: <ready — squashed on `<squash-branch>`, waiting for the user's push and PR (date)>
 Target: <branch>
 Spec: [spec.md](spec.md)
 
@@ -13,13 +13,13 @@ Spec: [spec.md](spec.md)
 
 ## 2. Squash (coordinator)
 
-`git switch -c feat/<task> <source> && git merge --squash wip/<task> && git commit` per worktree. Verified: <tests on
+`git switch -c <squash-branch> <source> && git merge --squash wip/<task> && git commit` per worktree. Verified: <tests on
 the squashed tree; feat tree = wip tree + only what the source branch changed meanwhile>.
 
 ## 3. PR and merge (the user)
 
-1. Review: `git -C <worktree> show feat/<task>`.
-2. Push: `git -C <worktree> push -u origin feat/<task>` per repo.
+1. Review: `git -C <worktree> show <squash-branch>`.
+2. Push: `git -C <worktree> push -u origin <squash-branch>` per repo.
 3. PRs into <target>; merge order <and why>.
 4. Deploy order: <migration SQL → backend → frontend, with the reason each step must come first>.
 

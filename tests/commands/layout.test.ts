@@ -35,7 +35,7 @@ describe("thread.new with and without a layout", () => {
   test("with a layout: the thread directory, then tab ensure labelled <id>-<slug> in it", () => {
     const r = run([INIT, REGISTERED], { cmd: "thread.new", title: "Fix race", type: "bug" });
     expect(r.ok && r.effects).toEqual([
-      { kind: "thread.dir.ensure", thread: { id: "001", title: "Fix race", slug: "fix-race", task: "fix-race", dir: "/repo/.worktrees/fix-race" } },
+      { kind: "thread.dir.ensure", thread: { id: "001", title: "Fix race", slug: "fix-race", task: "fix-race", dir: "/repo/.worktrees/fix-race", type: "bug" } },
       { kind: "herdr.tab.ensure", thread: "001", label: "001-fix-race", cwd: "/repo/.worktrees/fix-race", env: expect.objectContaining({ AGT_THREAD: "001", AGT_ROLE: "coordinator", AGT_AGENT: "claude-code" }) },
     ]);
   });

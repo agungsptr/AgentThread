@@ -3,7 +3,8 @@ import { existsSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { DEFAULT_CONFIG, type Config } from "../config/config.ts";
 import { canTransitionThread, canTransitionTicket, scopesOverlap, slugify, validateHandoff } from "../domain/rules.ts";
-import { ROLES, type Actor, type AgentKind, type EventBody, type Role, type ThreadStatus, type TicketStatus } from "../domain/types.ts";
+import { squashBranch } from "../domain/branches.ts";
+import { ROLES, type Actor, type AgentKind, type EventBody, type Role, type ThreadStatus, type ThreadType, type TicketStatus } from "../domain/types.ts";
 import { roleAgent, type RoleAgent } from "../agents/roles.ts";
 import { agentName, awaitsWorker, conflictingTicket, FILE_HOLDING, liveSessions, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure as tabEnsureFor, workerLimit } from "../orchestration/sessions.ts";
 import { stageNa } from "../workflow/project-config.ts";
@@ -17,8 +18,8 @@ export type Effect =
   /** A task worktree of one workspace repo, at `<dir>/<repo>` on a new `wip/<task>` from `source`. */
   | { kind: "git.worktree.add"; thread: string; repo: string; repoPath: string; path: string; branch: string; source: string }
   /** Removes a done task thread's repo worktrees and wip/<task> branches, then its directory if only agt's files are left. */
-  | { kind: "git.thread.cleanup"; thread: string; task: string; dir: string; repos: { repo: string; repoPath: string; path: string }[] }
-  | { kind: "thread.dir.ensure"; thread: { id: string; title: string; slug: string; task: string; dir: string } }
+  | { kind: "git.thread.cleanup"; thread: string; task: string; /** The thread's squash branch (a thread from before types follow the prefix: feat/<task> is checked too). */ squashBranch: string; dir: string; repos: { repo: string; repoPath: string; path: string }[] }
+  | { kind: "thread.dir.ensure"; thread: { id: string; title: string; slug: string; task: string; dir: string; type: ThreadType } }
   | { kind: "herdr.tab.ensure"; thread: string; label: string; cwd: string; env: Record<string, string>; tab?: string }
   /** `workers`: the thread is done, so its workers tabs close too (a tab closed only to be reopened keeps them). */
   | { kind: "herdr.tab.close"; thread: string; tab: string; workers?: true }
@@ -562,7 +563,7 @@ function newThread(state: State, cmd: Extract<Command, { cmd: "thread.new" }>, c
       ...tierEvents(state, id, cmd),
     ],
     effects: [
-      { kind: "thread.dir.ensure", thread: { id, title: cmd.title, slug, task, dir } },
+      { kind: "thread.dir.ensure", thread: { id, title: cmd.title, slug, task, dir, type: cmd.type } },
       // A proposed thread's tab opens once its tier is chosen (the reactor, on thread.tier_chosen).
       ...(state.layout && cmd.tier === undefined ? [tabEnsure({ id, slug, dir }, ctx)] : []),
     ],
@@ -637,7 +638,7 @@ function cleanupThread(t: Thread, ctx: HandlerContext): Decision {
     .map(([repo, entry]) => ({ repo, repoPath: resolve(ctx.root, entry.path), path: t.worktrees[repo]!.path }));
   return {
     events: [{ type: "thread.cleanup_requested", thread: t.id, payload: {} }],
-    effects: [{ kind: "git.thread.cleanup", thread: t.id, task: t.task, dir: t.dir, repos }],
+    effects: [{ kind: "git.thread.cleanup", thread: t.id, task: t.task, squashBranch: squashBranch(t.type, t.task, (ctx.config ?? DEFAULT_CONFIG).workflow.branch_prefix), dir: t.dir, repos }],
     result: { requested: true, repos: repos.map((r) => r.repo) },
   };
 }

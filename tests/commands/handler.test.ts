@@ -46,7 +46,7 @@ describe("thread.new", () => {
     if (!r.ok) throw new Error(r.error);
     expect(r.result).toEqual({ thread: "001", task: "kyc-1", dir: "/repo/.worktrees/kyc-1" });
     expect(r.effects).toEqual([
-      { kind: "thread.dir.ensure", thread: { id: "001", title: "Fix login", slug: "fix-login", task: "kyc-1", dir: "/repo/.worktrees/kyc-1" } },
+      { kind: "thread.dir.ensure", thread: { id: "001", title: "Fix login", slug: "fix-login", task: "kyc-1", dir: "/repo/.worktrees/kyc-1", type: "bug" } },
     ]);
     expect(r.effects.some((e) => e.kind === "git.worktree.add")).toBe(false);
     const payload = (r.events[0] as { payload: Record<string, unknown> }).payload;

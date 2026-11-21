@@ -5,7 +5,7 @@ import { basename, join } from "node:path";
 import { agentsMd, writeAgentsFiles, writeThreadDirFiles } from "../../src/agents/agents-md.ts";
 import { SKILL_REL } from "../../src/agents/skill.ts";
 import { type Runner, spawnRunner } from "../../src/herdr/bridge.ts";
-import { DEFAULT_CONFIG } from "../../src/config/config.ts";
+import { ConfigSchema, DEFAULT_CONFIG } from "../../src/config/config.ts";
 import { createEffectRunner } from "../../src/daemon/effects.ts";
 import type { SpawnJob } from "../../src/agents/spawn-job.ts";
 import { addWorktree } from "../../src/project/git.ts";
@@ -431,7 +431,7 @@ describe("worker commit guard", () => {
 
 describe("branch-aware commit guard and no-push hook", () => {
   const WIP = "AgentThread: workers commit only on wip/<task>.";
-  const FEAT = "AgentThread: the coordinator commits only the squash on feat/<task>.";
+  const FEAT = "AgentThread: the coordinator commits only the squash on feat/t1.";
   const PUSH = "AgentThread: agents never push; the user pushes.";
   function taskWt(branch: string) {
     const root = tempRepo();
@@ -543,6 +543,44 @@ describe("branch-aware commit guard and no-push hook", () => {
     const r = commit(taskWt("wip/t1").wt, { ...AGENT, AGT_ROLE: "coordinator", AGT_TASK: "t1" });
     expect(r.exitCode).not.toBe(0);
     expect(err(r)).toContain(FEAT);
+  });
+
+  describe("the squash branch follows the thread type (squash-branch thread file)", () => {
+    const setup = (branch: string, squash: string | null) => {
+      const { root, wt } = taskWt(branch);
+      const d = join(root, ".agentthread", "threads", "th1-some-slug");
+      mkdirSync(d, { recursive: true });
+      writeFileSync(join(d, "stage8"), "done\n");
+      if (squash !== null) writeFileSync(join(d, "squash-branch"), `${squash}\n`);
+      return { root, wt };
+    };
+    const CENV = (root: string) => ({ ...AGENT, AGT_ROOT: root, AGT_ROLE: "coordinator", AGT_TASK: "t1", AGT_THREAD: "th1" });
+
+    test("a bug thread: the coordinator commits on fix/<task> and is refused on feat/<task>", () => {
+      const ok = setup("fix/t1", "fix/t1");
+      expect(commit(ok.wt, CENV(ok.root)).exitCode).toBe(0);
+      const bad = setup("feat/t1", "fix/t1");
+      const r = commit(bad.wt, CENV(bad.root));
+      expect(r.exitCode).not.toBe(0);
+      expect(err(r)).toContain("AgentThread: the coordinator commits only the squash on fix/t1.");
+    });
+
+    test("a thread without the file (older agt) keeps feat/<task>; fix/<task> is refused there", () => {
+      const ok = setup("feat/t1", null);
+      expect(commit(ok.wt, CENV(ok.root)).exitCode).toBe(0);
+      const bad = setup("fix/t1", null);
+      expect(commit(bad.wt, CENV(bad.root)).exitCode).not.toBe(0);
+    });
+
+    test("writeAll writes the file from the thread type and the config's prefix override", () => {
+      const root = tempRepo();
+      const state = stateOf(INIT, taskThreadCreated("001", "t1", { threadType: "bug" }));
+      writeAll(root, state, undefined, () => undefined);
+      const file = join(root, ".agentthread", "threads", "001-thread-001", "squash-branch");
+      expect(readFileSync(file, "utf8")).toBe("fix/t1\n");
+      writeAll(root, state, ConfigSchema.parse({ workflow: { branch_prefix: { bug: "hotfix" } } }), () => undefined);
+      expect(readFileSync(file, "utf8")).toBe("hotfix/t1\n");
+    });
   });
 
   describe("the squash gate (stage 8)", () => {
@@ -822,14 +860,14 @@ describe("thread directory", () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "notes.txt"), "mine\n");
     const run = createEffectRunner({ root, config: NO_SKILL, layout: () => undefined, thread: () => undefined, log: () => {} });
-    await expect(run({ kind: "thread.dir.ensure", thread: { id: "001", title: "Fix login", slug: "fix-login", task: "kyc-1", dir } })).rejects.toThrow(
+    await expect(run({ kind: "thread.dir.ensure", thread: { id: "001", title: "Fix login", slug: "fix-login", task: "kyc-1", dir, type: "bug" } })).rejects.toThrow(
       `${dir} already exists and is not empty`,
     );
     expect(readdirSync(dir)).toEqual(["notes.txt"]);
     // an existing empty directory is fine
     const empty = join(root, ".worktrees", "kyc-2");
     mkdirSync(empty, { recursive: true });
-    expect(await run({ kind: "thread.dir.ensure", thread: { id: "002", title: "X", slug: "x", task: "kyc-2", dir: empty } })).toEqual([]);
+    expect(await run({ kind: "thread.dir.ensure", thread: { id: "002", title: "X", slug: "x", task: "kyc-2", dir: empty, type: "bug" } })).toEqual([]);
     expect(existsSync(join(empty, "AGENTS.md"))).toBe(true);
   });
 
@@ -852,7 +890,7 @@ describe("thread directory", () => {
       },
       log: (m) => logs.push(m),
     });
-    expect(await run({ kind: "thread.dir.ensure", thread: { id: "001", title: "Fix login", slug: "fix-login", task: "kyc-1", dir } })).toEqual([]);
+    expect(await run({ kind: "thread.dir.ensure", thread: { id: "001", title: "Fix login", slug: "fix-login", task: "kyc-1", dir, type: "bug" } })).toEqual([]);
     expect(readFileSync(join(dir, "AGENTS.md"), "utf8")).toContain(`thread 001 ("Fix login")`);
     expect(readFileSync(join(dir, "AGENTS.md"), "utf8")).toContain(dir);
     expectSymlink(dir);

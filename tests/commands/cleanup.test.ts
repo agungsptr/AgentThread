@@ -56,6 +56,7 @@ describe("thread.cleanup in the handler", () => {
         kind: "git.thread.cleanup",
         thread: "001",
         task: "kyc-1",
+        squashBranch: "feat/kyc-1",
         dir: "/repo/.worktrees/kyc-1",
         repos: [
           { repo: "api", repoPath: "/repo/api", path: "/repo/.worktrees/kyc-1/api" },
@@ -140,10 +141,10 @@ describe("agt thread cleanup through the daemon (real git)", () => {
   }
 
   /** A done task thread kyc-1 with worktrees for api and web made by agt (generated files, excludes, guard), and a main session. */
-  async function doneThread(root: string) {
+  async function doneThread(root: string, type: "feature" | "bug" | "chore" = "feature") {
     const d = await start(root);
     expect(await d.cmd({ cmd: "session.open_main", session: MAIN_SESSION, pane: "p-main" })).toMatchObject({ ok: true });
-    expect(await d.cmd({ cmd: "thread.new", title: "KYC", type: "feature", task: "kyc-1" })).toMatchObject({ ok: true });
+    expect(await d.cmd({ cmd: "thread.new", title: "KYC", type, task: "kyc-1" })).toMatchObject({ ok: true });
     for (const repo of ["api", "web"]) expect(await d.cmd({ cmd: "worktree.add", thread: "001", repo, from: "main" }, COORD)).toMatchObject({ ok: true });
     await d.waitFor((e) => e.filter((x) => x.type === "worktree.added").length === 2);
     for (const status of ["in_progress", "review", "done"]) expect(await d.cmd({ cmd: "thread.status", thread: "001", status })).toMatchObject({ ok: true });
@@ -264,6 +265,34 @@ describe("agt thread cleanup through the daemon (real git)", () => {
     await waitFor((e) => e.some((x) => x.type === "thread.cleaned"));
     expect(branchExists(join(root, "web"), "wip/kyc-1")).toBe(false);
     expect(branchExists(join(root, "web"), "feat/kyc-1")).toBe(true);
+  });
+
+  test("a bug thread's squash branch is fix/<task>: cleaned even when wip/<task> has commits of its own", async () => {
+    const root = workspace();
+    const { cmd, waitFor } = await doneThread(root, "bug");
+    for (const repo of ["api", "web"]) sh(join(root, repo), "branch", "-m", "feat/kyc-1", "fix/kyc-1");
+    extraCommit(join(root, "web"));
+    expect(await cmd({ cmd: "thread.cleanup", thread: "001" }, MAIN)).toMatchObject({ ok: true });
+    await waitFor((e) => e.some((x) => x.type === "thread.cleaned"));
+    expect(branchExists(join(root, "web"), "wip/kyc-1")).toBe(false);
+    expect(branchExists(join(root, "web"), "fix/kyc-1")).toBe(true);
+  });
+
+  test("a bug thread without fix/<task> and with unsquashed commits is refused (feat/<task> absent too)", async () => {
+    const root = workspace();
+    const { cmd, waitFor } = await doneThread(root, "bug");
+    sh(join(root, "web"), "branch", "-D", "feat/kyc-1");
+    extraCommit(join(root, "web"));
+    expect(await cmd({ cmd: "thread.cleanup", thread: "001" }, MAIN)).toMatchObject({ ok: true });
+    await waitFor((e) => e.some((x) => x.type === "thread.cleanup_failed"));
+    expect(branchExists(join(root, "web"), "wip/kyc-1")).toBe(true);
+  });
+
+  test("the handler hands the job the config's branch prefix for the type", () => {
+    const s = stateOf(INIT, taskThreadCreated("001", "kyc-1", { status: "done", threadType: "bug" }), { type: "worktree.added", thread: "001", payload: { repo: "api", path: "/repo/.worktrees/kyc-1/api", branch: "wip/kyc-1", source: "main" } });
+    const config = ConfigSchema.parse({ workspace: { repos: { api: { path: "api" } } }, workflow: { branch_prefix: { bug: "hotfix" } } });
+    const r = handle(s, CommandSchema.parse({ cmd: "thread.cleanup", thread: "001" }), { role: "main" }, { root: "/repo", config });
+    expect(r.ok && r.effects[0]).toMatchObject({ kind: "git.thread.cleanup", squashBranch: "hotfix/kyc-1" });
   });
 
   test("a worktree folder deleted by hand: only its stale entry goes, unrelated stale entries stay", async () => {

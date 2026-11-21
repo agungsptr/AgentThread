@@ -238,6 +238,15 @@ export const ConfigSchema = z
     workflow: z
       .object({
         chat_language: z.string().trim().min(1).default("English"),
+        /** The squash branch prefix per thread type (defaults: feature feat, bug fix, chore chore): `<prefix>/<task>`. */
+        branch_prefix: z
+          .object({
+            feature: z.string().regex(/^[a-z][a-z0-9-]*$/, "branch prefix must match /^[a-z][a-z0-9-]*$/").optional(),
+            bug: z.string().regex(/^[a-z][a-z0-9-]*$/, "branch prefix must match /^[a-z][a-z0-9-]*$/").optional(),
+            chore: z.string().regex(/^[a-z][a-z0-9-]*$/, "branch prefix must match /^[a-z][a-z0-9-]*$/").optional(),
+          })
+          .strict()
+          .optional(),
         file_language: z.string().trim().min(1).default("English"),
         /** `restart` may use the `{task}` placeholder. */
         stack: z.object({ restart: z.string().min(1).optional(), status: z.string().min(1).optional() }).strict().optional(),

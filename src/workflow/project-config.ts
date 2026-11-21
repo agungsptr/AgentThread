@@ -1,3 +1,4 @@
+import { DEFAULT_BRANCH_PREFIX } from "../domain/branches.ts";
 import { effectiveStack, type Config } from "../config/config.ts";
 
 const NA_E2E = "no e2e commands configured";
@@ -33,6 +34,14 @@ export function projectConfigSection(config: Config, repos: { name: string; path
   const lines: string[] = ["## Project config (from .agentthread/config.yaml)", ""];
 
   lines.push("### Languages", "", `- Chat language: ${val(w.chat_language)}`, `- File language: ${val(w.file_language)}`, "");
+  lines.push(
+    "### Squash branch",
+    "",
+    `- Feature: \`${w.branch_prefix?.feature ?? DEFAULT_BRANCH_PREFIX.feature}/<task>\``,
+    `- Bug: \`${w.branch_prefix?.bug ?? DEFAULT_BRANCH_PREFIX.bug}/<task>\``,
+    `- Chore: \`${w.branch_prefix?.chore ?? DEFAULT_BRANCH_PREFIX.chore}/<task>\``,
+    "",
+  );
 
   lines.push(
     "### Repos",

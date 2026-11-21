@@ -1,12 +1,13 @@
 import { isAbsolute, join } from "node:path";
 import type { Config } from "../config/config.ts";
-import type { SessionRole } from "../domain/types.ts";
+import { squashBranch } from "../domain/branches.ts";
+import type { SessionRole, ThreadType } from "../domain/types.ts";
 import { tierList } from "../orchestration/tiers.ts";
 import { hasServices } from "../stack/target.ts";
 import { paths } from "../project/paths.ts";
 
 /** A thread as the prompts see it: a thread directory (`dir`), or a legacy thread's single git worktree. */
-export type PromptThread = { id: string; title: string; slug: string; worktree?: string; dir?: string; task?: string };
+export type PromptThread = { id: string; title: string; slug: string; worktree?: string; dir?: string; task?: string; type?: ThreadType };
 
 /** Where the thread's agents work: its thread directory, else its (legacy) worktree. */
 export const workDir = (t: PromptThread) => t.dir ?? t.worktree ?? "";
@@ -21,6 +22,9 @@ interface PromptInput {
   /** Main's tier lines and the worker's command rule are rendered from it; without it, tiers are left out and agents are autonomous. */
   config?: Config;
 }
+
+/** The thread's squash branch (its type picks the prefix, the config may override it). */
+const sb = (o: PromptInput) => squashBranch(o.thread!.type, o.thread!.task!, o.config?.workflow.branch_prefix);
 
 const threadDir = (o: PromptInput) => paths(o.root).threadDir(o.thread!);
 
@@ -99,7 +103,7 @@ export function systemPrompt(o: PromptInput): string {
       `- Spawn a worker for every ticket that is ready, all at once, with agt worker spawn ${t.id} --ticket <T>; the daemon queues any beyond max-workers.`,
       t.dir === undefined
         ? "- Workers only edit files. You are the only one who commits: when a ticket is done, review the change, then git add and git commit in the worktree."
-        : `- Workers commit their tickets on wip/${t.task}. You never edit repo files; your only repo commit is the squash on feat/${t.task}: in each repo worktree, git switch -c feat/${t.task} <source>, git merge --squash wip/${t.task}, then one plain commit.`,
+        : `- Workers commit their tickets on wip/${t.task}. You never edit repo files; your only repo commit is the squash on ${sb(o)}: in each repo worktree, git switch -c ${sb(o)} <source>, git merge --squash wip/${t.task}, then one plain commit.`,
     ...(t.dir === undefined
       ? []
       : ["- Review each ticket's commits (git show --stat must list only its files), then agt ticket accept or agt ticket return with what to fix."]),

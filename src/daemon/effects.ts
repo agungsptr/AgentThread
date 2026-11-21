@@ -12,7 +12,7 @@ import { canonical, cleanupThread, type CleanupOutcome } from "./cleanup-job.ts"
 import type { Effect } from "../commands/handler.ts";
 import type { Command } from "../commands/schema.ts";
 import { durationMs, type Config } from "../config/config.ts";
-import type { EventBody, Layout } from "../domain/types.ts";
+import type { EventBody, Layout, ThreadType } from "../domain/types.ts";
 import { HerdrCli, HerdrError, spawnAsync } from "../herdr/bridge.ts";
 import { addWorktreeAsync, addWorktreeFromAsync } from "../project/git.ts";
 import { installCommand } from "../project/prefill.ts";
@@ -90,7 +90,7 @@ export function createEffectRunner(opts: {
     ));
 
   // AGENTS.md carries the role rules; a failure to write it is logged and never blocks the worktree or a spawn.
-  const writeAgents = async (thread: { id: string; title: string; slug: string; task?: string }, worktree: string) => {
+  const writeAgents = async (thread: { id: string; title: string; slug: string; task?: string; type?: ThreadType }, worktree: string) => {
     try {
       await writeAgentsFilesAsync({ root: opts.root, worktree, ...(thread.task !== undefined ? { task: thread.task } : {}), content: agentsMd({ root: opts.root, thread: { ...thread, worktree }, config: opts.config }), config: opts.config, log });
     } catch (e) {
@@ -98,7 +98,7 @@ export function createEffectRunner(opts: {
     }
   };
   // A thread directory is not in git: its files are written plainly, with the same failure handling.
-  const writeDirAgents = (thread: { id: string; title: string; slug: string; task?: string }, dir: string) => {
+  const writeDirAgents = (thread: { id: string; title: string; slug: string; task?: string; type?: ThreadType }, dir: string) => {
     try {
       writeThreadDirFiles({ root: opts.root, dir, ...(thread.task !== undefined ? { task: thread.task } : {}), content: agentsMd({ root: opts.root, thread: { ...thread, dir }, config: opts.config }), config: opts.config, log });
     } catch (e) {

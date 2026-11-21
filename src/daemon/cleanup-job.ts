@@ -13,9 +13,9 @@ const GIT_TIMEOUT_MS = 60_000;
 
 /**
  * `agt thread cleanup`'s background job (never blocking the daemon). Every worktree is checked first with `git status
- * --porcelain` (which honours ignores and the generated files' excludes), and where feat/<task> is missing, wip/<task>
+ * --porcelain` (which honours ignores and the generated files' excludes), and where the squash branch (feat/fix/chore/<task>) is missing, wip/<task>
  * must have no commits that no other branch has: either stops the job before anything is removed. Then, per repo, `git worktree remove` without --force (git refuses again if a file appeared since the check,
- * so uncommitted work is never deleted) and `git branch -D wip/<task>`; feat/<task> is never touched. A worktree or
+ * so uncommitted work is never deleted) and `git branch -D wip/<task>`; the squash branch is never touched. A worktree or
  * branch already gone (an earlier cleanup that stopped mid-way, or a folder deleted by hand) is skipped or only
  * unregistered, so the job can run again. Last, the thread
  * directory goes if only agt's own files are left in it.
@@ -29,8 +29,10 @@ export async function cleanupThread(e: CleanupEffect, stopping: () => boolean = 
   const hasBranch = async (repoPath: string, name: string) => (await git(repoPath, ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`])).exitCode === 0;
   for (const r of e.repos) {
     if (stopping()) return stop(r.repo, "the daemon is stopping");
-    // Without feat/<task> the squash may never have happened: wip/<task> commits no other branch has would be lost.
-    if (!(await hasBranch(r.repoPath, `feat/${e.task}`)) && (await hasBranch(r.repoPath, branch))) {
+    // Without the squash branch the squash may never have happened: wip/<task> commits no other branch has would be lost.
+    // (A thread made before the branch followed its type squashed onto feat/<task>.)
+    const squashed = (await hasBranch(r.repoPath, e.squashBranch)) || (await hasBranch(r.repoPath, `feat/${e.task}`));
+    if (!squashed && (await hasBranch(r.repoPath, branch))) {
       const own = await git(r.repoPath, ["rev-list", `refs/heads/${branch}`, "--not", `--exclude=${branch}`, "--branches"]);
       if (own.exitCode !== 0 || own.timedOut) return stop(r.repo, `git rev-list failed: ${why(own)}`);
       if (own.stdout.trim()) return stop(r.repo, `${branch} has commits that were never squashed; if it was merged another way, delete it with git branch -D ${branch} and run cleanup again`);

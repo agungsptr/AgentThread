@@ -277,7 +277,7 @@ function* excludeInWorktree(c: Ctx, root: string, repo: string, repoName: string
 
 const GUARD_MESSAGE = "AgentThread: workers do not commit; the coordinator commits.";
 const WORKER_BRANCH_MESSAGE = "AgentThread: workers commit only on wip/<task>.";
-const COORDINATOR_BRANCH_MESSAGE = "AgentThread: the coordinator commits only the squash on feat/<task>.";
+const COORDINATOR_BRANCH_MESSAGE_PREFIX = "AgentThread: the coordinator commits only the squash on ";
 const STAGE8_PREFIX = "AgentThread: stage 8 (browser check) is not done; record it with agt stage ";
 const STAGE8_SUFFIX = " 8 done|na first.";
 const NO_LIST_PREFIX = "AgentThread: no file list for ticket ";
@@ -359,9 +359,14 @@ function hookStub(guardDir: string): string {
     "    coordinator)",
     '      case "$B" in',
     "        thread/*) ;;",
-    `        feat/*) [ -n "\${AGT_TASK:-}" ] && [ "$B" = "feat/$AGT_TASK" ] || { echo ${shq(COORDINATOR_BRANCH_MESSAGE)} >&2; exit 1; }
+    `        *)
+          # The thread's squash branch is in its squash-branch file (written by agt, so it holds after a daemon restart);
+          # a thread without one (older agt) squashes onto feat/<task>.
+          SF=$(agt_thread_file squash-branch); SB=
+          [ -n "$SF" ] && SB=$(head -n 1 "$SF" 2>/dev/null)
+          [ -n "$SB" ] || SB="feat/\${AGT_TASK:-<task>}"
+          [ "$B" = "$SB" ] || { echo "${COORDINATOR_BRANCH_MESSAGE_PREFIX}$SB." >&2; exit 1; }
           [ -n "$(agt_thread_file stage8)" ] || { echo "${STAGE8_PREFIX}\${AGT_THREAD:-<thread>}${STAGE8_SUFFIX}" >&2; exit 1; } ;;`,
-    `        *) echo ${shq(COORDINATOR_BRANCH_MESSAGE)} >&2; exit 1 ;;`,
     "      esac ;;",
     "  esac",
     "fi",
@@ -411,7 +416,7 @@ export function refreshHookStubs(root: string): void {
 }
 
 /**
- * Worker commit guard: a per-worktree core.hooksPath whose pre-commit refuses commits by role and branch (workers on wip/<task>, the coordinator on feat/<task>), pre-push refuses any push by an agent. Every
+ * Worker commit guard: a per-worktree core.hooksPath whose pre-commit refuses commits by role and branch (workers on wip/<task>, the coordinator on its squash branch, feat/fix/chore/<task> by thread type), pre-push refuses any push by an agent. Every
  * standard hook is a stub that then runs the project's own hook, found at run time through the worktree-scoped
  * agentthread.hooksPath (the original core.hooksPath as configured, empty when unset), so the shared stubs hold no
  * worktree-specific path. Needs extensions.worktreeConfig (set up by excludeInWorktree); the main checkout is untouched.
