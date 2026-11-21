@@ -419,4 +419,4 @@ a full release run (see [docs/agents.md](docs/agents.md)). The package is not pu
 
 ## License
 
-TBD
+[MIT](LICENSE)
