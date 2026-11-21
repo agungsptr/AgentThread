@@ -19,7 +19,7 @@ import { HerdrCli, shellQuote } from "../herdr/bridge.ts";
 import { refreshRootSkill } from "../agents/skill.ts";
 import { initCommand, setupIfNeeded, setupOnTty } from "../project/setup.ts";
 import { paths } from "../project/paths.ts";
-import { applyConfig, showConfig } from "../project/config-apply.ts";
+import { applyConfig, showConfig, workspaceWarnings } from "../project/config-apply.ts";
 import { findRoot } from "../project/root.ts";
 import { project, type State } from "../state/projection.ts";
 import { USAGE } from "./usage.ts";
@@ -155,7 +155,9 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
       if (sub === "show") {
         const { values, positionals } = parse(rest, { json: { type: "boolean" } });
         if (positionals.length) throw new UsageError("config show takes only --json");
-        console.log(showConfig(findRoot(cwd, env), env, !!values.json));
+        const showRoot = findRoot(cwd, env);
+        console.log(showConfig(showRoot, env, !!values.json));
+        for (const w of workspaceWarnings(showRoot, loadConfig(showRoot, env))) console.error(`agt: warning: ${w}`);
         return 0;
       }
       if (sub === "apply") {
@@ -177,6 +179,7 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
           return 1;
         }
         console.log(res.diff.length ? res.diff.join("\n") : "no changes");
+        for (const w of res.warnings) console.error(`agt: warning: ${w}`);
         if (res.diff.some((l) => l.startsWith("- ")) && !res.hashChanged) console.log("note: a removed key leaves the effective config unchanged (the user config or the default still applies)");
         if (!res.written) console.log("dry run: config not changed");
         else {

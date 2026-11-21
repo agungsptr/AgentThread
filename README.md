@@ -89,8 +89,13 @@ workspace:                              # optional; without repos, the root's ch
   worktree_setup: make wt-new TASK={task} SRC={src} REPOS={repo}
 ```
 
-Per repo, `copy: [.env, e2e/.env.local]` lists files copied from the main checkout into each new worktree (missing ones are
-skipped with a note), and `install: <cmd>` runs in a new worktree (default: detected from the lockfile, `bun install` /
+Per repo, `copy: [.env, e2e/.env.local, e2e/.auth]` lists files and directories (recursive; symlinks inside are skipped) copied from the main
+checkout into each new worktree (missing ones are skipped with a note; an existing file is never overwritten, except a git-tracked
+file the worktree still has unmodified: it is replaced by the local copy and marked `git update-index --skip-worktree`, so it
+never shows in `git status` nor gets staged). `link: [node_modules]` symlinks directories from the main checkout instead; with
+`node_modules` linked, `install` is skipped for the repo unless the lockfile differs from the main checkout's (then it installs
+instead and logs why). Copies and links are git-excluded in the worktree. `agt config show` / `config apply` warn about a `copy`
+entry tracked by git and about a `workflow.browser.urls` localhost port that no service uses. Also per repo, `install: <cmd>` runs in a new worktree (default: detected from the lockfile, `bun install` /
 `yarn install --frozen-lockfile` / `pnpm install --frozen-lockfile` / `npm ci`; `""` disables). `workspace.services.<name>`
 (`^[a-z][a-z0-9-]*$`) describes a process of the local stack: `repo` (must be in `workspace.repos`), `dir` (default `.`),
 `start`, optional `port`, `health` (`http(s)://...` or `tcp:<port>`, default `tcp:<port>` when `port` is set), `migrate` (opt-in: runs only with

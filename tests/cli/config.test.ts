@@ -34,3 +34,28 @@ test("agt config reports invalid config", () => {
   expect(r.code).toBe(1);
   expect(r.err).toMatch(/^agt: invalid config .*herdr\.close_tab_on_done/);
 });
+
+test("config show and apply warn about tracked copy entries and browser ports with no service", () => {
+  const root = tempRepo();
+  initProject(root, "demo");
+  // tempRepo is a git repo: track a file there, then name it in copy
+  writeFileSync(join(root, ".env"), "X=1\n");
+  Bun.spawnSync(["git", "-C", root, "add", ".env"]);
+  const repoDir = root.split("/").pop()!;
+  const patch = join(root, "patch.yaml");
+  writeFileSync(
+    patch,
+    `workspace:\n  repos:\n    app: { path: ".", copy: [".env", "nothere"] }\n  services:\n    web: { repo: app, start: "true", port: 3000 }\nworkflow:\n  browser:\n    urls: ["http://localhost:3000/", "http://localhost:9001/", "https://example.com/"]\n`,
+  );
+  void repoDir;
+  const dry = agt(root, ["config", "apply", "--dry-run", patch]);
+  expect(dry.code).toBe(0);
+  expect(dry.err).toContain("copy app/.env is tracked by git: agt marks it skip-worktree in each worktree");
+  expect(dry.err).toContain("port 9001 matches no service port (3000)");
+  expect(dry.err).not.toContain("nothere");
+  expect(dry.err).not.toContain("example.com");
+  expect(agt(root, ["config", "apply", patch]).code).toBe(0);
+  const show = agt(root, ["config", "show"]);
+  expect(show.err).toContain("copy app/.env is tracked by git");
+  expect(show.err).toContain("port 9001");
+});

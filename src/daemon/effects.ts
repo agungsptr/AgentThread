@@ -16,7 +16,7 @@ import type { EventBody, Layout } from "../domain/types.ts";
 import { HerdrCli, HerdrError, spawnAsync } from "../herdr/bridge.ts";
 import { addWorktreeAsync, addWorktreeFromAsync } from "../project/git.ts";
 import { installCommand } from "../project/prefill.ts";
-import { anchoredExclude, copyIntoWorktree, redactSecrets } from "../project/worktree-copy.ts";
+import { anchoredExclude, copyIntoWorktree, linkIntoWorktree, lockfilesDiffer, redactSecrets } from "../project/worktree-copy.ts";
 import { paths } from "../project/paths.ts";
 import { NOTICE_HELD_CAPPED_AT, NOTICE_RETRY_MAX_MS } from "../orchestration/reactor.ts";
 import { threadGitEnv } from "../orchestration/sessions.ts";
@@ -455,14 +455,23 @@ async function addRepoWorktree(e: RepoWorktreeEffect, root: string, config: Conf
     const repoCfg = config.workspace.repos?.[e.repo];
     const { notes, copied } = await copyIntoWorktree(e.repoPath, e.path, repoCfg?.copy ?? []);
     for (const note of notes) log?.(`worktree ${e.repo}: ${note}`);
-    if (copied.length) {
+    // Links: node_modules is linked only while the lockfile is the main checkout's; otherwise it is installed, and says why.
+    const isNm = (n: string) => n.replace(/\/+$/, "") === "node_modules";
+    const wanted = repoCfg?.link ?? [];
+    const differs = wanted.some(isNm) ? await lockfilesDiffer(e.repoPath, e.path) : [];
+    if (differs.length) log?.(`worktree ${e.repo}: link node_modules: not linked, ${differs.join(", ")} differs from the main checkout; installing instead`);
+    const linkedRes = await linkIntoWorktree(e.repoPath, e.path, differs.length ? wanted.filter((n) => !isNm(n)) : wanted);
+    for (const note of linkedRes.notes) log?.(`worktree ${e.repo}: ${note}`);
+    const linkNm = wanted.some(isNm) && !differs.length;
+    const excludes = [...copied, ...linkedRes.linked];
+    if (excludes.length) {
       try {
-        addCopiedExcludes(root, e.repo, copied.map(anchoredExclude));
+        addCopiedExcludes(root, e.repo, excludes.map(anchoredExclude));
       } catch (err) {
         log?.(`worktree ${e.repo}: could not git-ignore the copied files: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    const install = installCommand(e.path, repoCfg?.install);
+    const install = linkNm ? null : installCommand(e.path, repoCfg?.install);
     if (install !== null) {
       const ran = bg.setupChain.then(() => (bg.stopped ? undefined : runShellGroup(`cd ${shq(e.path)} || exit 1\n${install}`, setupTimeoutMs, bg.groups)));
       bg.setupChain = ran.catch(() => {});

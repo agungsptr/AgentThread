@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import { isMap, isScalar, parse, parseDocument, stringify } from "yaml";
 import { ConfigSchema, configHash, configPaths, deepMerge, loadConfig, readYaml, type Config } from "../config/config.ts";
 import { refreshRootSkill } from "../agents/skill.ts";
@@ -19,6 +19,36 @@ export function showConfig(root: string, env: Env, json: boolean): string {
   if (json) return JSON.stringify({ config, sources }, null, 2);
   const note = (n: string, s: { path: string; exists: boolean }) => `# ${n}: ${s.path}${s.exists ? "" : " (not present)"}`;
   return `${note("user config", sources.user)}\n${note("project config", sources.project)}\n${stringify(config).trimEnd()}`;
+}
+
+/**
+ * Warnings about a workspace config: a configured copy entry tracked by git in the main checkout (agt marks the
+ * worktree's copy skip-worktree), and browser URLs on localhost whose port no service listens on.
+ */
+export function workspaceWarnings(root: string, config: Config): string[] {
+  const out: string[] = [];
+  for (const [name, repo] of Object.entries(config.workspace.repos ?? {})) {
+    const dir = resolve(root, repo.path);
+    for (const entry of repo.copy ?? []) {
+      const r = Bun.spawnSync(["git", "-C", dir, "ls-files", "--", entry], { stdout: "pipe", stderr: "pipe" });
+      if (r.exitCode === 0 && r.stdout.toString().trim() !== "") out.push(`copy ${name}/${entry} is tracked by git: agt marks it skip-worktree in each worktree`);
+    }
+  }
+  const ports = new Set(Object.values(config.workspace.services ?? {}).flatMap((s) => (s.enabled && s.port !== undefined ? [s.port] : [])));
+  if (ports.size) {
+    for (const url of config.workflow.browser?.urls ?? []) {
+      let u: URL;
+      try {
+        u = new URL(url);
+      } catch {
+        continue;
+      }
+      if (!["localhost", "127.0.0.1", "[::1]", "0.0.0.0"].includes(u.hostname)) continue;
+      const port = Number(u.port || (u.protocol === "https:" ? 443 : 80));
+      if (!ports.has(port)) out.push(`workflow.browser.urls ${url}: port ${port} matches no service port (${[...ports].join(", ")})`);
+    }
+  }
+  return out;
 }
 
 /** Leaf paths of a plain-object tree (arrays and scalars are leaves). */
@@ -67,7 +97,7 @@ function mergeInto(doc: ReturnType<typeof parseDocument>, path: string[], patch:
   }
 }
 
-export type ApplyResult = { ok: false; errors: string[] } | { ok: true; diff: string[]; written: boolean; hashChanged: boolean; refreshError?: string };
+export type ApplyResult = { ok: false; errors: string[] } | { ok: true; diff: string[]; written: boolean; hashChanged: boolean; warnings: string[]; refreshError?: string };
 
 /**
  * `agt config apply`: merges a partial project config into .agentthread/config.yaml, validates the merged result with
@@ -117,7 +147,8 @@ export function applyConfig(o: {
 
   const diff = diffConfig(beforeJson, afterJson);
   const hashChanged = oldHash !== configHash(parsed.data);
-  if (o.dryRun) return { ok: true, diff, written: false, hashChanged };
+  const warnings = workspaceWarnings(o.root, parsed.data);
+  if (o.dryRun) return { ok: true, diff, written: false, hashChanged, warnings };
   mkdirSync(dirname(p.project), { recursive: true });
   const tmp = `${p.project}.tmp`;
   writeFileSync(tmp, doc.toString());
@@ -125,9 +156,9 @@ export function applyConfig(o: {
   try {
     (o.refresh ?? defaultRefresh)(o.root, parsed.data, o.env);
   } catch (e) {
-    return { ok: true, diff, written: true, hashChanged, refreshError: e instanceof Error ? e.message : String(e) };
+    return { ok: true, diff, written: true, hashChanged, warnings, refreshError: e instanceof Error ? e.message : String(e) };
   }
-  return { ok: true, diff, written: true, hashChanged };
+  return { ok: true, diff, written: true, hashChanged, warnings };
 }
 
 /** The same refresh `agt setup` and `agt init` run after writing the config. */

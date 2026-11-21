@@ -245,8 +245,31 @@ describe("the built-in copy and install step", () => {
     expect(lstatSync(join(s.path, ".env")).mode & 0o777).toBe(0o750);
     expect(readFileSync(join(s.path, "e2e/.env.local"), "utf8")).toBe("B=2\n");
     expect(existsSync(join(s.path, "missing.env"))).toBe(false);
-    expect(readFileSync(join(s.path, "tracked.txt"), "utf8")).toBe("main\n");
+    // a tracked file with local edits is replaced by the local copy and hidden from git status (skip-worktree)
+    expect(readFileSync(join(s.path, "tracked.txt"), "utf8")).toBe("dirty main\n");
+    expect(git(s.path, "status", "--porcelain").out).toBe("");
     expect(s.logs.some((l) => l.includes("missing.env") && l.includes("skipped"))).toBe(true);
+  });
+
+  test("link: node_modules is symlinked and install skipped; a differing lockfile installs instead", async () => {
+    const same = setup(cfg({ link: ["node_modules"], install: "echo run >> ../installs.log" }));
+    mkdirSync(join(same.api, "node_modules/p"), { recursive: true });
+    writeFileSync(join(same.api, ".gitignore"), "node_modules\n");
+    expect((await same.run(same.effect)).ok).toBe(true);
+    expect(lstatSync(join(same.path, "node_modules")).isSymbolicLink()).toBe(true);
+    expect(existsSync(join(same.root, ".worktrees/kyc-1/installs.log"))).toBe(false);
+    expect(git(same.path, "status", "--porcelain").out).toBe("");
+
+    const diff = setup(cfg({ link: ["node_modules"], install: "echo run >> ../installs.log" }));
+    mkdirSync(join(diff.api, "node_modules/p"), { recursive: true });
+    writeFileSync(join(diff.api, "yarn.lock"), "main\n");
+    commit(diff.api, "yarn.lock");
+    // the worktree is made from a source whose lockfile differs from the main checkout's working copy
+    writeFileSync(join(diff.api, "yarn.lock"), "edited\n");
+    expect((await diff.run(diff.effect)).ok).toBe(true);
+    expect(existsSync(join(diff.path, "node_modules"))).toBe(false);
+    expect(readFileSync(join(diff.root, ".worktrees/kyc-1/installs.log"), "utf8")).toBe("run\n");
+    expect(diff.logs.some((l) => l.includes("link node_modules: not linked") && l.includes("yarn.lock"))).toBe(true);
   });
 
   test("a symlink pointing outside the repo is refused", async () => {

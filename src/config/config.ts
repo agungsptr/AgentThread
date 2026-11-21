@@ -207,8 +207,16 @@ export const ConfigSchema = z
                 /** Run in the repo worktree. */
                 unit: z.string().min(1).optional(),
                 typecheck: z.string().min(1).optional(),
-                /** Files copied from the main checkout into each new worktree; missing ones are skipped with a note. */
+                /**
+                 * Files and directories (recursive) copied from the main checkout into each new worktree; missing ones are skipped
+                 * with a note. A git-tracked file is replaced by the local copy and marked skip-worktree there.
+                 */
                 copy: z.array(z.string().trim().min(1)).optional(),
+                /**
+                 * Directories symlinked from the main checkout into each new worktree instead of copied or installed. With
+                 * node_modules listed, `install` is skipped for the repo unless its lockfile differs from the main checkout's.
+                 */
+                link: z.array(z.string().trim().min(1)).optional(),
                 /** Run in a new worktree. Unset: detected from the lockfile; "" disables. */
                 install: z.string().optional(),
               })
