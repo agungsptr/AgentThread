@@ -1,229 +1,422 @@
-# AgentThread
+# AgentThread (`agt`)
 
-AgentThread runs a team of coding agents (Claude Code, OpenCode, Codex, omp, Antigravity) on one git repository, inside the Herdr terminal multiplexer.
-You talk to a **main manager** agent. For each feature or bug it opens a **thread**: a git worktree plus a Herdr tab with a
-**coordinator** agent, which splits the work into tickets and starts **worker** agents (in panes of that tab) to implement them.
-A local daemon (`agt daemon`) keeps the event log and renders the state as Markdown under `.agentthread/`.
+AgentThread is a local orchestrator that runs a team of coding agents inside the [Herdr](https://herdr.dev) terminal multiplexer. You talk
+to one **main manager**. For every feature, bug or chore it opens a **thread** with its own **coordinator**, which
+splits the work into tickets and starts **workers**, one per ticket, in git worktrees.
 
-## Install
+A small local daemon keeps the state: an append-only event log, rendered as Markdown under `.agentthread/`. Agents
+report back with `agt` commands, and the daemon enforces the rules (who may commit what, who may talk to whom).
+AgentThread is agent-agnostic: Claude Code, OpenCode, Codex, omp and Antigravity can each fill any role, and you can
+mix them.
 
-Requires [Bun](https://bun.sh) 1.1.34 or newer, git, Herdr and at least one supported agent.
+Why use it:
+
+- **Parallel work without collisions.** Every task gets its own worktree per repo, and every ticket lists the files its worker may touch.
+- **One session per ticket.** Small, focused agent sessions instead of one long conversation that rots.
+- **Guards.** Workers cannot commit outside their ticket, nobody pushes, banned words stay out of commits.
+- **A reviewable flow.** A ten-stage workflow (discussion, spec, tickets, review per commit, staged e2e, release notes) with you approving the decisions that matter.
+
+```
+        you
+         |
+   +-----v------+      events / state       +-----------------+
+   |    main    |<------------------------->|   agt daemon    |
+   |  (manager) |                           |   event log,    |
+   +-----+------+                           |   rendered .md  |
+         | agt thread new                   +--------^--------+
+   +-----v---------------+  one Herdr tab per        |
+   | thread: coordinator |  thread                   |
+   +-----+---------------+---------------------------+
+         | agt worker spawn (one per ticket)         |
+   +-----v-----+  +-----------+  +-----------+       |
+   | worker T1 |  | worker T2 |  | worker T3 |-------+
+   +-----------+  +-----------+  +-----------+
+   .worktrees/<task>/<repo> on wip/<task>
+```
+
+## Requirements and install
+
+- [Bun](https://bun.sh) 1.1.34 or newer
+- git
+- [Herdr](https://herdr.dev) (agents run in its panes; `agt start` must run inside a Herdr pane)
+- At least one supported agent CLI, installed and logged in (see [Supported agents](#supported-agents))
+
+The package is private (not published to npm). Install from a clone:
 
 ```sh
+git clone <this repository> agentthread
+cd agentthread
 bun install
 bun link        # puts `agt` on your PATH
 ```
 
 ## Supported agents
 
-| Agent | Install |
-|---|---|
-| Claude Code (`claude-code`) | [Claude Code docs](https://docs.claude.com/en/docs/claude-code) |
-| OpenCode (`opencode`) | see opencode.ai; runs with `--standalone` |
-| Codex (`codex`) | `brew install --cask codex`, then `codex login` |
-| omp (`omp`) | the standalone binary from [omp.sh](https://omp.sh) (the npm build needs a newer Bun than 1.1.34) |
-| Antigravity (`agy`) | Google Antigravity CLI; reads `AGENTS.md` and `.agents/skills` |
+| Agent | `agent:` value | Notes |
+|---|---|---|
+| Claude Code | `claude-code` | Has hooks: reports context size and pre-compact events, so context-based rotation works |
+| OpenCode | `opencode` | Runs with `--standalone`; effort is a variant of the model (`provider/model#effort`), so it needs a `model` |
+| Codex | `codex` | `brew install --cask codex`, then `codex login`; started with the project and worktree marked trusted |
+| omp | `omp` | Use the standalone binary from omp.sh |
+| Antigravity | `agy` | Google Antigravity CLI; reads `AGENTS.md` and `.agents/skills` |
 
-Any agent can fill any role (main, coordinator, worker). CLI facts and how to add an agent: [docs/agents.md](docs/agents.md).
-`AGT_CLAUDE_BIN`, `AGT_OPENCODE_BIN`, `AGT_CODEX_BIN`, `AGT_OMP_BIN` and `AGT_AGY_BIN` override the executable of main's launch only;
-coordinators and workers are started by Herdr, which picks the executable itself.
+Any agent can fill any role (main, coordinator, worker). Only Claude Code has hooks today: for the others agt relies on
+Herdr's status polling, so they do not report context size or trigger rotation on compaction. Per-agent CLI facts and
+how to add an agent: [docs/agents.md](docs/agents.md).
+
+`AGT_CLAUDE_BIN`, `AGT_OPENCODE_BIN`, `AGT_CODEX_BIN`, `AGT_OMP_BIN` and `AGT_AGY_BIN` override the executable of the
+main manager's launch only. Coordinators and workers are started by Herdr, which picks the executable itself.
 
 ## Quick start
 
+### One repository
+
 ```sh
 cd your-repo
-agt init        # creates .agentthread/ (runs the setup wizard on a terminal when agents.roles is missing)
-agt start       # run inside a Herdr pane: sets up the main tab, then opens the main manager
-                # (also runs the wizard on a terminal when no config file sets agents.roles; without one it
-                # prints a hint and uses the configured defaults, claude-code unless set)
-agt setup       # re-run the per-project wizard: agent, model and effort per role, and complexity tiers
+agt init        # creates .agentthread/; on a terminal it offers the setup wizard
+agt start       # run it inside a Herdr pane
 ```
 
-`agt`, `agt --help` and `agt help` print the usage (`-h`/`--help` anywhere before a `--` prints help instead of running the command; arguments after `--` never do); `agt help <command>` or `agt <command> --help` (also two-word commands such as
-`thread new` or `stack restart`) print only that command's lines and never run it.
+`agt start` sets up the layout (a main tab with the manager and a logger pane) and opens the main manager. Then just
+describe a feature or bug to it. After you confirm, it creates a thread; the coordinator and workers take it from there.
 
-The logger pane (right of the main manager) runs `agt logs -f`: one line per event, `HH:MM:SS <thread|main> <role> <event> <summary>`
-(ticket, stage, status change, session id, message text up to 160 characters). Heartbeat events (session active, idle, compacting,
-checkpoint reminders, notice delivery) are hidden; `agt logs --all` shows everything and `agt logs` without `-f` prints once.
-With `-f` it survives daemon restarts: it prints `waiting for the agt daemon…` once and retries every 2 seconds. Run `agt start` again
-to repair the layout: a closed logger pane is recreated, and one whose `agt logs -f` ended gets the command again.
+### A multi-repo workspace
 
-Non-interactive configuration (for scripts and agent shells; no prompts, no terminal needed):
+Run agt in the folder that contains your repositories (for example `api/` and `web/`). Without `workspace.repos`,
+the root's child git repos are used.
 
 ```sh
-agt init --no-setup                 # init without the wizard; on an initialised project it says so and exits 0
-agt config show [--json]            # effective config (user + project, validated) and the file each layer came from;
-                                    # --json: {"config": {...}, "sources": {"user": {"path", "exists"}, "project": {...}}}
-agt config apply <file|-> [--dry-run] [--no-restart]  # merge a partial YAML/JSON config into .agentthread/config.yaml
+cd my-workspace
+agt init --no-setup                 # no wizard, no prompts: safe from scripts and agent shells
+agt config apply my-config.yaml     # validates, merges into .agentthread/config.yaml, prints the diff
+agt start                           # inside a Herdr pane
 ```
 
-`config apply` deep-merges like `agt setup` (maps merge, so `workspace.repos` merges by repo name; lists replace; a `null`
-removes the key from the project file only: the user config or the default then applies, and a note says so when
-the effective config does not change), keeps the file's comments, validates the merged result, and prints a diff (`+ path: new`, `- path: old`,
-`~ path: old -> new`). On a validation error it prints `path: message` lines and changes nothing (exit 1). `--dry-run` only
-validates and prints the diff. A real apply then refreshes the banned-words file and the root skills, and restarts a
-running daemon when the config changed so it takes effect (running agents are unaffected; `--no-restart` only prints a note instead).
-If the restart fails the config stays saved and the command exits 1.
+`my-config.yaml` is a partial config such as the example under [Configuration](#configuration). Prefer a guided
+setup? `agt setup` (also offered by `agt init` and `agt start` on a terminal) asks for the agent, model and effort per
+role and for complexity tiers, and can be re-run at any time.
 
-Describe a feature or bug to the main manager. After you confirm, it creates a thread; the coordinator and workers take it from there.
+`agt help` prints the usage. `agt help <command>` (or `agt <command> --help`) prints only that command's lines and never
+runs it.
+
+## Concepts
+
+### Roles
+
+| Role | What it does | Never |
+|---|---|---|
+| **Main** | The agent you talk to. Opens threads, relays decisions, closes finished threads and cleans up | Implement tasks |
+| **Coordinator** | One per thread, in its own Herdr tab. Discusses the task with you, writes the spec and tickets, spawns workers, reviews every commit, runs e2e, squashes for the PR | Edit repo files itself, push |
+| **Worker** | One per ticket, in a pane of the thread's tab. Edits only its ticket's files and reports back | Commit outside its list, push, amend, rebase |
+
+You decide, push and open PRs. Agents never push.
+
+### Threads
+
+A thread has a type, which decides the branch prefix of its final squash branch:
+
+| Type | Squash branch |
+|---|---|
+| `feature` | `feat/<task>` |
+| `bug` | `fix/<task>` |
+| `chore` | `chore/<task>` |
+
+Override a prefix with `workflow.branch_prefix` (`wip` and `thread` are refused: guard branches use them). Main
+creates threads with `agt thread new <title...> --type feature|bug|chore`. It can also propose a complexity tier
+(`--tier <name> --reason <why>`): the thread waits for your `agt thread choose <id> --tier <name>` (or
+`agt thread cancel <id>`), and when `agents.complexity.timeout` runs out the proposed tier is accepted automatically.
+
+### Tickets and file lists
+
+A ticket is one unit of work for one worker. In a task thread it names its repo and the repo-relative files the worker
+may change:
+
+```sh
+agt ticket add <thread> "Add slugify" --repo api --file src/slug.ts --file src/slug.test.ts --doc <ticket-file>
+```
+
+Repeat `--file` for every path (`a b` is not two files; directories are not accepted). The commit guard refuses any other
+staged file. The coordinator fixes a wrong list with `agt ticket files <thread>/<T> --add <path> --remove <path>` (not for
+a done ticket, never down to zero files); without flags it prints the list. A ticket the guard blocked is reopened with
+`agt ticket reopen` after the fix.
+
+Lifecycle: `claim`, work, `done` (goes to review), then the coordinator runs `accept` (the worker ends) or
+`return <what to fix>` (back to the worker). A worker with a question runs `agt question` and the coordinator answers
+with `agt answer`; a blocked ticket (`agt ticket block --reason`) is reported to the coordinator. `agt tell
+<thread>/<T> "<text>"` reaches a ticket's live worker.
+
+### The ten stages
+
+Each task thread moves through these stages, recorded with `agt stage <thread> <1-10> done|skipped|na`. A small task
+compresses them; a stage is skipped only when you say so.
+
+| # | Stage | What happens |
+|---|---|---|
+| 1 | Task discussion | Compare the task with the code and docs, decide story by story with you |
+| 2 | Spec | Rules, decisions, API contract, out of scope, ticket table |
+| 3 | Tickets | One ticket per unit of work, each with the files it may edit |
+| 4 | Delegation | `agt worker spawn`; each worker gets its ticket and worktree |
+| 5 | Review per commit | Diff within the ticket's files, tests re-run, accepted or returned |
+| 6 | Combined verification | Unit suite and type check once per repo |
+| 7 | Staged e2e | Narrow suites first; the full run only after your approval (`stage 7 approve --by user`) |
+| 8 | Browser check | The coordinator checks the UI against the design |
+| 9 | Shared feature docs | New docs in each touched repo |
+| 10 | Release and handover | Release notes with manual migration SQL, one squashed commit on `feat/<task>` (or `fix/`, `chore/`); you push |
+
+The workflow text lives in `src/workflow/feature-workflow.md` and is written into the project as a generated skill.
+
+### Worktrees
+
+Tickets of one task share one worktree per repo: `.worktrees/<task>/<repo>`, on a branch `wip/<task>` created from the
+source branch. `agt worktree add <thread> <repo> [--from <branch>]` creates it in the background and the coordinator is
+told when it is ready. `wip/<task>` keeps the per-ticket history and is never pushed; the squash branch is what you push.
+agt sets `extensions.worktreeConfig = true` in the repository config (needed for per-worktree excludes and the commit
+guard); the main checkout is otherwise untouched.
+
+### Guards
+
+- **Worker commit guard.** Each thread worktree gets its own `core.hooksPath` whose `pre-commit` refuses a commit from a
+  worker, or one that stages files outside its ticket, then forwards to your own hooks. The coordinator reviews and
+  commits. The hooks apply only to processes launched by agt (`AGT_AGENT_PROCESS`).
+- **Never push.** Agent prompts forbid pushing, amending, rebasing, resetting and `git add -A`.
+- **Banned words.** `workflow.banned_words` are added to the commit-message rule given to every agent.
+- **Autonomy.** With `agents.autonomous: true` (default) agents run without approval prompts. Set it to `false` to keep
+  each agent's own prompts; workers then only run commands they may run unprompted and block when a ticket needs another.
+
+### Coordinator rotation and handoff
+
+Long sessions degrade, so a coordinator is replaced by a fresh one that continues from a handoff. Triggers are set in
+`session.rotation`: `on_precompact`, `context_threshold` (fraction of `context_window`), `max_turns`, `max_age` and
+`idle_timeout`. The daemon asks the old coordinator for a handoff (`agt handoff <thread> --stdin`), validates it, and
+generates one from the log when the agent does not answer within `session.handoff.timeout`. Context size and
+pre-compact events are only available from agents with hooks (Claude Code today).
+
+### Language
+
+`workflow.chat_language` is the language agents use when talking to you; `workflow.file_language` is the language of
+files, code, commits and `agt` commands. Both default to `English` and are the first rule in every agent's prompt.
 
 ## Configuration
 
-User config: `~/.config/agentthread/config.yaml`. Project config (overrides it): `.agentthread/config.yaml`.
-`agt setup` writes the `agents` block below to the project config.
+Two layers, deep-merged: the user config `~/.config/agentthread/config.yaml` (or `$XDG_CONFIG_HOME/agentthread/`) and
+the project config `.agentthread/config.yaml`, which wins. Maps merge, lists replace. Use `agt config show [--json]` to
+see the effective config and where each layer came from, and `agt config apply <file|-> [--dry-run] [--no-restart]` to
+merge a partial YAML or JSON config into the project file (comments are kept, the result is validated, a diff is
+printed, and a running daemon is restarted when the config changed). Unknown keys are rejected.
+
+An annotated example for a two-repo workspace:
 
 ```yaml
 agents:
-  roles:                                # agent, model and effort per role
-    main:        { agent: claude-code, model: claude-opus-5-5, effort: high }
-    coordinator: { agent: claude-code, model: claude-sonnet-5-5 }
-    worker:      { agent: opencode, model: anthropic/claude-sonnet-5-5 }
-  complexity:
-    timeout: 10s                        # how long main's tier proposal waits for your choice (at least 1s)
-    tiers:                              # names match /^[a-z][a-z0-9_-]*$/
-      simple:  { agent: claude-code, model: claude-haiku-5-5 }
-      complex: { agent: claude-code, model: claude-opus-5-5, effort: high }
-      gemini:  { agent: opencode, model: myrouter/gemini-flash }
-  autonomous: true                      # default: agents run without approval prompts
-  skill: true                           # default: write the generated skills (false turns them off)
+  roles:                                  # agent, model and effort per role
+    main:        { agent: claude-code, model: opus, effort: high }
+    coordinator: { agent: claude-code, model: sonnet }
+    worker:      { agent: opencode, model: myrouter/model }
+  complexity:                             # optional tiers main can propose per thread
+    timeout: 10s                          # how long a proposal waits for your choice (min 1s)
+    tiers:
+      simple:  { agent: claude-code, model: haiku }
+      complex: { agent: claude-code, model: opus, effort: high }
+  autonomous: true                        # false keeps each agent's approval prompts
+  skill: true                             # false stops writing the generated skills
 workers:
-  max_workers: 3                        # workers per thread; extra spawn requests are queued
-herdr:
-  main_tab_label: main
-  close_tab_on_done: true
-  close_worker_pane_on_end: true
-workspace:                              # optional; without repos, the root's child git repos are used
+  max_workers: 3                          # per thread; extra spawn requests are queued
+
+workspace:
   repos:
-    api: { path: api, source_branch: main }   # path is relative to the root
-  worktree_setup: make wt-new TASK={task} SRC={src} REPOS={repo}
+    api:
+      path: api                           # relative to the project root
+      source_branch: main
+      copy: [.env]                        # copied into each new worktree (never overwrites)
+      link: [node_modules]                # symlinked from the main checkout
+      install: ""                         # unset: detected from the lockfile; "" disables
+    web:
+      path: web
+      source_branch: main
+      copy: [.env.local]
+  services:                               # the local stack, see "Workspace stack"
+    db:
+      repo: api
+      start: docker compose up -d db
+      port: 5432
+      health: tcp:5432
+    api:
+      repo: api
+      start: bun run dev
+      port: 3000
+      health: http://localhost:3000/health
+      migrate: bun run migrate            # opt-in: only with --migrate
+      migrate_on_start: false
+      env: { DATABASE_URL: postgres://localhost/app }
+      after: [db]                         # start order
+    web:
+      repo: web
+      start: bun run dev
+      port: 5173
+      after: [api]
+
+workflow:
+  chat_language: English
+  file_language: English
+  branch_prefix: { feature: feat, bug: fix, chore: chore }
+  banned_words: [ai-generated]
+  e2e:                                    # commands for stages 2-4, plus the baseline
+    stage2: bun test e2e/new
+    stage3: bun test e2e/related
+    stage4: bun test e2e
+    baseline: .docs/e2e-baseline.md
+  migration:
+    tool: knex
+    table: knex_migrations
+    prod_migrates_on_start: false
+  browser:
+    urls: [http://localhost:5173]
+    login_note: log in as the seeded demo user
+
+session:
+  rotation:
+    on_precompact: true
+    context_threshold: 0.7                # fraction of context_window
+    context_window: 200000
+    max_turns: 150
+    max_age: 8h
+    idle_timeout: 24h
 ```
 
-Per repo, `copy: [.env, e2e/.env.local, e2e/.auth]` lists files and directories (recursive; symlinks inside are skipped) copied from the main
-checkout into each new worktree (missing ones are skipped with a note; an existing file is never overwritten, except a git-tracked
-file the worktree still has unmodified: it is replaced by the local copy and marked `git update-index --skip-worktree`, so it
-never shows in `git status` nor gets staged). `link: [node_modules]` symlinks directories from the main checkout instead; with
-`node_modules` linked, `install` is skipped for the repo unless the lockfile differs from the main checkout's (then it installs
-instead and logs why; any install, including `agt stack start`, never writes through a node_modules symlink: it is skipped when
-the lockfile matches the main checkout's, else the link is removed first). Other `link` entries are plain symlinks that install does not touch. Copies and links are git-excluded in the worktree. `agt config show` / `config apply` warn about a `copy`
-entry tracked by git and about a `workflow.browser.urls` localhost port that no service uses. Also per repo, `install: <cmd>` runs in a new worktree (default: detected from the lockfile, `bun install` /
-`yarn install --frozen-lockfile` / `pnpm install --frozen-lockfile` / `npm ci`; `""` disables). `workspace.services.<name>`
-(`^[a-z][a-z0-9-]*$`) describes a process of the local stack: `repo` (must be in `workspace.repos`), `dir` (default `.`),
-`start`, optional `port`, `health` (`http(s)://...` or `tcp:<port>`, default `tcp:<port>` when `port` is set), `migrate` (opt-in: runs only with
-`agt stack start|restart --migrate` / `make start MIGRATE=1`, or on a changed checkout when `migrate_on_start: true`), `env: {KEY: value}`
-(merged over the inherited environment for `start` and `migrate`; values are never printed),
-`after: [<service>]` (start order, no cycles) and `enabled` (default true). Ports must be unique among enabled services.
-With services configured and `workflow.stack.restart` / `status` unset, they default to
-`agt stack restart --task {task}` and `agt stack status`; explicit values win.
+Other `workflow` keys: `stack.restart` / `stack.status` (default to `agt stack restart --task {task}` and
+`agt stack status` when services exist), `prod_read`, `never_commit`, `read_first`, `report_words`. Other sections:
+`herdr` (`main_tab_label`, `close_tab_on_done`, `close_worker_pane_on_end`, `poll_interval`), `checkpoint`,
+`session.handoff`, and per-repo `prod_branch`, `staging_branch`, `pr_order`, `unit`, `typecheck`.
 
-`agt worktree add <thread> <repo> [--from <branch>]` creates `.worktrees/<task>/<repo>` on a new `wip/<task>` from the
-source branch, in the background; the coordinator gets a notice when it is ready or failed. With `worktree_setup`, that
-command runs instead (`sh -c` in the root, at most 5 minutes) and must leave `{path}` checked out on `wip/<task>`. It replaces the built-in copy and install step as well, so it must copy files and install dependencies itself. Its
-placeholders `{root}`, `{task}`, `{repo}`, `{src}` and `{path}` are filled in already shell-quoted: use them unquoted
-(`TASK={task}`, not `TASK="{task}"`).
+Notes on workspace settings:
 
-An `effort` the agent does not accept is rejected when the config loads (`agents.<path>.effort: <agent> accepts <list>`).
-The older keys `main_manager`, `default_coordinator`, `default_worker` and `agents.claude.{permission_mode,
-extra_allowed_tools, model, config_dir}` still load: a legacy key fills a role only when `agents.roles` does not set it.
+- `copy` entries are copied from the main checkout into each worktree (recursive, symlinks skipped, missing ones skipped
+  with a note). `link` entries are symlinked instead; with `node_modules` linked, `install` is skipped unless the lockfile
+  differs from the main checkout's.
+- `worktree_setup` (a command with `{root}`, `{task}`, `{repo}`, `{src}`, `{path}` placeholders, used unquoted) replaces
+  the built-in worktree creation, copy and install. It must leave `{path}` checked out on `wip/<task>`.
+- `agt config show` and `config apply` warn about a tracked `copy` entry and about a browser URL port no service uses.
 
-### Tier proposal
+A role's `effort` must be one the agent accepts; a bad value is rejected when the config loads.
 
-When main starts a thread it can propose a complexity tier:
-`agt thread new ... --tier <name> --reason "<why>" [--now]`. The thread is only proposed: it has no tab and no
-coordinator yet. You choose with `agt thread choose <thread> --tier <name>` or drop it with `agt thread cancel <thread>`.
-The timer pauses while main is working. When it runs out (`agents.complexity.timeout`), the proposed tier is accepted
-automatically and main is told so. `--now` starts the thread without waiting.
+### Generated files
 
-### Autonomy and the worker commit guard
+`agt init`, `agt setup` and `agt start` write three skills into the project root, and every thread directory and
+worktree gets them too, under both `.claude/skills/` and `.agents/skills/`: `agt` (how to use the CLI per role),
+`agt-feature-workflow` (the ten stages, ending with a section rendered from your config) and `manage-docs`. They are
+regenerated, git-excluded, and never edited by hand. A skill of the same name that your project tracks is left alone.
+Set `agents.skill: false` to turn this off.
 
-With `agents.autonomous: true` (the default) every agent runs with its approval prompts off (see the autonomous column in
-[docs/agents.md](docs/agents.md)), and `agents.claude.permission_mode` and `extra_allowed_tools` are ignored (with a
-warning). Set it to `false` to keep every agent's approval prompts: Claude Code runs with
-`agents.claude.permission_mode` and the `extra_allowed_tools` allowlist, OpenCode starts without `--auto` and asks for
-every permission, Codex runs with `-a on-request` (still in the workspace-write sandbox), and omp gets no
-`--approval-mode`, so its own default applies. Workers are then told to run only commands they may run without
-approval; a ticket that needs another command blocks and names it (for Claude Code, add it to `extra_allowed_tools`).
+## Workspace stack
 
-Workers never commit. Each thread worktree gets its own `core.hooksPath` whose `pre-commit` refuses a commit when the
-agent runs as a worker, and then forwards to the project's own hooks. The coordinator reviews and commits. A coordinator
-does not implement tickets itself; it delegates them to workers.
+When `workspace.services` is configured, agt can run your local stack. These commands need no daemon.
 
-The hooks share one stub in `.agentthread/hooks/`, which the daemon rewrites when it starts. After upgrading agt, restart
-the daemon and every running agent: the hooks apply role rules only to processes launched with `AGT_AGENT_PROCESS`,
-which agents started by an older agt do not have.
+```sh
+agt stack start [--task <slug>|--main] [--only a,b] [--migrate]
+agt stack stop [--only a,b] [--force]
+agt stack restart [--task <slug>|--main] [--only a,b] [--migrate]
+agt stack status [--json]
+agt stack logs <service> [-f] [-n <lines>]
+```
 
-`agt worker spawn <thread> --ticket <T> --agent <kind>` runs one worker on another agent than `agents.roles.worker`,
-with that agent's own default model and effort (the role's model and effort are not carried across vendors).
+- Services start in `after` order and are waited on until healthy (`health`, default `tcp:<port>`).
+- `--task <slug>` runs the services from `.worktrees/<slug>/<repo>` where it exists; `--main` runs the main checkouts.
+  The current target is recorded in `.local-run/task`.
+- State lives in the git-ignored `.local-run/`: `<service>.pid`, `.log`, `.stamp` (install reruns when the checkout state
+  changes), `.migrated`, and `restart.log`.
+- **Migrations are opt-in.** A service's `migrate` command runs only with `--migrate` (or `make start MIGRATE=1`), or on a
+  changed checkout when that service sets `migrate_on_start: true`.
+- `env` values are merged over the inherited environment and never printed.
+- The stack is shared by all threads, so a coordinator takes a lock around e2e and browser checks
+  (`agt stack acquire <thread>` / `agt stack release <thread>`; the full e2e run needs your stage-7 approval).
 
-A task thread's ticket lists the repo-relative files its worker may commit (`agt ticket add <thread> "<title>" --repo <r> --file a --file b`; repeat `--file` for every path, `a b` is not two files). The commit guard refuses any other staged file. The coordinator fixes a wrong list with `agt ticket files <thread>/<T> --add <path>... --remove <path>...` (repeat each flag per path; not for a done ticket, and never down to zero files); the ticket's live worker is told. Without flags the command prints the list. A ticket the guard blocked is reopened with `agt ticket reopen` after the fix.
+With services configured, agt also generates a `Makefile` (a thin wrapper), `.agentthread/agt.mk` and `MAKEFILE.md`
+(the targets and a services table). A Makefile of your own is never overwritten: add
+`include .agentthread/agt.mk` to it instead.
 
-A worker with a question runs `agt question`; the coordinator replies with `agt answer <thread> <Q> "<text>"`. A blocked
-worker is reported to its coordinator. If a session's first settled turn runs no `agt` command (for example because the
-configured model does not exist), the daemon reports `session.stalled` (coordinators and workers only, not main) instead of waiting forever.
+```sh
+make start TASK=my-task MIGRATE=1     # start from that task's worktrees, running migrations
+make stop
+make restart ONLY=api
+make status
+make logs SVC=api
+make wt-new TASK=my-task REPOS=api,web SRC=main
+```
 
-A worker that stops for more than about 20s with its ticket unfinished (no done, no block, no open question) is
-reported to its coordinator, at most three times per ticket, with a fourth notice to return or block it. The
-coordinator (or you) can reach that worker with `agt tell <thread>/<T> "<text>"`. A worker that exits before it claims
-its ticket gets a fresh one (at most twice per ticket; queued when `max_workers` is reached), and the coordinator is told.
-See [docs/agents.md](docs/agents.md#behaviours-agt-adds-around-every-agent).
+## Day to day
 
-After upgrading agt, restart what is running: `agt daemon stop`, close the running agents' panes, then `agt start`
-again. A running daemon and the agents it started keep the old code and instructions.
+**Watching.** The logger pane next to the main manager runs `agt logs -f`: one line per event
+(`HH:MM:SS <thread|main> <role> <event> <summary>`), with heartbeats hidden. `agt logs --all` shows everything and
+`agt logs` prints once. It survives daemon restarts. Run `agt start` again to repair a closed or ended logger pane.
 
-### Trusting the project
+**Waiting for you.** When a coordinator needs a decision it runs `agt thread waiting <id> "<what>"`, which tells main.
 
-Claude Code asks once per folder whether you trust it. When main is Claude Code it asks in main's pane at `agt start`,
-and the worktrees below the root inherit your answer. When main is another agent but a role or tier uses Claude Code,
-`agt start` warns `claude-code agents will ask to trust <root>; open claude once in <root> and accept, or use
-claude-code for main`. In the folders agt creates itself (thread directories and worktrees under `<root>/.worktrees/`)
-agt answers a coordinator's or worker's trust dialog on screen, as you would; it never answers it in your own folders
-and never reads or writes Claude Code's config. Codex is started with the project root and the worktree marked
-trusted, so it never asks.
+**After a merge.** When your PRs are merged, tell the thread's coordinator. It verifies each repo contains the squash
+branch, releases the stack lock and tells main. Main then marks the thread done, restarts the stack on `main` if needed
+and runs `agt thread cleanup <id>`, which removes the worktrees and `wip/<task>` branches (it stops on uncommitted
+changes). Do not remove worktrees or branches by hand.
 
-### Notes on instruction files and git config
+**The daemon.** `agt daemon start|stop|status`. `agt start` starts it when needed, and it keeps running if you close the
+main pane.
 
-- Worktrees live under `<root>/.worktrees/`. Claude Code also loads an ancestor `CLAUDE.md` (the one in the repo root)
-  on top of the worktree's own `AGENTS.md`/`CLAUDE.md`, whose content already includes the project's instructions. The
-  project's instructions can therefore appear twice for Claude Code; this is harmless.
-- AgentThread sets `extensions.worktreeConfig = true` in the repository config. It is needed for the per-worktree
-  excludes and commit guard, and leaves the main checkout untouched.
+**Upgrading agt.** A running daemon and the agents it started keep the old code and prompts. After upgrading:
+`agt daemon stop`, close the running agents' panes, then `agt start`.
 
-### The generated skills
+**Trust dialogs.** Claude Code asks once per folder whether you trust it. When main is Claude Code, it asks in main's
+pane at `agt start` and the worktrees inherit the answer. If main is another agent but some role uses Claude Code,
+`agt start` warns you to open `claude` once in the project root and accept. In folders agt creates itself
+(`.worktrees/`), agt answers a coordinator's or worker's trust dialog; it never answers it in your own folders and never
+touches Claude Code's config.
 
-`agt init`, `agt setup` and `agt start` write three skills into the project root, and every thread directory and repo
-worktree gets the same files, each under both `.claude/skills/` and `.agents/skills/`:
+**Stalled or idle workers.** A worker that stops without reporting is flagged to its coordinator (at most three times
+per ticket); a worker that exits before claiming its ticket is replaced (at most twice). A session whose first turn runs
+no `agt` command (often a model name that does not exist) is reported as `session.stalled`.
 
-- `agt/SKILL.md`: the `agt guide` text for all three roles, so an agent can load it when `AGT_ROLE` is set;
-- `agt-feature-workflow/SKILL.md` and its `templates/` (spec, ticket, release): the ten-stage feature workflow, ending
-  with a Project config section rendered from `.agentthread/config.yaml`;
-- `manage-docs/SKILL.md`: the rules for the private `.docs/` versus each repo's shared `docs/`.
+## Command reference
 
-The files are regenerated, never edit them. The workflow is edited in agt's `src/workflow/`, never in the generated copies.
-They are kept out of git (the root through `.git/info/exclude`, worktrees through their excludes), so they are never
-committed. A skill your project tracks, or one with a file that lacks the generated marker line, is the project's own
-and is left alone everywhere (the daemon logs `kept the project's own skill <name> at <path>`). Set
-`agents.skill: false` to turn them off; existing generated files are then left as they are. Claude Code reads
-`.claude/skills`, and so does omp, which loads skills from `.claude/skills/*/SKILL.md`; OpenCode's config has a Claude
-compatibility directory, which its docs say covers `.claude/skills`. Codex and Antigravity read `.agents/skills`.
+Run `agt help <command>` for exact flags.
 
-## Release check
+| Area | Commands |
+|---|---|
+| Project | `init [--name] [--no-setup]`, `setup`, `start [--no-manager]`, `config`, `config show [--json]`, `config apply <file\|-> [--dry-run] [--no-restart]` |
+| Daemon and logs | `daemon start\|stop\|status`, `logs [-f] [--all]` |
+| Threads | `thread new`, `thread choose`, `thread cancel`, `thread status`, `thread waiting`, `thread cleanup` |
+| Tickets | `ticket add`, `ticket files`, `ticket claim\|reopen\|done\|accept\|return\|block` |
+| Stages | `stage <thread> <1-10> done\|skipped\|na\|approve` |
+| Workers and worktrees | `worker spawn <thread> --ticket <T> [--agent <kind>]`, `worktree add <thread> <repo> [--from]` |
+| Messages | `tell <thread\|main\|thread/ticket> <message>`, `question`, `answer`, `handoff`, `log`, `decide`, `note`, `progress` |
+| Stack | `stack start\|stop\|restart\|status\|logs`, `stack acquire\|release` |
+| Help | `guide [main\|coordinator\|worker\|all]`, `help [<command>]` |
+| Internal | `event started\|active\|idle\|compacting\|ended` (used by Claude Code hooks) |
 
-Run `bun run e2e:release` before every release. It runs real agents against an isolated Herdr server and costs money;
-see [docs/release-e2e.md](docs/release-e2e.md). `bun test` never starts real agents.
+## Development
 
-One time before the first release run, trust the folder of the `happy-mixed-main` row for Claude Code:
-`mkdir -p ~/.cache/agt-e2e/mixed-main && cd ~/.cache/agt-e2e/mixed-main && git init && claude`, then accept the trust
-prompt and exit.
+```sh
+bun install
+bun test            # never starts real agents or your Herdr; a leak guard kills stray test daemons
+bun run typecheck   # tsc --noEmit
+```
 
-## Manual smoke test
+When you run the tests from inside a Herdr pane, unset Herdr's variables so nothing can reach your live session:
 
-The test suite never runs the real `herdr` or agent binaries. Run this once in a scratch git repo:
+```sh
+env -u HERDR_ENV -u HERDR_WORKSPACE_ID -u HERDR_TAB_ID -u HERDR_PANE_ID -u HERDR_SOCKET_PATH bun test
+```
 
-1. `agt init`, then `agt start` inside a Herdr pane. The main manager's agent (per `agents.roles.main`) opens.
-2. Ask the main manager to create a small thread and confirm it. A new tab appears, and the coordinator's agent starts in it.
-3. Check that the coordinator can run `agt …` without a permission prompt and that `git commit` works for the coordinator, and that a worker's `git commit` is refused by the pre-commit guard (nothing prompts the worker).
-4. Close the main-manager pane and run `agt daemon status` from another pane. The daemon must still be running.
-5. In a coordinator pane, run `/compact`. The pane should get a HANDOFF REQUEST, the coordinator should submit it with `agt handoff … --stdin`, and a new coordinator pane should replace it.
-6. Quit the coordinator's agent, then run `agt start` from the main tab. A fresh coordinator should start in a new pane (nothing is resumed).
-7. In a thread's worktree, check that `AGENTS.md` and `CLAUDE.md -> AGENTS.md` exist and that `git status` there is clean.
-8. Let a coordinator work, then kill its agent and run `agt start`. A fresh coordinator should start in a new pane and continue from `brief.md`.
-9. With Claude Code as coordinator, remove the hooks from its settings. It must still become idle and receive ticket notices (status comes from Herdr alone).
+### Release check
+
+`bun run e2e:release` runs real agents against isolated, headless Herdr servers (it never touches your own session) and
+**costs money**: a full run is about 23 rows of 5 to 20 minutes each. Use `--list`, `--only <ids>`, `--agents <kinds>` and
+`--timeout <d>` to narrow it. Prerequisites, the one-time trust step and the matrix are in
+[docs/release-e2e.md](docs/release-e2e.md).
+
+## Status and limitations
+
+AgentThread is early software, developed and tested on macOS; other platforms are untested. It targets Herdr and cannot
+run without it. Only Claude Code reports context size and pre-compact events, so context-based rotation is limited for
+the other agents. Codex's autonomous start and coordinator sandbox setup were verified from its `--help` only, not yet in
+a full release run (see [docs/agents.md](docs/agents.md)). The package is not published to npm.
+
+## License
+
+TBD
