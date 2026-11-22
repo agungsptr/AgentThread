@@ -52,12 +52,12 @@ bun link        # puts `agt` on your PATH
 
 ## Set up with Claude Code (recommended)
 
-The fastest way to get started is the `/agt-setup` skill. The repository doubles as a Claude Code plugin marketplace
-(the plugin lives in [`plugins/agentthread`](plugins/agentthread)). Install it once:
+The fastest way to get started is the `/agt-setup` skill from the [agungsptr/skills](https://github.com/agungsptr/skills)
+plugin marketplace. Install it once:
 
 ```
-/plugin marketplace add agungsptr/AgentThread
-/plugin install agentthread@agentthread
+/plugin marketplace add agungsptr/skills
+/plugin install agt-setup@agungsptr
 ```
 
 Then open Claude Code in your project or workspace folder and run:
@@ -81,7 +81,7 @@ What it does:
 5. **Applies it** with `agt config apply --dry-run`, shows the diff, then applies on your OK.
 
 When it finishes, run `agt start` inside a Herdr pane. Re-run `/agt-setup` any time: it keeps the existing config and
-only proposes corrections. To get a newer version of the skill, run `/plugin marketplace update agentthread`.
+only proposes corrections. To get a newer version of the skill, run `/plugin marketplace update agungsptr`.
 
 Prefer to do it by hand? Install as above and follow the [Quick start](#quick-start).
 

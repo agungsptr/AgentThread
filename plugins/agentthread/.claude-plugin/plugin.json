@@ -1,9 +1,0 @@
-{
-  "name": "agentthread",
-  "version": "0.1.0",
-  "description": "The /agt-setup skill: installs AgentThread (agt) when missing, then analyses a project and writes its .agentthread/config.yaml with one approval.",
-  "author": { "name": "agungsptr" },
-  "homepage": "https://github.com/agungsptr/AgentThread",
-  "repository": "https://github.com/agungsptr/AgentThread",
-  "license": "MIT"
-}
