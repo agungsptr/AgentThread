@@ -359,6 +359,53 @@ for the few variables it sets itself. `agt config show` and `config apply` print
 
 A role's `effort` must be one the agent accepts; a bad value is rejected when the config loads.
 
+#### Several Claude accounts
+
+With two or more `agents.claude.profiles`, agt reads each account's usage limits and launches every new Claude Code agent
+on the right one, switching before an account runs out. With none or one profile nothing changes (one profile is the
+same as `agents.env.CLAUDE_CONFIG_DIR`).
+
+```yaml
+agents:
+  claude:
+    profiles:                              # 2 or more turn switching on
+      - { name: personal, config_dir: ~/.claude-a }
+      - { name: work, config_dir: ~/.claude-b }
+    switch_at: { five_hour: 90, seven_day: 95 }   # percent; these are the defaults
+    statusline: ~/bin/my-statusline.sh     # optional: your own statusLine command, also run and shown
+```
+
+`name` is lowercase words (`[a-z][a-z0-9-]*`) and unique; `config_dir` expands a leading `~/` and `$HOME`. With 2 or
+more profiles the config refuses `agents.claude.config_dir` and any `CLAUDE_CONFIG_DIR` in `agents.env` or a role's or
+tier's `env`, because each profile sets it.
+
+**How the choice works.** Claude Code reports usage only through its statusLine command, so agt gives every Claude Code
+agent a statusLine that records the account's 5-hour and 7-day usage in `.agentthread/usage/<profile>.json` and prints a
+short line (`personal · 5h 25% ↻14:10 · 7d 48%`); agt also adds a `StopFailure` hook for `rate_limit`, which marks the
+account exhausted until its latest known reset (or 60 minutes). A profile is eligible while both windows are under
+`switch_at` (a window past its reset counts as 0) and it is not marked exhausted. New launches stick to the current
+profile while it is eligible (use up the first account). When it is not, agt picks the eligible profile whose 5-hour
+window resets nearest (quota that resets soon is lost if unused), then the lowest 5-hour use, then the lowest 7-day use,
+then config order; a profile with no data counts as 0% with an unknown reset. When none is eligible, the one that frees
+up first is used and main is told. Every switch is a `profile.switched` event in `agt logs`.
+
+- A coordinator whose profile crosses `switch_at` is rotated through the normal handoff (reason `usage limit`) onto the
+  newly chosen profile, never while a handoff is in progress and at most once per 10 minutes per thread.
+- A worker that hits the limit makes its coordinator hear it should `agt ticket return` the ticket so a fresh worker
+  continues on another profile. Running workers are never moved.
+- Main is only told (once) that its profile is near the limit; restart it later with `agt start`. It is never restarted
+  automatically.
+- `agt usage [--json]` shows each profile's usage, resets, last seen, limited mark and which one is current.
+
+**What agt never reads:** any file inside a Claude config dir (credentials, settings, `.claude.json`) and your own
+statusLine setting. agt only passes `CLAUDE_CONFIG_DIR` to the process.
+
+**Trade-offs.** `--settings` replaces your own statusLine in agt's panes, so your line does not run there unless you set
+`agents.claude.statusline` to its command (agt runs it with the same input and prints its output on a second line).
+Usage data appears only after a session's first response, and only for Pro, Max and Ultra accounts; until then a profile
+counts as unknown (0%). Claude Code asks once per config dir to trust a folder, so with several accounts each asks once:
+`agt start` lists them (`Claude profile <name> (<config_dir>) asks once to trust <root>`).
+
 ### Generated files
 
 `agt init`, `agt setup` and `agt start` write three skills into the project root, and every thread directory and
@@ -429,6 +476,9 @@ pane at `agt start` and the worktrees inherit the answer. If main is another age
 touches Claude Code's config. With several Claude accounts, set `agents.env.CLAUDE_CONFIG_DIR` (see Configuration) so
 every agent uses the same account and trust answers; `agt start` prints the one in use.
 
+**Claude usage.** With several Claude accounts (see Configuration), `agt usage` shows each profile's 5-hour and 7-day
+use, when they reset, when it was last seen, whether it is marked limited, and which one new agents start on.
+
 **Stalled or idle workers.** A worker that stops without reporting is flagged to its coordinator (at most three times
 per ticket); a worker that exits before claiming its ticket is replaced (at most twice). A session whose first turn runs
 no `agt` command (often a model name that does not exist) is reported as `session.stalled`.
@@ -440,7 +490,7 @@ Run `agt help <command>` for exact flags.
 | Area | Commands |
 |---|---|
 | Project | `init [--name] [--no-setup]`, `setup`, `start [--no-manager]`, `config`, `config show [--json]`, `config apply <file\|-> [--dry-run] [--no-restart]` |
-| Daemon and logs | `daemon start\|stop\|status`, `logs [-f] [--all]` |
+| Daemon and logs | `daemon start\|stop\|status`, `logs [-f] [--all]`, `usage [--json]` |
 | Threads | `thread new`, `thread choose`, `thread cancel`, `thread status`, `thread waiting`, `thread cleanup` |
 | Tickets | `ticket add`, `ticket files`, `ticket claim\|reopen\|done\|accept\|return\|block` |
 | Stages | `stage <thread> <1-10> done\|skipped\|na\|approve` |
@@ -448,7 +498,7 @@ Run `agt help <command>` for exact flags.
 | Messages | `tell <thread\|main\|thread/ticket> <message>`, `question`, `answer`, `handoff`, `log`, `decide`, `note`, `progress` |
 | Stack | `stack start\|stop\|restart\|status\|logs`, `stack acquire\|release` |
 | Help | `guide [main\|coordinator\|worker\|all]`, `help [<command>]` |
-| Internal | `event started\|active\|idle\|compacting\|ended` (used by Claude Code hooks) |
+| Internal | `event started\|active\|idle\|compacting\|ended`, `event rate-limited --profile <name>`, `statusline --profile <name> --root <root>` (used by Claude Code hooks and its statusLine) |
 
 ## Development
 
