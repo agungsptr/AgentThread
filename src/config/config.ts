@@ -27,6 +27,12 @@ const agentEnvSchema = z.record(
 const roleAgentSchema = z
   .object({ agent, model: z.string().trim().min(1).optional(), effort: z.string().trim().min(1).optional(), env: agentEnvSchema.optional() })
   .strict();
+const claudeProfileSchema = z
+  .object({
+    name: z.string().regex(/^[a-z][a-z0-9-]*$/, "profile name must match /^[a-z][a-z0-9-]*$/"),
+    config_dir: z.string().trim().min(1),
+  })
+  .strict();
 const ROLE_NAMES = ["main", "coordinator", "worker"] as const satisfies readonly SessionRole[];
 
 const agentsSchema = z
@@ -52,12 +58,33 @@ const agentsSchema = z
         extra_allowed_tools: z.array(z.string().trim().min(1)).default([]),
         model: z.string().trim().min(1).optional(),
         config_dir: z.string().trim().min(1).optional(),
+        /** Several Claude Code accounts (CLAUDE_CONFIG_DIR each): 2 or more turn usage-aware switching on. */
+        profiles: z.array(claudeProfileSchema).optional(),
+        /** The usage percentage at which a profile is left, per window; defaults 90 and 95. */
+        switch_at: z.object({ five_hour: z.number().min(1).max(100).default(90), seven_day: z.number().min(1).max(100).default(95) }).strict().optional(),
+        /** The user's own statusLine command: run with agt's, its output printed on a second line. */
+        statusline: z.string().trim().min(1).optional(),
       })
       .strict()
       .default({}),
   })
   .strict()
   .superRefine((a, ctx) => {
+    const profiles = a.claude.profiles ?? [];
+    const names = new Set<string>();
+    profiles.forEach((p, i) => {
+      if (names.has(p.name)) ctx.addIssue({ code: "custom", path: ["claude", "profiles", i, "name"], message: `duplicate profile name "${p.name}"` });
+      names.add(p.name);
+    });
+    if (profiles.length >= 2) {
+      const conflict = (path: (string | number)[], what: string) =>
+        ctx.addIssue({ code: "custom", path, message: `${what} conflicts with agents.claude.profiles (2 or more): each profile sets CLAUDE_CONFIG_DIR itself` });
+      if (a.claude.config_dir !== undefined) conflict(["claude", "config_dir"], "agents.claude.config_dir");
+      const hasDir = (env: Record<string, string> | undefined) => env !== undefined && Object.hasOwn(env, "CLAUDE_CONFIG_DIR");
+      if (hasDir(a.env)) conflict(["env", "CLAUDE_CONFIG_DIR"], "agents.env.CLAUDE_CONFIG_DIR");
+      for (const r of ROLE_NAMES) if (hasDir(a.roles[r]?.env)) conflict(["roles", r, "env", "CLAUDE_CONFIG_DIR"], `agents.roles.${r}.env.CLAUDE_CONFIG_DIR`);
+      for (const [name, t] of Object.entries(a.complexity.tiers)) if (hasDir(t.env)) conflict(["complexity", "tiers", name, "env", "CLAUDE_CONFIG_DIR"], `agents.complexity.tiers.${name}.env.CLAUDE_CONFIG_DIR`);
+    }
     const check = (path: (string | number)[], v: { agent: keyof typeof EFFORTS; model?: string | undefined; effort?: string | undefined } | undefined) => {
       // OpenCode takes the effort as a variant of the model (<provider/model>#<effort>), so it needs one.
       if (v?.agent === "opencode" && v.effort !== undefined && v.model === undefined) {
@@ -94,6 +121,9 @@ const agentsSchema = z
       claude: a.claude,
     };
   });
+
+/** The `switch_at` thresholds of agents.claude (percent), with their defaults. */
+export const switchAt = (c: { switch_at?: { five_hour: number; seven_day: number } | undefined }): { five_hour: number; seven_day: number } => c.switch_at ?? { five_hour: 90, seven_day: 95 };
 
 export type RoleAgent = { agent: z.infer<typeof agent>; model?: string; effort?: string; env?: Record<string, string> };
 

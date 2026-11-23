@@ -5,6 +5,7 @@ import type { Config } from "../config/config.ts";
 import type { AgentKind, SessionRole, SessionSignal } from "../domain/types.ts";
 import { shellQuote } from "../herdr/bridge.ts";
 import { ticketDocPath } from "./prompts.ts";
+import { claudeProfiles, profileDir } from "./profiles.ts";
 
 export const AGT_BIN = fileURLToPath(new URL("../../bin/agt", import.meta.url));
 
@@ -26,7 +27,9 @@ export function hookSettings() {
 }
 
 export function claudeConfigDir(config: Config, env: Record<string, string | undefined> = process.env): string {
-  return config.agents.claude.config_dir ?? env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude");
+  // A single profile is the same as agents.env.CLAUDE_CONFIG_DIR; with 2 or more, each launch picks its own (see AgentSession.profile).
+  const only = claudeProfiles(config).length === 1 ? profileDir(config, claudeProfiles(config)[0]!.name, env) : undefined;
+  return config.agents.claude.config_dir ?? only ?? env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude");
 }
 
 const READ_TOOLS = ["Bash(agt *)", "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)"];

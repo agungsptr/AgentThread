@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { Config } from "../config/config.ts";
 import type { AgentKind, SessionRole } from "../domain/types.ts";
 import { allowedTools, hookSettings } from "./claude.ts";
+import { expandHome } from "./profiles.ts";
 import type { RoleAgent } from "./roles.ts";
 import { AGY_TRUST_PROMPT, CLAUDE_TRUST_PROMPT, type TrustPrompt } from "./trust.ts";
 
@@ -269,11 +270,7 @@ const agyAdapter: AgentAdapter = {
   capabilities: NO_HOOKS,
 };
 
-/** `~/x`, `~` and `$HOME`/`${HOME}` in a value become the home directory. */
-export function expandHome(value: string, home: string): string {
-  const v = value === "~" || value.startsWith("~/") ? home + value.slice(1) : value;
-  return v.replace(/\$\{HOME\}|\$HOME(?![A-Za-z0-9_])/g, () => home);
-}
+export { expandHome };
 
 /**
  * The user's agents.env for a launch: agents.env, then the role's env, then the run's own env (a complexity tier's),
