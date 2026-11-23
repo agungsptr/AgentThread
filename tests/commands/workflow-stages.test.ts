@@ -68,9 +68,11 @@ describe("auto na stages", () => {
     expect(thread(s).stages[7]?.by).toBe("agt");
   });
 
-  test("a full workflow config records nothing", () => {
+  test("a full workflow config records only stage 8 skipped (browser check on request), or nothing with --browser-check", () => {
     const r = run(stateOf(INIT), newThread, USER, FULL);
-    expect(r.ok && r.events.some((e) => e.type === "stage.recorded")).toBe(false);
+    expect(r.ok && r.events.filter((e) => e.type === "stage.recorded")).toEqual([{ type: "stage.recorded", thread: "001", payload: { stage: 8, state: "skipped", by: "agt", reason: "not requested" } }]);
+    const asked = run(stateOf(INIT), { ...newThread, browserCheck: true }, USER, FULL);
+    expect(asked.ok && asked.events.some((e) => e.type === "stage.recorded")).toBe(false);
   });
 });
 

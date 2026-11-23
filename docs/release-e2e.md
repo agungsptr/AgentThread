@@ -115,7 +115,7 @@ How to run them:
 - `ws-edge-return-worker-opencode` and `ws-edge-out-of-ticket-worker-opencode`, 40m: the same flows as `ws-edge-return`
   and `ws-edge-out-of-ticket`, with main and the coordinator on Claude Code and the worker on OpenCode. Each is listed
   only when `--agents` includes `opencode`, and needs `AGT_E2E_MODEL_OPENCODE`.
-- `ws-edge-stage-gates`: no model calls; a browser URL is configured, so stage 8 is open. The scenario drives git and
+- `ws-edge-stage-gates`: no model calls; a browser URL is configured and the thread is created with `--browser-check`, so stage 8 is open. The scenario drives git and
   the CLI as the coordinator (`AGT_ROLE=coordinator`, `AGT_AGENT_PROCESS=1`): its commit on `feat/<task>` is refused
   until `agt stage <id> 8 na --reason test`, and `agt stack acquire <id> --for e2e4` is rejected until the user runs
   `agt stage <id> 7 approve --by user`.

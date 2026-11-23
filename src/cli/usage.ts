@@ -7,7 +7,7 @@ export const USAGE = `usage: agt <command>
   config                     print the effective config
   config show [--json]       the effective config and the files its layers came from
   config apply <file|-> [--dry-run] [--no-restart]   merge a partial YAML/JSON config into .agentthread/config.yaml (repos merge by name; null removes the project-file key only), validate it, print the diff, refresh skills; --dry-run only validates; a changed config restarts a running daemon unless --no-restart
-  thread new <title...> --type feature|bug|chore [--goal <text>] [--criteria <text>]... [--depends <id>]... [--max-workers <n>] [--task <name>]
+  thread new <title...> --type feature|bug|chore [--goal <text>] [--criteria <text>]... [--depends <id>]... [--max-workers <n>] [--task <name>] [--browser-check]
              [--tier <name> --reason <why> [--now]]
   thread choose <id> --tier <name>
   thread cancel <id>

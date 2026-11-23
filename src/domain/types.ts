@@ -73,6 +73,8 @@ export type EventBody =
         dir?: string;
         status: ThreadStatus;
         maxWorkers?: number;
+        /** The user asked for a browser check (stage 8): it is required even when workflow.browser.check is on_request. */
+        browserCheck?: true;
       };
     }
   | { type: "worktree.requested" | "worktree.added"; thread: string; payload: { repo: string; path: string; branch: string; source: string } }

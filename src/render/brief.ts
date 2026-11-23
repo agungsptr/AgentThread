@@ -119,6 +119,7 @@ function build(t: Thread, trail: GitTrail | undefined, trails: Record<string, Gi
     "",
     `Status: ${t.status}`,
     ...stageLine(t),
+    ...(t.browserCheck ? ["Browser check: requested"] : []),
     ...(!t.legacy && !migrationConfigured(config) ? [MIGRATION_LINE] : []),
     ...tier,
     t.progress ? `Latest progress: ${t.progress.ts} ${progressBy(t.progress)} ${capBytes(oneLine(t.progress.message), 1000)}` : "No progress recorded yet.",

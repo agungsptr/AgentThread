@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { DEFAULT_CONFIG, type Config } from "../config/config.ts";
+import { browserCheckMode, DEFAULT_CONFIG, type Config } from "../config/config.ts";
 import { canTransitionThread, canTransitionTicket, scopesOverlap, slugify, validateHandoff } from "../domain/rules.ts";
 import { squashBranch } from "../domain/branches.ts";
 import { ROLES, type Actor, type AgentKind, type EventBody, type Role, type ThreadStatus, type ThreadType, type TicketStatus } from "../domain/types.ts";
@@ -559,10 +559,16 @@ function newThread(state: State, cmd: Extract<Command, { cmd: "thread.new" }>, c
           task,
           dir,
           status,
+          ...(cmd.browserCheck ? { browserCheck: true as const } : {}),
         },
       },
       // The stages the config rules out are na from the start (stage.recorded needs the thread, so after thread.created).
       ...stageNa(ctx.config ?? DEFAULT_CONFIG).map(({ stage, reason }): EventBody => ({ type: "stage.recorded", thread: id, payload: { stage, state: "na", by: "agt", reason } })),
+      // Stage 8 only on request: agt records it skipped itself, so the squash guard opens and nobody is asked. The coordinator
+      // records it done if the user asks for a browser check later.
+      ...(!cmd.browserCheck && browserCheckMode(ctx.config ?? DEFAULT_CONFIG) === "on_request" && !stageNa(ctx.config ?? DEFAULT_CONFIG).some((x) => x.stage === 8)
+        ? [{ type: "stage.recorded", thread: id, payload: { stage: 8, state: "skipped", by: "agt", reason: "not requested" } } as EventBody]
+        : []),
       ...tierEvents(state, id, cmd),
     ],
     effects: [

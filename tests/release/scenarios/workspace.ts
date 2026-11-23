@@ -641,12 +641,12 @@ async function edgeReturn(h: H): Promise<void> {
 async function edgeStageGates(h: H): Promise<void> {
   const task = "gates-1";
   // A proposed tier that waits an hour: no tab, no coordinator.
-  const thread = threadIdOf(await h.agtOk(["thread", "new", "Stage gates", "--type", "feature", "--goal", "stage gates row", "--task", task, "--tier", "low", "--reason", "stage gates row: no coordinator"]));
+  const thread = threadIdOf(await h.agtOk(["thread", "new", "Stage gates", "--type", "feature", "--goal", "stage gates row", "--task", task, "--tier", "low", "--reason", "stage gates row: no coordinator", "--browser-check"]));
   await h.agtOk(["worktree", "add", thread, "api"]);
   const wt = await waitWorktree(h, thread, "api", 120_000);
   const all = await h.events();
   const s8 = latestStage(all, thread, 8);
-  h.check("stage 8 is open (a browser URL is configured)", !s8, JSON.stringify(s8 ?? null));
+  h.check("stage 8 is open (a browser URL is configured and --browser-check was given)", !s8, JSON.stringify(s8 ?? null));
   const coordinator = { AGT_ROLE: "coordinator", AGT_THREAD: thread, AGT_TASK: task, AGT_ROOT: h.root, AGT_AGENT_PROCESS: "1" };
 
   // The squash branch, made as the user; the commit is the coordinator's.

@@ -200,6 +200,8 @@ export interface Thread {
   openWait?: { session?: string; at: string; blocked?: boolean; what?: string; told: string[]; endedSeq?: number };
   /** The last agent.blocked of a coordinator (or planner): a thread.waiting right after it is not told to main again. */
   lastBlocked?: { session: string; at: string };
+  /** The thread was created with --browser-check: stage 8 is required. */
+  browserCheck?: true;
   decisions: Entry[];
   findings: Entry[];
   questions: Question[];
@@ -333,6 +335,7 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       worktreeRequests: {},
       legacy: p.dir === undefined && p.worktree !== undefined,
       maxWorkers: p.maxWorkers,
+      ...(p.browserCheck ? { browserCheck: true as const } : {}),
       workerQueue: [],
       workerAgents: {},
       tickets: [],

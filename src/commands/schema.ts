@@ -27,6 +27,8 @@ export const CommandSchema = z.discriminatedUnion("cmd", [
     tier: tierName.optional(),
     reason: z.string().trim().optional(),
     now: z.boolean().optional(),
+    /** The user asked for a browser check (stage 8) or manual validation. */
+    browserCheck: z.boolean().optional(),
   }),
   z.object({ cmd: z.literal("thread.choose"), thread: threadId, tier: tierName, auto: z.boolean().optional() }),
   z.object({ cmd: z.literal("thread.cancel"), thread: threadId }),

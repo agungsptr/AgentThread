@@ -114,7 +114,7 @@ function roleGuide(role: SessionRole, o: GuideInput, level: "#" | "##"): string 
     `${h} Commands`,
     "",
     "```",
-    ...[...COMMANDS[role], ...(t.dir !== undefined ? (COMMANDS_TASK[role] ?? []) : [])].flatMap((c) => (COMMAND_OVERRIDES[role]?.[c] ? [COMMAND_OVERRIDES[role][c]!] : usageLines(c)).map((l, i) => (i === 0 ? `agt ${l}` : `    ${l}`))),
+    ...[...COMMANDS[role], ...(t.dir !== undefined ? (COMMANDS_TASK[role] ?? []) : [])].flatMap((c) => (COMMAND_OVERRIDES[role]?.[c] ? [COMMAND_OVERRIDES[role][c]!] : usageLines(c)).map((l) => (t.dir === undefined ? l.replace(" [--browser-check]", "") : l)).map((l, i) => (i === 0 ? `agt ${l}` : `    ${l}`))),
     "```",
     "",
     `${h} When things go wrong`,

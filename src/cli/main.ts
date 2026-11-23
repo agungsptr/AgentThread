@@ -444,6 +444,7 @@ async function thread(sub: string | undefined, args: string[], root: string, env
       tier: { type: "string" },
       reason: { type: "string" },
       now: { type: "boolean" },
+      "browser-check": { type: "boolean" },
     });
     if (!positionals.length || !values.type) throw new UsageError("thread new needs <title> --type <type>");
     if (values.tier !== undefined && !values.reason) throw new UsageError('--tier needs --reason "<why>"');
@@ -465,6 +466,7 @@ async function thread(sub: string | undefined, args: string[], root: string, env
       ...(values.tier !== undefined ? { tier: values.tier } : {}),
       ...(values.reason !== undefined ? { reason: values.reason } : {}),
       ...(values.now ? { now: true } : {}),
+      ...(values["browser-check"] ? { browserCheck: true } : {}),
     });
   }
   if (sub === "find") {

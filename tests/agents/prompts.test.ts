@@ -228,3 +228,12 @@ describe("main drafting restraint and the task-thread guide", () => {
     expect(legacy).not.toContain("agt stack restart");
   });
 });
+
+describe("browser check only on request", () => {
+  test("a task coordinator is told to skip stage 8 unless asked; main adds --browser-check on request; legacy has neither", () => {
+    expect(coordinator(DEFAULT_CONFIG)).toContain('Stage 8 (browser check) runs only on request: when agt recorded it skipped ("not requested")');
+    const main = systemPrompt({ root: "/repo", role: "main", config: DEFAULT_CONFIG });
+    expect(main).toContain("add --browser-check to agt thread new");
+    expect(systemPrompt({ root: "/repo", role: "coordinator", thread: LEGACY })).not.toContain("browser check");
+  });
+});

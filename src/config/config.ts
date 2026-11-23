@@ -284,7 +284,15 @@ export const ConfigSchema = z
           .strict()
           .optional(),
         prod_read: z.string().min(1).optional(),
-        browser: z.object({ urls: z.array(z.string().min(1)).optional(), login_note: z.string().min(1).optional() }).strict().optional(),
+        browser: z
+          .object({
+            urls: z.array(z.string().min(1)).optional(),
+            login_note: z.string().min(1).optional(),
+            /** `on_request` (default): stage 8 runs only for a thread created with --browser-check (or when the user asks); `always`: whenever urls are set. */
+            check: z.enum(["on_request", "always"]).optional(),
+          })
+          .strict()
+          .optional(),
         banned_words: z.array(z.string().min(1)).optional(),
         never_commit: z.array(z.string().min(1)).optional(),
         read_first: z.array(z.string().min(1)).optional(),
@@ -372,3 +380,6 @@ export function durationMs(d: string): number {
   const unit = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2] as "ms" | "s" | "m" | "h" | "d"];
   return Number(m[1]) * unit;
 }
+
+/** workflow.browser.check: whether stage 8 (browser check) needs a request; `on_request` when unset. */
+export const browserCheckMode = (config: Config): "on_request" | "always" => config.workflow.browser?.check ?? "on_request";

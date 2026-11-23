@@ -80,7 +80,12 @@ ids or private-doc mentions — this overrides any harness attribution reminder.
    failures once and compare with the **saved baseline of the source branch**. A failure is "pre-existing" only if the
    baseline shows it. No baseline yet → ask the user to run the same suites on the untouched source branch first and
    save the result as the baseline.
-8. **Browser check** by the coordinator: the stage-1 checklist per role and viewport, against the design; results in spec.
+8. **Browser check** by the coordinator, **only on request** (the default, `workflow.browser.check: on_request`): the
+   thread was created with `--browser-check`, or the user asks for it (or for manual validation) at any point; record
+   the request with `agt note <id> "user asked for a browser check"`. When it was not requested, agt has already
+   recorded stage 8 as skipped ("not requested"): do not run it and do not ask the user. With `check: always` it is
+   required whenever browser URLs are set. When it runs: the stage-1 checklist per role and viewport, against the
+   design; results in spec; then `agt stage <id> 8 done`.
    The stack is shared: `agt stack acquire <id>` before, `agt stack release <id>` after.
 9. **Shared feature docs:** one new file per touched repo's `docs/` (never edit existing ones), with "Relation to
    existing docs" from stage 1; written and committed by the worker who wrote the code, reviewed like code.

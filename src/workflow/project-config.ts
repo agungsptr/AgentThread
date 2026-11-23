@@ -94,7 +94,7 @@ export function projectConfigSection(config: Config, repos: { name: string; path
     "",
   );
 
-  lines.push("### Browser", "", `- URLs: ${list(w.browser?.urls)}`, `- Login note: ${code(w.browser?.login_note)}`, "");
+  lines.push("### Browser", "", `- URLs: ${list(w.browser?.urls)}`, `- Login note: ${code(w.browser?.login_note)}`, `- Check: \`${w.browser?.check ?? "on_request"}\``, "");
 
   lines.push(
     "### Rules",
