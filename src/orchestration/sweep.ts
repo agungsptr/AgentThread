@@ -122,7 +122,8 @@ export function sweep(state: State, now: string, ctx: ReactorContext): { events:
     for (const s of liveSessions(state, undefined, "coordinator")) {
       const t = s.thread ? state.threads.get(s.thread) : undefined;
       if (failed.has(s.id) || s.status === "starting" || !s.pane || s.rotation || !s.profile || !t || t.status === "done" || liveSessions(state, t.id, "coordinator")[0] !== s) continue;
-      if (!picker.exhausted(s.profile) || picker.name() === s.profile) continue;
+      // Moving to another over-threshold profile gains nothing (and would ping-pong between them).
+      if (!picker.exhausted(s.profile) || picker.name() === s.profile || picker.selection().allLimited) continue;
       const recent = [...state.sessions.values()].some((x) => x.thread === t.id && x.role === "coordinator" && x.replaces && Date.parse(now) - Date.parse(x.createdAt) <= USAGE_ROTATION_GAP_MS);
       if (recent) continue;
       usageRotating.add(s.id);

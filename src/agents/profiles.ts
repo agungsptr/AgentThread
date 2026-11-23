@@ -121,13 +121,18 @@ export function resetMs(w: UsageWindow | null | undefined, nowMs: number): numbe
 export const LIMITED_FALLBACK_MS = 60 * 60_000;
 
 /**
- * When a profile marked limited at `at` is eligible again: the latest known resets_at of its usage file (after the
- * mark), else 60 minutes after it.
+ * When a profile marked limited at `at` is eligible again: the reset of its window(s) at or over `switchAt` (the latest of
+ * them), else the nearest known reset after the mark, else 60 minutes after it. A 5-hour limit never waits for the
+ * 7-day reset.
  */
-export function limitedUntilMs(at: string, usage: ProfileUsage | undefined): number {
+export function limitedUntilMs(at: string, usage: ProfileUsage | undefined, switchAt?: { five_hour: number; seven_day: number }): number {
   const atMs = Date.parse(at);
-  const resets = [usage?.five_hour, usage?.seven_day].flatMap((w) => (w && w.resets_at * 1000 > atMs ? [w.resets_at * 1000] : []));
-  return resets.length ? Math.max(...resets) : atMs + LIMITED_FALLBACK_MS;
+  const future = (w: UsageWindow | null | undefined, limit: number | undefined) =>
+    w && w.resets_at * 1000 > atMs ? [{ at: w.resets_at * 1000, over: limit !== undefined && w.used >= limit }] : [];
+  const all = [...future(usage?.five_hour, switchAt?.five_hour), ...future(usage?.seven_day, switchAt?.seven_day)];
+  const over = all.filter((w) => w.over);
+  if (over.length) return Math.max(...over.map((w) => w.at));
+  return all.length ? Math.min(...all.map((w) => w.at)) : atMs + LIMITED_FALLBACK_MS;
 }
 
 export interface SelectInput {
@@ -145,32 +150,37 @@ export interface Selection {
   name: string;
   /** No profile was eligible: `name` is the one that frees up first. */
   allLimited: boolean;
-  /** The chosen profile's five-hour reset time (epoch ms) when known. */
-  fiveHourResetsAt?: number;
+  /** With allLimited: what keeps the chosen profile from being eligible, and when that lifts (epoch ms). */
+  blocking?: { window: "5h" | "7d" | "limit"; at: number };
 }
 
 /** Whether a profile may take a new launch: below both thresholds (a reset window counts 0) and not marked limited. */
 export function eligible(name: string, i: SelectInput): boolean {
   const u = i.usage[name];
   const mark = i.limited[name];
-  if (mark !== undefined && i.nowMs < limitedUntilMs(mark, u)) return false;
+  if (mark !== undefined && i.nowMs < limitedUntilMs(mark, u, i.switchAt)) return false;
   const five = usedNow(u?.five_hour, i.nowMs) ?? 0;
   const seven = usedNow(u?.seven_day, i.nowMs) ?? 0;
   return five < i.switchAt.five_hour && seven < i.switchAt.seven_day;
 }
 
-/** When an ineligible profile is eligible again (epoch ms): the latest reset among what blocks it. */
-function freeAtMs(name: string, i: SelectInput): number {
+/** What keeps a profile ineligible, each with the time it lifts (epoch ms). */
+function blockers(name: string, i: SelectInput): { window: "5h" | "7d" | "limit"; at: number }[] {
   const u = i.usage[name];
-  const blocks: number[] = [];
+  const out: { window: "5h" | "7d" | "limit"; at: number }[] = [];
   const mark = i.limited[name];
-  if (mark !== undefined) blocks.push(limitedUntilMs(mark, u));
+  if (mark !== undefined) {
+    const until = limitedUntilMs(mark, u, i.switchAt);
+    if (i.nowMs < until) out.push({ window: "limit", at: until });
+  }
   const five = resetMs(u?.five_hour, i.nowMs);
-  if (five !== undefined && (usedNow(u?.five_hour, i.nowMs) ?? 0) >= i.switchAt.five_hour) blocks.push(five);
+  if (five !== undefined && (usedNow(u?.five_hour, i.nowMs) ?? 0) >= i.switchAt.five_hour) out.push({ window: "5h", at: five });
   const seven = resetMs(u?.seven_day, i.nowMs);
-  if (seven !== undefined && (usedNow(u?.seven_day, i.nowMs) ?? 0) >= i.switchAt.seven_day) blocks.push(seven);
-  return blocks.length ? Math.max(...blocks) : i.nowMs;
+  if (seven !== undefined && (usedNow(u?.seven_day, i.nowMs) ?? 0) >= i.switchAt.seven_day) out.push({ window: "7d", at: seven });
+  return out;
 }
+
+const lastBlocker = (name: string, i: SelectInput) => blockers(name, i).sort((a, b) => b.at - a.at)[0];
 
 /**
  * The profile a new launch uses. The current one while it is eligible (use up the first profile); otherwise the
@@ -179,8 +189,8 @@ function freeAtMs(name: string, i: SelectInput): number {
  */
 export function selectProfile(i: SelectInput): Selection {
   const pick = (name: string, allLimited: boolean): Selection => {
-    const r = resetMs(i.usage[name]?.five_hour, i.nowMs);
-    return { name, allLimited, ...(r !== undefined ? { fiveHourResetsAt: r } : {}) };
+    const blocking = allLimited ? lastBlocker(name, i) : undefined;
+    return { name, allLimited, ...(blocking ? { blocking } : {}) };
   };
   if (i.profiles.length === 0) throw new Error("no profiles");
   if (i.current !== undefined && i.profiles.includes(i.current) && eligible(i.current, i)) return pick(i.current, false);
@@ -198,7 +208,7 @@ export function selectProfile(i: SelectInput): Selection {
     });
     return pick(ok[0]!.name, false);
   }
-  const free = i.profiles.map((name, order) => ({ name, order, at: freeAtMs(name, i) })).sort((a, b) => a.at - b.at || a.order - b.order);
+  const free = i.profiles.map((name, order) => ({ name, order, at: lastBlocker(name, i)?.at ?? i.nowMs })).sort((a, b) => a.at - b.at || a.order - b.order);
   return pick(free[0]!.name, true);
 }
 

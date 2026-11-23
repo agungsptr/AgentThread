@@ -11,7 +11,7 @@ import { stageNa } from "../workflow/project-config.ts";
 import { workspaceReposNoSpawn } from "../project/workspace.ts";
 import { actorSession, isLive, type State, type Thread, type Ticket } from "../state/projection.ts";
 import type { ProfilePicker } from "../orchestration/profile-pick.ts";
-import { claudeProfiles, profileDir } from "../agents/profiles.ts";
+import { claudeProfiles, LIMITED_FALLBACK_MS, profileDir } from "../agents/profiles.ts";
 import type { Command, CommandName } from "./schema.ts";
 
 export type Effect =
@@ -280,12 +280,23 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
   if (cmd.cmd === "profile.limit") {
     const cfg = ctx.config ?? DEFAULT_CONFIG;
     if (!claudeProfiles(cfg).some((p) => p.name === cmd.profile)) return { events: [] };
-    const events: EventBody[] = [{ type: "profile.limited", payload: { profile: cmd.profile, at: new Date().toISOString() } }];
+    const events: EventBody[] = [];
+    // A repeat while the mark still holds changes nothing (the picker knows the usage file's reset; else 60 minutes).
+    const mark = state.profiles.limited[cmd.profile]?.at;
+    const active = ctx.profile ? ctx.profile.limited(cmd.profile) : mark !== undefined && Date.now() < Date.parse(mark) + LIMITED_FALLBACK_MS;
+    if (!active) events.push({ type: "profile.limited", payload: { profile: cmd.profile, at: new Date().toISOString() } });
     // A worker that hit the limit: its coordinator may return the ticket so a fresh worker continues on another profile.
-    if (actor.role === "worker" && actor.thread && actor.ticket) {
+    // Once per worker session (profile.notified marks it), however often the hook fires.
+    const sid = actor.role === "worker" ? actorSession(state, actor) : undefined;
+    const worker = sid ? state.sessions.get(sid) : undefined;
+    if (worker && actor.thread && actor.ticket && !worker.profileNotified) {
       const coordinator = liveSessions(state, actor.thread, "coordinator")[0];
-      const text = `The worker for ticket ${actor.ticket} hit the usage limit of Claude profile ${cmd.profile}. Return the ticket so a fresh worker continues on another profile: agt ticket return ${actor.thread}/${actor.ticket} "<what is left>".`;
-      if (coordinator && !coordinator.notices.includes(text)) events.push({ type: "notice.queued", thread: actor.thread, payload: { session: coordinator.id, text } });
+      if (coordinator) {
+        events.push(
+          { type: "profile.notified", payload: { session: worker.id, profile: cmd.profile } },
+          { type: "notice.queued", thread: actor.thread, payload: { session: coordinator.id, text: `The worker for ticket ${actor.ticket} hit the usage limit of Claude profile ${cmd.profile}. Return the ticket so a fresh worker continues on another profile: agt ticket return ${actor.thread}/${actor.ticket} "<what is left>".` } },
+        );
+      }
     }
     return { events };
   }

@@ -100,7 +100,13 @@ test("select: a current that is not in the config is ignored", () => {
 test("limited mark: lasts until the latest known reset, else 60 minutes", () => {
   const at = new Date(NOW).toISOString();
   expect(limitedUntilMs(at, undefined)).toBe(NOW + 3_600_000);
-  expect(limitedUntilMs(at, u(win(99, 30), win(50, 600)))).toBe(sec(NOW + 600 * 60_000) * 1000);
+  // a 5h limit does not wait for the 7d reset
+  const sw = { five_hour: 90, seven_day: 95 };
+  expect(limitedUntilMs(at, u(win(99, 30), win(50, 600)), sw)).toBe(sec(NOW + 30 * 60_000) * 1000);
+  expect(limitedUntilMs(at, u(win(99, 30), win(50, 600)))).toBe(sec(NOW + 30 * 60_000) * 1000);
+  // the window over its threshold decides, even when the other resets sooner
+  expect(limitedUntilMs(at, u(win(10, 30), win(97, 600)), sw)).toBe(sec(NOW + 600 * 60_000) * 1000);
+  expect(limitedUntilMs(at, u(win(95, 300), win(97, 600)), sw)).toBe(sec(NOW + 600 * 60_000) * 1000);
   // a stale resets_at (before the mark) is ignored
   expect(limitedUntilMs(at, u(win(99, -30)))).toBe(NOW + 3_600_000);
   const i = input({ a: undefined }, { limited: { a: at } });
@@ -111,7 +117,12 @@ test("limited mark: lasts until the latest known reset, else 60 minutes", () => 
 test("select: none eligible picks the profile that frees up first and says so", () => {
   const r = selectProfile(input({ a: u(win(95, 120)), b: u(win(95, 40)), c: u(win(10, 5), win(99, 900)) }));
   expect(r).toMatchObject({ name: "b", allLimited: true });
-  expect(r.fiveHourResetsAt).toBe(sec(NOW + 40 * 60_000) * 1000);
+  expect(r.blocking).toEqual({ window: "5h", at: sec(NOW + 40 * 60_000) * 1000 });
+  // a 7d block is named as such
+  const r7 = selectProfile(input({ a: u(win(10, 5), win(99, 900)), b: u(win(10, 5), win(98, 1200)) }, { profiles: ["a", "b"] }));
+  expect(r7).toMatchObject({ name: "a", allLimited: true, blocking: { window: "7d", at: sec(NOW + 900 * 60_000) * 1000 } });
+  const at = new Date(NOW).toISOString();
+  expect(selectProfile(input({}, { profiles: ["a"], limited: { a: at } })).blocking).toEqual({ window: "limit", at: NOW + 3_600_000 });
 });
 
 test("select: a limited mark with a later reset keeps a profile behind a nearer one", () => {

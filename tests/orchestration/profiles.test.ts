@@ -141,21 +141,32 @@ test("a thread tab's env carries the chosen profile's config dir", () => {
   expect(tabEnv({ id: "001" }, { root: "/repo", config: DEFAULT_CONFIG }).CLAUDE_CONFIG_DIR).toBeDefined();
 });
 
-const limitCmd = (state: State, actor: Parameters<typeof handle>[2], profile = "personal", config = cfg()) => handle(state, { cmd: "profile.limit", profile }, actor, { root: "/repo", config });
+const limitCmd = (state: State, actor: Parameters<typeof handle>[2], profile = "personal", config = cfg(), p?: ReturnType<typeof picker>) => handle(state, { cmd: "profile.limit", profile }, actor, { root: "/repo", config, ...(p ? { profile: p } : {}) });
 
-test("profile.limit records the mark; a worker's coordinator is told to return the ticket (once)", () => {
+test("profile.limit records the mark; a worker's coordinator is told to return the ticket, once per worker", () => {
   const s = running("personal");
   apply(s, NOW_ISO, { type: "ticket.created", thread: "001", payload: { ticket: "T1", title: "t", scope: ["t"] } });
-  const r = limitCmd(s, { role: "worker", thread: "001", ticket: "T1", session: W });
+  const actor = { role: "worker", thread: "001", ticket: "T1", session: W } as const;
+  apply(s, NOW_ISO, { type: "session.created", thread: "001", payload: { session: W, role: "worker", agent: "claude-code", name: "w", ticket: "T1", profile: "personal" } });
+  const r = limitCmd(s, actor);
   expect(r.ok && r.events).toEqual([
     { type: "profile.limited", payload: { profile: "personal", at: expect.any(String) } },
+    { type: "profile.notified", payload: { session: W, profile: "personal" } },
     { type: "notice.queued", thread: "001", payload: { session: C, text: 'The worker for ticket T1 hit the usage limit of Claude profile personal. Return the ticket so a fresh worker continues on another profile: agt ticket return 001/T1 "<what is left>".' } },
   ]);
   if (r.ok) apply(s, NOW_ISO, ...r.events);
   expect(s.profiles.limited.personal).toBeDefined();
   expect(s.sessions.get(C)!.notices).toHaveLength(1);
-  const again = limitCmd(s, { role: "worker", thread: "001", ticket: "T1", session: W });
-  expect(again.ok && again.events.map((e) => e.type)).toEqual(["profile.limited"]);
+  // the hook firing again: no new mark while it holds, no second notice for the worker, even after the first was delivered
+  apply(s, NOW_ISO, { type: "notice.delivered", thread: "001", payload: { session: C, count: 1 } });
+  const live = profilePicker(s, cfg(), { usage: () => ({}), now: Date.now })!; // the handler stamps real time
+  const again = limitCmd(s, actor, "personal", cfg(), live);
+  expect(again.ok && again.events).toEqual([]);
+  // another worker of the same profile is told
+  const W2 = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+  apply(s, NOW_ISO, { type: "session.created", thread: "001", payload: { session: W2, role: "worker", agent: "claude-code", name: "w2", ticket: "T2", profile: "personal" } });
+  const other = limitCmd(s, { role: "worker", thread: "001", ticket: "T2", session: W2 }, "personal", cfg(), live);
+  expect(other.ok && other.events.map((e) => e.type)).toEqual(["profile.notified", "notice.queued"]);
 });
 
 test("profile.limit from a coordinator or an unknown profile only marks / is ignored; a worker is not 'authored'", () => {
@@ -167,6 +178,13 @@ test("profile.limit from a coordinator or an unknown profile only marks / is ign
   expect(unknown.ok && unknown.events).toEqual([]);
   const single = limitCmd(s, USER, "personal", DEFAULT_CONFIG);
   expect(single.ok && single.events).toEqual([]);
+});
+
+test("a mark that expired is recorded again", () => {
+  const s = running("personal");
+  apply(s, new Date(NOW - 2 * 3_600_000).toISOString(), { type: "profile.limited", payload: { profile: "personal", at: new Date(NOW - 2 * 3_600_000).toISOString() } });
+  const r = limitCmd(s, USER, "personal", cfg(), picker(s, {}));
+  expect(r.ok && r.events.map((e) => e.type)).toEqual(["profile.limited"]);
 });
 
 test("profile.choose answers with the profile and dir, and records the switch; user only", () => {
@@ -243,4 +261,21 @@ test("sweep: main is told once, only to restart later", () => {
 test("a single profile or none: the sweep does nothing about profiles", () => {
   const s = running("personal");
   expect(sweep(s, NOW_ISO, { root: "/repo", config: DEFAULT_CONFIG, newId: ids() }).events).toEqual([]);
+});
+
+test("sweep: when every profile is over its threshold the coordinator is not rotated (no ping-pong)", () => {
+  const s = running("personal");
+  const usage = { personal: u(win(95, 90)), work: u(win(96, 30)) };
+  const r = sweep(s, NOW_ISO, { root: "/repo", config: cfg(), newId: ids(), profile: picker(s, usage) });
+  expect(picker(s, usage).selection().allLimited).toBe(true);
+  expect(r.events.some((e) => e.type === "session.rotation_requested")).toBe(false);
+});
+
+test("a tab ensure and a spawn in one decision still record the profile switch", () => {
+  const s = stateOf(INIT, threadCreated("001", { status: "in_progress" }), { type: "thread.tab_opened", thread: "001", payload: { tab: "w1:t2", rootPane: "w1:p2" } });
+  const p = picker(s, { personal: u(win(95, 10)) });
+  const env = tabEnv({ id: "001" }, { root: "/repo", config: cfg(), profile: p });
+  expect(env.CLAUDE_CONFIG_DIR).toBe("/abs/.claude-b");
+  const c = spawnCoordinator(s.threads.get("001")!, { root: "/repo", config: cfg(), newId: ids(C2), profile: p });
+  expect(c.events.map((e) => e.type)).toEqual(["profile.switched", "session.created"]);
 });

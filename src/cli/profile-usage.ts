@@ -1,4 +1,4 @@
-import { claudeProfiles, clockOf, limitedUntilMs, readAllUsage, resetMs, usedNow, type ProfileUsage } from "../agents/profiles.ts";
+import { claudeProfiles, clockOf, thresholds, limitedUntilMs, readAllUsage, resetMs, usedNow, type ProfileUsage } from "../agents/profiles.ts";
 import type { Config } from "../config/config.ts";
 import type { State } from "../state/projection.ts";
 
@@ -20,7 +20,7 @@ export function usageRows(root: string, config: Config, state: State | undefined
   return names.map((profile) => {
     const u = files[profile];
     const mark = state?.profiles.limited[profile]?.at;
-    const until = mark !== undefined ? limitedUntilMs(mark, u) : undefined;
+    const until = mark !== undefined ? limitedUntilMs(mark, u, thresholds(config)) : undefined;
     return {
       profile,
       current: state?.profiles.current === profile,

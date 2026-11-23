@@ -10,7 +10,14 @@ import { emptyState } from "../../src/state/projection.ts";
 import { isolatedConfigHome } from "../helpers.ts";
 
 const NOW = new Date("2026-11-24T12:00:00Z");
-const root = () => realpathSync(mkdtempSync(join(tmpdir(), "agt-sl-")));
+const PROFILES = "agents:\n  claude:\n    profiles:\n      - { name: personal, config_dir: /a }\n      - { name: work, config_dir: /b }\n      - { name: p, config_dir: /c }\n";
+/** A root whose config lists the profiles the tests use. */
+const root = (extra = "") => {
+  const r = realpathSync(mkdtempSync(join(tmpdir(), "agt-sl-")));
+  mkdirSync(join(r, ".agentthread"), { recursive: true });
+  writeFileSync(join(r, ".agentthread", "config.yaml"), extra || PROFILES);
+  return r;
+};
 const env = () => ({ XDG_CONFIG_HOME: isolatedConfigHome(), HOME: "/nonexistent" });
 const stdin = (five?: [number, number], seven?: [number, number]) =>
   JSON.stringify({
@@ -50,27 +57,22 @@ test("garbage stdin and a session before its first response print the profile an
 
 test("an unwritable usage directory does not break the line", async () => {
   const r = root();
-  mkdirSync(join(r, ".agentthread"));
   writeFileSync(join(r, ".agentthread", "usage"), "a file where the directory should be");
   expect(await statuslineLine({ profile: "p", root: r, stdin: stdin([1, T(10)]), env: env(), now: NOW })).toMatch(/^p · 5h 1%/);
 });
 
 test("the user's own statusline runs with the same stdin and prints on a second line", async () => {
-  const r = root();
-  const script = join(r, "mine.sh");
+  const script = join(realpathSync(tmpdir()), `agt-mine-${process.pid}.sh`);
+  const r = root(`${PROFILES}    statusline: ${script}\n`);
   writeFileSync(script, '#!/bin/sh\nread -r in\necho "mine: $(echo "$in" | grep -o s-1)"\n');
   chmodSync(script, 0o755);
-  mkdirSync(join(r, ".agentthread"), { recursive: true });
-  writeFileSync(join(r, ".agentthread", "config.yaml"), `agents:\n  claude:\n    statusline: ${script}\n`);
   const e = env();
   const line = await statuslineLine({ profile: "personal", root: r, stdin: stdin([25, T(130)]) + "\n", env: e, now: NOW });
   expect(line.split("\n")).toEqual([expect.stringMatching(/^personal · 5h 25%/), "mine: s-1"]);
 });
 
 test("a failing or missing user statusline leaves only agt's line", async () => {
-  const r = root();
-  mkdirSync(join(r, ".agentthread"), { recursive: true });
-  writeFileSync(join(r, ".agentthread", "config.yaml"), "agents:\n  claude:\n    statusline: /nonexistent/nope.sh\n");
+  const r = root(`${PROFILES}    statusline: /nonexistent/nope.sh\n`);
   expect(await statuslineLine({ profile: "p", root: r, stdin: stdin([1, T(10)]), env: env(), now: NOW })).toMatch(/^p · 5h 1% ↻\d\d:\d\d$/);
 });
 
@@ -94,4 +96,12 @@ test("agt usage rows and table: windows, reset, current and limited", () => {
   expect(text[2]).toMatch(/^b\s+0%\s+-\s+-\s+-\s+2h ago\s+until \d\d:\d\d$/);
   expect(text[3]).toMatch(/^c\s+-\s+-\s+-\s+-\s+-\s+-$/);
   expect(existsSync(usageFile(r, "c"))).toBe(false);
+});
+
+test("a profile name the config does not list prints nothing and writes nothing", async () => {
+  const r = root();
+  expect(await statuslineLine({ profile: "../evil", root: r, stdin: stdin([1, T(10)]), env: env(), now: NOW })).toBe("");
+  expect(await statuslineLine({ profile: "nope", root: r, stdin: stdin([1, T(10)]), env: env(), now: NOW })).toBe("");
+  expect(existsSync(join(r, ".agentthread", "usage"))).toBe(false);
+  expect(await statuslineLine({ profile: "work", root: root("agents: [broken"), stdin: "{}", env: env(), now: NOW })).toBe("");
 });

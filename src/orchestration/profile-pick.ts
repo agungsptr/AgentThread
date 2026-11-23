@@ -1,4 +1,4 @@
-import { clockOf, claudeProfiles, eligible, selectProfile, switching, thresholds, type Selection, type UsageMap } from "../agents/profiles.ts";
+import { clockOf, claudeProfiles, eligible, limitedUntilMs, selectProfile, switching, thresholds, type Selection, type UsageMap } from "../agents/profiles.ts";
 import type { Config } from "../config/config.ts";
 import type { EventBody } from "../domain/types.ts";
 import { liveSessions } from "./sessions.ts";
@@ -14,6 +14,8 @@ export interface ProfilePicker {
   selection(): Selection;
   /** Whether a profile is over a threshold or marked limited at this picker's time. */
   exhausted(profile: string): boolean;
+  /** Whether a profile carries an unexpired rate_limit mark. */
+  limited(profile: string): boolean;
 }
 
 export interface PickerSources {
@@ -23,8 +25,8 @@ export interface PickerSources {
 }
 
 /** The warning main gets when no profile is eligible. */
-export const allNearLimitsNotice = (name: string, fiveHourResetsAt: number | undefined) =>
-  `All Claude profiles are near their limits; using ${name}${fiveHourResetsAt !== undefined ? ` (5h resets at ${clockOf(fiveHourResetsAt)})` : ""}.`;
+export const allNearLimitsNotice = (name: string, blocking: Selection["blocking"]) =>
+  `All Claude profiles are near their limits; using ${name}${blocking ? ` (${blocking.window === "limit" ? "rate limit lifts" : `${blocking.window} resets`} at ${clockOf(blocking.at)})` : ""}.`;
 
 /**
  * A picker for the launches of one decision (a command, a reactor pass, a sweep tick); undefined with fewer than 2
@@ -54,6 +56,11 @@ export function profilePicker(state: State, config: Config, src: PickerSources):
     name: () => get().chosen.name,
     selection: () => get().chosen,
     exhausted: (profile) => !eligible(profile, get().input),
+    limited: (profile) => {
+      const { input: i } = get();
+      const mark = i.limited[profile];
+      return mark !== undefined && i.nowMs < limitedUntilMs(mark, i.usage[profile], i.switchAt);
+    },
     take() {
       const { chosen: c } = get();
       if (taken) return [];
@@ -64,7 +71,7 @@ export function profilePicker(state: State, config: Config, src: PickerSources):
       const main = liveSessions(state, undefined, "main")[0];
       return [
         { type: "profile.switched", payload: { ...(from !== undefined ? { from } : {}), to: c.name, reason } },
-        ...(c.allLimited && main ? [{ type: "notice.queued" as const, payload: { session: main.id, text: allNearLimitsNotice(c.name, c.fiveHourResetsAt) } }] : []),
+        ...(c.allLimited && main ? [{ type: "notice.queued" as const, payload: { session: main.id, text: allNearLimitsNotice(c.name, c.blocking) } }] : []),
       ];
     },
   };

@@ -33,8 +33,10 @@ const runFields = (run: RoleAgent) => ({ agent: run.agent, ...(run.model ? { mod
  */
 export function tabEnv(t: { id: string; tier?: string; dir?: string; task?: string }, ctx: { root: string; config: Config; profile?: ProfilePicker }): Record<string, string> {
   const run = tierAgent(ctx.config, t.tier);
+  // Only the name: recording the choice (take) is left to the launch that follows, so it is never lost.
+  const profile = run.agent === "claude-code" ? ctx.profile?.name() : undefined;
   const base = agentEnv({ root: ctx.root, role: "coordinator", agent: run.agent, thread: t.id, ...(t.dir !== undefined && t.task ? { task: t.task } : {}), configDir: claudeConfigDir(ctx.config) });
-  return { ...base, ...adapterFor(run.agent).launch({ role: "coordinator", run, config: ctx.config, root: ctx.root, ...(profileFor(ctx, run.agent).profile ? { profile: profileFor(ctx, run.agent).profile! } : {}) }).env, ...threadGitEnv(t, ctx.root) };
+  return { ...base, ...adapterFor(run.agent).launch({ role: "coordinator", run, config: ctx.config, root: ctx.root, ...(profile ? { profile } : {}) }).env, ...threadGitEnv(t, ctx.root) };
 }
 
 /**

@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { loadConfig } from "../config/config.ts";
-import { expandHome, statuslineText, usageFromStatusline, writeUsage } from "../agents/profiles.ts";
+import { claudeProfiles, expandHome, statuslineText, usageFromStatusline, writeUsage } from "../agents/profiles.ts";
 
 type Env = Record<string, string | undefined>;
 
@@ -42,7 +42,15 @@ export function runUserStatusline(command: string, stdin: string, env: Env, cwd:
  */
 export async function statuslineLine(o: { profile: string; root: string; stdin: string; env: Env; cwd?: string; now?: Date }): Promise<string> {
   const now = o.now ?? new Date();
-  let usage = usageFromStatusline(o.stdin, now);
+  // The name is a file name: only a profile the config lists is recorded (anything else prints nothing and writes nothing).
+  let config;
+  try {
+    config = loadConfig(o.root, o.env);
+  } catch {
+    return "";
+  }
+  if (!claudeProfiles(config).some((p) => p.name === o.profile)) return "";
+  const usage = usageFromStatusline(o.stdin, now);
   try {
     // Garbage, or a session before its first response: nothing new to record; the previous data stays.
     if (usage.five_hour || usage.seven_day) writeUsage(o.root, o.profile, usage);
@@ -50,14 +58,10 @@ export async function statuslineLine(o: { profile: string; root: string; stdin: 
     // the usage file is telemetry: a failed write must not break the status line
   }
   let line = statuslineText(o.profile, usage);
-  try {
-    const own = loadConfig(o.root, o.env).agents.claude.statusline;
-    if (own) {
-      const extra = await runUserStatusline(own, o.stdin, o.env, o.cwd ?? o.root);
-      if (extra) line += `\n${extra}`;
-    }
-  } catch {
-    // a broken config leaves just agt's line
+  const own = config.agents.claude.statusline;
+  if (own) {
+    const extra = await runUserStatusline(own, o.stdin, o.env, o.cwd ?? o.root);
+    if (extra) line += `\n${extra}`;
   }
   return line;
 }
