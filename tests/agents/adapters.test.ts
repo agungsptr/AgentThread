@@ -284,3 +284,66 @@ test("a failing prepare is not mangled by omp's fallback: another adapter withou
   const own = { ...fake, degradedArgs: (a: string[]) => a.filter((x) => x !== "--flag") };
   expect(prepareLaunch(own, base as never, { args: ["--flag", "--model", "m"] }).args).toEqual(["--model", "m"]);
 });
+
+// agents.env / roles.<role>.env: the user's env for every agent agt launches, under the adapter's own env.
+import { claudeAccountNote } from "../../src/agents/roles.ts";
+import { ConfigSchema } from "../../src/config/config.ts";
+import { expandHome } from "../../src/agents/adapters.ts";
+
+const envConfig = (agents: object) => ConfigSchema.parse({ agents });
+
+test("agents.env schema: keys must be identifiers and may not be AGT_* or HERDR_*", () => {
+  expect(ConfigSchema.safeParse({ agents: { env: { "1X": "a" } } }).success).toBe(false);
+  expect(ConfigSchema.safeParse({ agents: { env: { A: 1 } } }).success).toBe(false);
+  const bad = ConfigSchema.safeParse({ agents: { env: { AGT_ROOT: "x" } } });
+  expect(bad.success ? "" : bad.error.issues[0]!.message).toContain("owned by agt");
+  expect(ConfigSchema.safeParse({ agents: { roles: { worker: { agent: "codex", env: { HERDR_PANE_ID: "x" } } } } }).success).toBe(false);
+  expect(ConfigSchema.safeParse({ agents: { complexity: { tiers: { big: { agent: "codex", env: { AGT_X: "x" } } } } } }).success).toBe(false);
+  expect(ConfigSchema.safeParse({ agents: { env: { CLAUDE_CONFIG_DIR: "~/a" } } }).success).toBe(true);
+  expect(DEFAULT_CONFIG.agents).not.toHaveProperty("env");
+});
+
+test("expandHome expands a leading ~/ and $HOME", () => {
+  expect(expandHome("~/a/b", "/h")).toBe("/h/a/b");
+  expect(expandHome("~", "/h")).toBe("/h");
+  expect(expandHome("$HOME/x:${HOME}/y", "/h")).toBe("/h/x:/h/y");
+  expect(expandHome("/abs/~/x", "/h")).toBe("/abs/~/x");
+  expect(expandHome("$HOMEX", "/h")).toBe("$HOMEX");
+});
+
+test("env precedence: agents.env < role env < tier env; adapter env wins for its keys; ~ expands", () => {
+  const config = envConfig({
+    env: { CLAUDE_CONFIG_DIR: "~/acct-a", A: "1", OPENCODE_CONFIG_CONTENT: "user" },
+    roles: { worker: { agent: "opencode", env: { A: "2", B: "w" } }, main: { agent: "claude-code" } },
+    complexity: { tiers: { big: { agent: "claude-code", env: { A: "3" } } } },
+  });
+  const home = { HOME: "/home/u" };
+  const worker = adapterFor("opencode").launch({ role: "worker", run: config.agents.roles.worker, config, root: "/r", env: home });
+  expect(worker.env).toMatchObject({ CLAUDE_CONFIG_DIR: "/home/u/acct-a", A: "2", B: "w" });
+  expect(JSON.parse(worker.env.OPENCODE_CONFIG_CONTENT!)).toHaveProperty("permission");
+  const main = adapterFor("claude-code").launch({ role: "main", run: config.agents.roles.main, config, root: "/r", env: home });
+  expect(main.env).toMatchObject({ CLAUDE_CONFIG_DIR: "/home/u/acct-a", A: "1" });
+  expect(main.env).not.toHaveProperty("B");
+  const tier = adapterFor("claude-code").launch({ role: "coordinator", run: config.agents.complexity.tiers.big!, config, root: "/r", env: home });
+  expect(tier.env.A).toBe("3");
+  // never typed onto a pane: not in processEnv
+  expect(main.processEnv).toEqual({ AGT_AGENT_PROCESS: "1" });
+});
+
+test("every adapter passes agents.env, and the first coordinator's tab env carries it", () => {
+  const config = envConfig({ env: { CLAUDE_CONFIG_DIR: "/acct" } });
+  for (const agent of AGENT_KINDS) {
+    for (const role of ["main", "coordinator", "worker"] as const) expect(adapterFor(agent).launch({ ...base, role, run: { agent }, config }).env.CLAUDE_CONFIG_DIR).toBe("/acct");
+  }
+  expect(tabEnv({ id: "001" }, { root: "/r", config }).CLAUDE_CONFIG_DIR).toBe("/acct");
+});
+
+test("claudeAccountNote: agents.env, else the start env, else the default; none without claude-code", () => {
+  expect(claudeAccountNote(envConfig({ env: { CLAUDE_CONFIG_DIR: "/acct" } }), {})).toBe("claude-code agents use CLAUDE_CONFIG_DIR=/acct");
+  expect(claudeAccountNote(envConfig({}), { CLAUDE_CONFIG_DIR: "/shell" })).toBe("claude-code agents use CLAUDE_CONFIG_DIR=/shell");
+  expect(claudeAccountNote(envConfig({}), {})).toBe("claude-code agents use the default Claude config (~/.claude); set agents.env.CLAUDE_CONFIG_DIR to pick an account");
+  const none = envConfig({ roles: { main: { agent: "codex" }, coordinator: { agent: "codex" }, worker: { agent: "codex" } } });
+  expect(claudeAccountNote(none, {})).toBeUndefined();
+  const tier = envConfig({ roles: { main: { agent: "codex" }, coordinator: { agent: "codex" }, worker: { agent: "codex" } }, complexity: { tiers: { big: { agent: "claude-code", env: { CLAUDE_CONFIG_DIR: "/t" } } } } });
+  expect(claudeAccountNote(tier, {})).toBe("claude-code agents use CLAUDE_CONFIG_DIR=/t");
+});

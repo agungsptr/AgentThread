@@ -16,8 +16,16 @@ const durationAtLeast = (min: string) => duration.refine((d) => !DURATION.test(d
 const agent = z.enum(AGENT_KINDS);
 export const PERMISSION_MODES = ["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"] as const;
 
+/** Extra environment for the agents agt launches. Keys agt owns (AGT_*, HERDR_*) are refused; `~/` and `$HOME` expand at launch. */
+const agentEnvSchema = z.record(
+  z
+    .string()
+    .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "env key must match /^[A-Za-z_][A-Za-z0-9_]*$/")
+    .refine((k) => !/^(AGT_|HERDR_)/.test(k), "env keys starting with AGT_ or HERDR_ are owned by agt and cannot be set"),
+  z.string(),
+);
 const roleAgentSchema = z
-  .object({ agent, model: z.string().trim().min(1).optional(), effort: z.string().trim().min(1).optional() })
+  .object({ agent, model: z.string().trim().min(1).optional(), effort: z.string().trim().min(1).optional(), env: agentEnvSchema.optional() })
   .strict();
 const ROLE_NAMES = ["main", "coordinator", "worker"] as const satisfies readonly SessionRole[];
 
@@ -34,6 +42,8 @@ const agentsSchema = z
       })
       .strict()
       .default({}),
+    /** Env for every agent agt launches (main, coordinators, workers); a role's or tier's own `env` is merged over it. */
+    env: agentEnvSchema.optional(),
     autonomous: z.boolean().default(true),
     skill: z.boolean().default(true),
     claude: z
@@ -78,13 +88,14 @@ const agentsSchema = z
       default_worker: roles.worker.agent,
       roles,
       complexity: a.complexity,
+      ...(a.env ? { env: a.env } : {}),
       autonomous: a.autonomous,
       skill: a.skill,
       claude: a.claude,
     };
   });
 
-export type RoleAgent = { agent: z.infer<typeof agent>; model?: string; effort?: string };
+export type RoleAgent = { agent: z.infer<typeof agent>; model?: string; effort?: string; env?: Record<string, string> };
 
 /** A squash-branch prefix; `wip` and `thread` are taken by the guard branches (wip/<task>, thread/<id>). */
 const branchPrefix = z

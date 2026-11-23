@@ -1,4 +1,5 @@
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../config/config.ts";
 import type { AgentKind, SessionRole } from "../domain/types.ts";
@@ -268,12 +269,37 @@ const agyAdapter: AgentAdapter = {
   capabilities: NO_HOOKS,
 };
 
+/** `~/x`, `~` and `$HOME`/`${HOME}` in a value become the home directory. */
+export function expandHome(value: string, home: string): string {
+  const v = value === "~" || value.startsWith("~/") ? home + value.slice(1) : value;
+  return v.replace(/\$\{HOME\}|\$HOME(?![A-Za-z0-9_])/g, () => home);
+}
+
+/**
+ * The user's agents.env for a launch: agents.env, then the role's env, then the run's own env (a complexity tier's),
+ * each over the last, with `~/` and $HOME expanded.
+ */
+export function userAgentEnv(config: Config, role: SessionRole, run: RoleAgent, env: Record<string, string | undefined> = process.env): Record<string, string> {
+  const home = env.HOME || homedir();
+  const merged = { ...config.agents.env, ...config.agents.roles[role].env, ...run.env };
+  return Object.fromEntries(Object.entries(merged).map(([k, v]) => [k, expandHome(v, home)]));
+}
+
+// The user's agents.env sits under the adapter's own env: an adapter wins for the keys it owns.
+const withUserEnv = (a: AgentAdapter): AgentAdapter => ({
+  ...a,
+  launch(o) {
+    const l = a.launch(o);
+    return { ...l, env: { ...userAgentEnv(o.config, o.role, o.run, o.env), ...l.env } };
+  },
+});
+
 const ADAPTERS: Record<AgentKind, AgentAdapter> = {
-  "claude-code": claudeAdapter,
-  opencode: opencodeAdapter,
-  codex: codexAdapter,
-  omp: ompAdapter,
-  agy: agyAdapter,
+  "claude-code": withUserEnv(claudeAdapter),
+  opencode: withUserEnv(opencodeAdapter),
+  codex: withUserEnv(codexAdapter),
+  omp: withUserEnv(ompAdapter),
+  agy: withUserEnv(agyAdapter),
 };
 
 export function adapterFor(agent: AgentKind): AgentAdapter {

@@ -332,6 +332,24 @@ Notes on workspace settings:
   the built-in worktree creation, copy and install. It must leave `{path}` checked out on `wip/<task>`.
 - `agt config show` and `config apply` warn about a tracked `copy` entry and about a browser URL port no service uses.
 
+**Agent environment.** `agents.env` sets environment variables for every agent agt launches (main, coordinators,
+workers), and a role's or tier's own `env` is merged over it. This matters with several Claude Code accounts: you pick
+one with `CLAUDE_CONFIG_DIR` (usually in a shell alias), but agt launches agents with the environment of the Herdr
+session, so a session opened from a shell without it starts `claude` on the default config and asks to log in and trust
+folders again. Set it once in the config instead:
+
+```yaml
+agents:
+  env:
+    CLAUDE_CONFIG_DIR: ~/.claude-work     # a leading ~/ and $HOME expand to your home directory
+  roles:
+    worker: { agent: claude-code, env: { CLAUDE_CONFIG_DIR: ~/.claude-other } }
+```
+
+Keys must match `[A-Za-z_][A-Za-z0-9_]*`, and `AGT_*` and `HERDR_*` are agt's own and refused. An agent's adapter wins
+for the few variables it sets itself. `agt config show` and `config apply` print the keys but show every value as `***`.
+`agt start` prints which `CLAUDE_CONFIG_DIR` the claude-code agents will use.
+
 A role's `effort` must be one the agent accepts; a bad value is rejected when the config loads.
 
 ### Generated files
@@ -401,7 +419,8 @@ main pane.
 pane at `agt start` and the worktrees inherit the answer. If main is another agent but some role uses Claude Code,
 `agt start` warns you to open `claude` once in the project root and accept. In folders agt creates itself
 (`.worktrees/`), agt answers a coordinator's or worker's trust dialog; it never answers it in your own folders and never
-touches Claude Code's config.
+touches Claude Code's config. With several Claude accounts, set `agents.env.CLAUDE_CONFIG_DIR` (see Configuration) so
+every agent uses the same account and trust answers; `agt start` prints the one in use.
 
 **Stalled or idle workers.** A worker that stops without reporting is flagged to its coordinator (at most three times
 per ticket); a worker that exits before claiming its ticket is replaced (at most twice). A session whose first turn runs

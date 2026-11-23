@@ -40,7 +40,9 @@ function agt(args: string[], extra: Record<string, string> = {}, opts: { herdr?:
   }
   Object.assign(env, extra);
   const r = Bun.spawnSync([process.execPath, BIN, ...args], { cwd: root, env, stdin: opts.stdin === undefined ? "ignore" : Buffer.from(opts.stdin), stdout: "pipe", stderr: "pipe" });
-  return { code: r.exitCode, out: r.stdout.toString().trim(), err: r.stderr.toString().trim() };
+  // The claude-code account info line (covered by its own tests) is dropped from out.
+  const out = r.stdout.toString().trim().split("\n").filter((l) => !l.startsWith("claude-code agents use ")).join("\n");
+  return { code: r.exitCode, out, err: r.stderr.toString().trim(), raw: r.stdout.toString().trim() };
 }
 
 beforeEach(() => {
@@ -273,4 +275,26 @@ test("agt start warns once per role or tier whose agent is not installed", () =>
     "agt: warning: agents.roles.worker: omp is not installed",
     "agt: warning: agents.complexity.tiers.big: codex is not installed",
   ]);
+});
+
+test("start prints which Claude account the claude-code agents use", () => {
+  const def = agt(["start", "--no-manager"], { CLAUDE_CONFIG_DIR: "" });
+  expect(def.raw.split("\n")[0]).toBe("claude-code agents use the default Claude config (~/.claude); set agents.env.CLAUDE_CONFIG_DIR to pick an account");
+  agt(["daemon", "stop"]);
+  const fromShell = agt(["start", "--no-manager"], { CLAUDE_CONFIG_DIR: "/shell/acct" });
+  expect(fromShell.raw.split("\n")[0]).toBe("claude-code agents use CLAUDE_CONFIG_DIR=/shell/acct");
+  agt(["daemon", "stop"]);
+  writeFileSync(join(root, ".agentthread", "config.yaml"), "agents:\n  env: { CLAUDE_CONFIG_DIR: /cfg/acct }\n");
+  const cfg = agt(["start", "--no-manager"], { CLAUDE_CONFIG_DIR: "/shell/acct" });
+  expect(cfg.raw.split("\n")[0]).toBe("claude-code agents use CLAUDE_CONFIG_DIR=/cfg/acct");
+});
+
+test("the main manager is launched with agents.env in its process env", () => {
+  const dump = join(root, "env-dump.txt");
+  const bin = join(root, "fake-claude.sh");
+  writeFileSync(bin, `#!/bin/sh\nprintf '%s\\n' "$CLAUDE_CONFIG_DIR" "$MAIN_ONLY" > ${shellQuote(dump)}\n`, { mode: 0o755 });
+  writeFileSync(join(root, ".agentthread", "config.yaml"), "agents:\n  env: { CLAUDE_CONFIG_DIR: ~/acct }\n  roles:\n    main: { agent: claude-code, env: { MAIN_ONLY: m } }\n");
+  const r = agt(["start"], { AGT_CLAUDE_BIN: bin, HOME: "/home/u" });
+  expect(r.code).toBe(0);
+  expect(readFileSync(dump, "utf8")).toBe("/home/u/acct\nm\n");
 });

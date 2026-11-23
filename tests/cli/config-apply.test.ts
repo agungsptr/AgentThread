@@ -269,3 +269,19 @@ test("config apply from an agent pane restarts the daemon (and the new daemon is
     expect(after).toBeDefined();
     expect(after).not.toBe(before);
   }), 30_000);
+
+test("agents.env and role/tier env values are redacted in config show and in the diff; keys stay", async () => {
+  const { redactEnv, diffConfig } = await import("../../src/project/config-apply.ts");
+  const cfg = { agents: { env: { K: "secret" }, roles: { worker: { agent: "codex", env: { W: "secret2" } } }, complexity: { tiers: { big: { agent: "codex", env: { T: "secret3" } } } } } };
+  const out = JSON.stringify(redactEnv(cfg));
+  expect(out).not.toContain("secret");
+  expect(out).toContain('"K":"***"');
+  expect(out).toContain('"W":"***"');
+  expect(out).toContain('"T":"***"');
+  const lines = diffConfig({}, cfg);
+  expect(lines.join("\n")).not.toContain("secret");
+  expect(lines).toContain("+ agents.env.K: ***");
+  expect(lines).toContain("+ agents.roles.worker.env.W: ***");
+  expect(lines).toContain("+ agents.complexity.tiers.big.env.T: ***");
+  expect(lines).toContain('+ agents.roles.worker.agent: "codex"');
+});

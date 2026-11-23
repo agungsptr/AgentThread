@@ -64,7 +64,7 @@ test("start → tabs per thread → manual close recovered → done closes tab",
   writeFileSync(join(root, ".agentthread", "logger.pid"), String(loggerStandIn()));
   // The user closes 002's tab by hand; the next start reopens exactly that one.
   fake.update((s) => ({ tabs: s.tabs.filter((t) => t !== "w1:t3") }));
-  expect(agt(["start", "--no-manager"]).split("\n")).toEqual([
+  expect(agt(["start", "--no-manager"]).split("\n").filter((l) => !l.startsWith("claude-code agents use "))).toEqual([
     "layout already set up (main tab w1:t0)",
     "subthread tabs reconciled (2 open threads)",
   ]);

@@ -1,4 +1,4 @@
-import { adapterFor, agentBin } from "./adapters.ts";
+import { adapterFor, agentBin, userAgentEnv } from "./adapters.ts";
 import type { Config, RoleAgent } from "../config/config.ts";
 import type { AgentKind, SessionRole } from "../domain/types.ts";
 
@@ -62,4 +62,20 @@ export function trustWarning(config: Config, root: string): string | undefined {
   const runs = [...Object.values(config.agents.roles), ...Object.values(config.agents.complexity.tiers)];
   if (config.agents.roles.main.agent === "claude-code" || !runs.some((r) => r.agent === "claude-code")) return undefined;
   return `claude-code agents will ask to trust ${root}; open claude once in ${root} and accept, or use claude-code for main`;
+}
+
+/**
+ * One info line saying which Claude Code account the claude-code agents use: CLAUDE_CONFIG_DIR from agents.env or a
+ * role's or tier's env, else the one in the start process's env, else the default config. Undefined when no role or
+ * tier uses claude-code.
+ */
+export function claudeAccountNote(config: Config, env: Record<string, string | undefined> = process.env): string | undefined {
+  const runs: [SessionRole, RoleAgent][] = [
+    ...(Object.entries(config.agents.roles) as [SessionRole, RoleAgent][]),
+    ...Object.values(config.agents.complexity.tiers).map((t): [SessionRole, RoleAgent] => ["coordinator", t]),
+  ].filter(([, r]) => r.agent === "claude-code");
+  if (runs.length === 0) return undefined;
+  const dirs = new Set(runs.map(([role, run]) => userAgentEnv(config, role, run, env).CLAUDE_CONFIG_DIR ?? env.CLAUDE_CONFIG_DIR).filter((d): d is string => !!d));
+  if (dirs.size === 0) return "claude-code agents use the default Claude config (~/.claude); set agents.env.CLAUDE_CONFIG_DIR to pick an account";
+  return `claude-code agents use ${[...dirs].map((d) => `CLAUDE_CONFIG_DIR=${d}`).join(", ")}`;
 }

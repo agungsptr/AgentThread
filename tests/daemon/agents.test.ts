@@ -283,3 +283,18 @@ test("only a command's decided events carry via; a root-pane coordinator's hook 
   expect(evs.filter((e) => e.actor.role === "coordinator").every((e) => e.actor.via === undefined)).toBe(true);
   expect(evs.filter((e) => e.type === "session.stalled").map((e) => e.payload)).toEqual([{ session: c }]);
 });
+
+test("agents.env reaches the first coordinator's tab env and a worker's split env; role env wins", async () => {
+  const jobs: SpawnJob[] = [];
+  await boot({ launch: (j) => void jobs.push(j), config: "agents:\n  env: { CLAUDE_CONFIG_DIR: /acct, SHARED: all }\n  roles:\n    worker: { agent: claude-code, env: { SHARED: worker } }\n" });
+  await cmd({ cmd: "thread.new", title: "X", type: "bug" });
+  const create = fake.read().calls.find((c) => c[0] === "tab" && c[1] === "create")!;
+  expect(create).toContain("CLAUDE_CONFIG_DIR=/acct");
+  expect(create).toContain("SHARED=all");
+  const c = (await sessionOf("coordinator"))!.session;
+  await cmd({ cmd: "session.attached", session: c, pane: "w1:p1" });
+  await worktree();
+  await cmd({ cmd: "ticket.add", thread: "001", title: "A", repo: repoName(root), files: ["a"] }, coord);
+  await cmd({ cmd: "worker.spawn", thread: "001", ticket: "T1" }, coord);
+  expect(jobs.at(-1)!.split!.env).toMatchObject({ CLAUDE_CONFIG_DIR: "/acct", SHARED: "worker", AGT_ROLE: "worker" });
+});

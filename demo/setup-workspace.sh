@@ -47,11 +47,19 @@ done
 worker_model_line=""
 [ -n "$WORKER_MODEL" ] && worker_model_line="model: $WORKER_MODEL, "
 
+# Several Claude accounts: pin the one this shell uses, so panes opened from another shell do not fall back to ~/.claude.
+env_line=""
+if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+  quoted=$(printf '%s' "$CLAUDE_CONFIG_DIR" | sed 's/\\/\\\\/g; s/"/\\"/g')
+  env_line="  env: { CLAUDE_CONFIG_DIR: \"$quoted\" }"
+fi
+
 cd "$DIR"
 agt init --no-setup >/dev/null
 cat > .agentthread/demo-config.yaml <<EOF
 agents:
-  roles:
+${env_line:+$env_line
+}  roles:
     main:        { agent: $MAIN_AGENT, model: $MAIN_MODEL, effort: medium }
     coordinator: { agent: $MAIN_AGENT, model: $MAIN_MODEL, effort: medium }
     worker:      { agent: $WORKER_AGENT, ${worker_model_line}effort: medium }

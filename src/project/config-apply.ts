@@ -11,14 +11,24 @@ type Obj = Record<string, unknown>;
 
 const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
 
-/** Service env values may be secrets: shown as *** in `config show` and in the apply diff (keys stay). */
+const maskEnv = (env: unknown): unknown => (isObj(env) ? Object.fromEntries(Object.keys(env).map((k) => [k, "***"])) : env);
+const maskEnvOf = (o: unknown): unknown => (isObj(o) && o.env !== undefined ? { ...o, env: maskEnv(o.env) } : o);
+const mapValues = (o: unknown, f: (v: unknown) => unknown): unknown => (isObj(o) ? Object.fromEntries(Object.entries(o).map(([k, v]) => [k, f(v)])) : o);
+
+/** Service and agent env values may be secrets: shown as *** in `config show` and in the apply diff (keys stay). */
 export function redactEnv(v: unknown): unknown {
   if (!isObj(v)) return v;
+  let out: Obj = v;
   const ws = v.workspace;
-  if (!isObj(ws) || !isObj(ws.services)) return v;
-  const services = ws.services;
-  const redacted = Object.fromEntries(Object.entries(services).map(([n, svc]) => [n, isObj(svc) && isObj(svc.env) ? { ...svc, env: Object.fromEntries(Object.keys(svc.env).map((k) => [k, "***"])) } : svc]));
-  return { ...v, workspace: { ...ws, services: redacted } };
+  if (isObj(ws) && isObj(ws.services)) out = { ...out, workspace: { ...ws, services: mapValues(ws.services, maskEnvOf) } };
+  const ag = v.agents;
+  if (isObj(ag)) {
+    const agents: Obj = maskEnvOf(ag) as Obj;
+    if (isObj(ag.roles)) agents.roles = mapValues(ag.roles, maskEnvOf);
+    if (isObj(ag.complexity) && isObj(ag.complexity.tiers)) agents.complexity = { ...ag.complexity, tiers: mapValues(ag.complexity.tiers, maskEnvOf) };
+    out = { ...out, agents };
+  }
+  return out;
 }
 
 /** `agt config show`: the effective config and the files its layers came from. */
@@ -81,7 +91,7 @@ export function diffConfig(before: unknown, after: unknown): string[] {
   }
   for (const [k, v] of a) if (!b.has(k)) lines.push(`- ${k}: ${show(v)}`);
   // A service env value may be a secret: the line keeps the key and the kind of change, never the value.
-  const masked = lines.map((l) => (/^[+~-] workspace\.services\.[^.]+\.env\./.test(l) ? `${l.slice(0, l.indexOf(": "))}: ***` : l));
+  const masked = lines.map((l) => (/^[+~-] (workspace\.services\.[^.]+|agents|agents\.roles\.[^.]+|agents\.complexity\.tiers\.[^.]+)\.env\./.test(l) ? `${l.slice(0, l.indexOf(": "))}: ***` : l));
   return masked.sort((x, y) => x.slice(2).localeCompare(y.slice(2)));
 }
 

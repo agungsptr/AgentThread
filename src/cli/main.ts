@@ -6,7 +6,7 @@ import { parseArgs, type ParseArgsConfig } from "node:util";
 import { stringify } from "yaml";
 import { agentEnv } from "../agents/claude.ts";
 import { adapterFor, agentBin, prepareLaunch } from "../agents/adapters.ts";
-import { configWarnings, installWarnings, roleAgent, trustWarning } from "../agents/roles.ts";
+import { claudeAccountNote, configWarnings, installWarnings, roleAgent, trustWarning } from "../agents/roles.ts";
 import { systemPrompt } from "../agents/prompts.ts";
 import { agtCreatedFolder, decodeJob, loggedArgv, placementLock, placementWait, reportWithRetry, runSpawnJob, spawnReportRetry, spawnTrustPolls } from "../agents/spawn-job.ts";
 import { contextTokensFromTranscript } from "../agents/transcript.ts";
@@ -664,6 +664,8 @@ async function start(root: string, env: Env, argv: string[]): Promise<number> {
     ...[trustWarning(config, root)].filter((w) => w !== undefined),
   ];
   for (const w of warnings) console.error(`agt: warning: ${w}`);
+  const account = claudeAccountNote(config, env);
+  if (account) console.log(account);
   const socket = paths(root).socket;
   // The daemon reads the config only when it starts: one running with an older config (agt setup, an edit) is
   // replaced. Its state lives in the event log, so a restart loses nothing.

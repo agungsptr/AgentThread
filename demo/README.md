@@ -25,6 +25,10 @@ By default, main and coordinator run Claude Code with `sonnet`, and so do the wo
 see the variables at the top of the script. With Claude Code as main, open `claude` once in `/tmp/agt-demo` and accept
 the trust prompt, so the recording does not start with it.
 
+If you use several Claude accounts, set `agents.env.CLAUDE_CONFIG_DIR` in `/tmp/agt-demo/.agentthread/config.yaml` (or
+export `CLAUDE_CONFIG_DIR` before opening Herdr). The setup script writes it for you when the variable is set in the
+shell that runs it. Otherwise the agents start on the default `~/.claude` account and ask to log in.
+
 Rehearse once without recording, then reset with `DEMO_FORCE=1 demo/setup-workspace.sh`.
 
 ## 3. Record the CLI clip (optional, scripted)
