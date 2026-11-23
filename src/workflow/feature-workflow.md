@@ -81,8 +81,8 @@ ids or private-doc mentions — this overrides any harness attribution reminder.
    baseline shows it. No baseline yet → ask the user to run the same suites on the untouched source branch first and
    save the result as the baseline.
 8. **Browser check** by the coordinator, **only on request** (the default, `workflow.browser.check: on_request`): the
-   thread was created with `--browser-check`, or the user asks for it (or for manual validation) at any point; record
-   the request with `agt note <id> "user asked for a browser check"`. When it was not requested, agt has already
+   thread was created with `--browser-check`, or the user asks for it (or for manual validation) at any point; run
+   `agt thread browser-check <id>` (records the request and reopens stage 8 after agt's skip). When it was not requested, agt has already
    recorded stage 8 as skipped ("not requested"): do not run it and do not ask the user. With `check: always` it is
    required whenever browser URLs are set. When it runs: the stage-1 checklist per role and viewport, against the
    design; results in spec; then `agt stage <id> 8 done`.

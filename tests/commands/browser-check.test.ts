@@ -6,12 +6,14 @@ import { DEFAULT_CONFIG, browserCheckMode, ConfigSchema, type Config } from "../
 import { handle, type HandleResult } from "../../src/commands/handler.ts";
 import { CommandSchema } from "../../src/commands/schema.ts";
 import type { Actor, EventBody, StoredEvent } from "../../src/domain/types.ts";
+import { react } from "../../src/orchestration/reactor.ts";
 import { renderBrief } from "../../src/render/brief.ts";
 import { writeAll } from "../../src/render/write.ts";
 import { applyEvent, type State } from "../../src/state/projection.ts";
 import { INIT, USER, stateOf } from "../helpers.ts";
 
-const COORD: Actor = { role: "coordinator", thread: "001", session: "c1" };
+const C = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+const COORD: Actor = { role: "coordinator", thread: "001", session: C };
 const cfg = (check?: "on_request" | "always"): Config => ({
   ...DEFAULT_CONFIG,
   workflow: { ...DEFAULT_CONFIG.workflow, stack: { restart: "make up {task}" }, browser: { urls: ["http://localhost:3000"], ...(check ? { check } : {}) } },
@@ -87,5 +89,42 @@ describe("workflow.browser.check", () => {
     const root2 = mkdtempSync(join(tmpdir(), "agt-bc-"));
     writeAll(root2, required, cfg(), () => undefined);
     expect(existsSync(join(root2, ".agentthread", "threads", "001-login", "stage8"))).toBe(false);
+  });
+
+  test("agt thread browser-check withdraws agt's skip, closes the guard, tells the coordinator; a user's skip stays", () => {
+    const root = mkdtempSync(join(tmpdir(), "agt-bc-"));
+    const s = stateOf(INIT);
+    newThread(s, cfg());
+    apply(s, [{ type: "session.created", thread: "001", payload: { session: C, role: "coordinator", agent: "claude-code", name: "c" } }], USER);
+    writeAll(root, s, cfg(), () => undefined);
+    const f = join(root, ".agentthread", "threads", "001-login", "stage8");
+    expect(existsSync(f)).toBe(true);
+    const r = exec(s, { cmd: "thread.browser_check", thread: "001" }, { role: "main" }, cfg());
+    expect(r.ok).toBe(true);
+    expect(s.threads.get("001")!.browserCheck).toBe(true);
+    expect(stage8(s)).toBeUndefined();
+    writeAll(root, s, cfg(), () => undefined);
+    expect(existsSync(f)).toBe(false);
+    const out = react(s, r.ok ? apply(s, [], USER) : [], { root, config: cfg(), newId: () => C });
+    expect(out.events).toEqual([]);
+    const u = stateOf(INIT);
+    newThread(u, cfg());
+    exec(u, { cmd: "stage", thread: "001", stage: 8, state: "skipped", by: "user", reason: "no time" }, USER, cfg());
+    exec(u, { cmd: "thread.browser_check", thread: "001" }, COORD, cfg());
+    expect(stage8(u)).toMatchObject({ state: "skipped", by: "user" });
+  });
+
+  test("the reactor tells the coordinator, unless it asked itself", () => {
+    const s = stateOf(INIT);
+    newThread(s, cfg());
+    apply(s, [
+      { type: "session.created", thread: "001", payload: { session: C, role: "coordinator", agent: "claude-code", name: "c" } },
+      { type: "session.attached", thread: "001", payload: { session: C, pane: "w1:p2" } },
+    ], USER);
+    const ev = apply(s, [{ type: "thread.browser_check", thread: "001", payload: {} }], { role: "main" });
+    const out = react(s, ev, { root: "/repo", config: cfg(), newId: () => C });
+    expect(out.events).toMatchObject([{ type: "notice.queued", payload: { session: C } }]);
+    const own = apply(s, [{ type: "thread.browser_check", thread: "001", payload: {} }], COORD);
+    expect(react(s, own, { root: "/repo", config: cfg(), newId: () => C }).events).toEqual([]);
   });
 });

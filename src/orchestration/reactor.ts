@@ -461,6 +461,10 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         fillWorkers(ev.thread);
         notify(coordinatorToNotify(ev.thread), `Ticket ${ev.payload.ticket} is blocked: ${ev.payload.reason}.`);
         break;
+      case "thread.browser_check":
+        // The coordinator that asked itself needs no notice.
+        if (ev.actor.role !== "coordinator") notify(coordinatorToNotify(ev.thread), `The user asked for a browser check: stage 8 is open again. Run it, then agt stage ${ev.thread} 8 done.`);
+        break;
       case "thread.waiting": {
         const t = state.threads.get(ev.thread);
         const main = liveSessions(state, undefined, "main")[0];

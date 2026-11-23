@@ -33,6 +33,7 @@ export const CommandSchema = z.discriminatedUnion("cmd", [
   z.object({ cmd: z.literal("thread.choose"), thread: threadId, tier: tierName, auto: z.boolean().optional() }),
   z.object({ cmd: z.literal("thread.cancel"), thread: threadId }),
   z.object({ cmd: z.literal("thread.waiting"), thread: threadId, what: text }),
+  z.object({ cmd: z.literal("thread.browser_check"), thread: threadId }),
   z.object({ cmd: z.literal("thread.cleanup"), thread: threadId }),
   /** Internal: the background cleanup job's outcome, reported by the daemon itself. */
   z.object({

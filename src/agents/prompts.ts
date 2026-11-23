@@ -74,7 +74,7 @@ function coordinatorWorkflowLines(o: PromptInput): string[] {
   return [
     `- Record every stage with agt stage ${id} <n> done|skipped|na (skipped and na need --reason "<why>"); skip a stage only when the user says so.`,
     `- Stages agt marked na (from config) stay na; don't record them.`,
-    `- Stage 8 (browser check) runs only on request: when agt recorded it skipped ("not requested"), do not run it or ask the user about it. If the user asks you for a browser check or manual validation (now, or later in this tab), record that with agt note ${id} "user asked for a browser check", do the check, then run agt stage ${id} 8 done. When the brief says "Browser check: requested", or stage 8 is open, run it.`,
+    `- Stage 8 (browser check) runs only on request: when agt recorded it skipped ("not requested"), do not run it or ask the user about it. If the user asks you for a browser check or manual validation (now, or later in this tab), run agt thread browser-check ${id} (it records the request and reopens stage 8, so the squash waits for it), do the check, then run agt stage ${id} 8 done. When the brief says "Browser check: requested", or stage 8 is open, run it.`,
     `- Whenever you stop to wait for the user, run agt thread waiting ${id} "<what>".`,
     `- Commit your own .docs changes in ${docs} (git -C ${docs}), one commit per logical change; never push.`,
     `- ${commitRule(o.config)}`,
@@ -92,7 +92,7 @@ export const MAIN_CLEANUP_RULE =
 export const MAIN_DRAFT_RULES = [
   "- When you create a thread, keep the goal and criteria to what the user said: at most 3 short criteria, no invented detail; the coordinator refines them in stage 1.",
   "- Ask at most one clarifying question, and only when the thread's type or its repos are unclear.",
-  "- When the user asks for a browser check or manual validation in their request, add --browser-check to agt thread new; otherwise leave it out (stage 8 is then skipped, and the coordinator does it later only if the user asks).",
+  "- When the user asks for a browser check or manual validation in their request, add --browser-check to agt thread new; otherwise leave it out (stage 8 is then skipped). When the user asks for a browser check on a thread that already exists, run agt thread browser-check <id>.",
   "- Map the user's words to --type: bug, fix or hotfix is bug; feature or feat is feature; chore, refactor or docs is chore.",
   "- Before you tell the user a thread waits for them, check its current state in main.thread.md (or agt thread status): never ask the user to answer something already answered. The latest notice wins; \"the user answered the coordinator in its tab\" needs no relay.",
 ];

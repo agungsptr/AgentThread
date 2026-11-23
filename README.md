@@ -200,7 +200,7 @@ compresses them; a stage is skipped only when you say so.
 | 5 | Review per commit | Diff within the ticket's files, tests re-run, accepted or returned |
 | 6 | Combined verification | Unit suite and type check once per repo |
 | 7 | Staged e2e | Narrow suites first; the full run only after your approval (`stage 7 approve --by user`) |
-| 8 | Browser check | Only on request (`agt thread new ... --browser-check`, or ask the coordinator later; `workflow.browser.check: always` makes it required): the coordinator checks the UI against the design. Otherwise agt records it skipped |
+| 8 | Browser check | Only on request (`agt thread new ... --browser-check`, or `agt thread browser-check <id>` / ask the coordinator later; `workflow.browser.check: always` makes it required): the coordinator checks the UI against the design. Otherwise agt records it skipped |
 | 9 | Shared feature docs | New docs in each touched repo |
 | 10 | Release and handover | Release notes with manual migration SQL, one squashed commit on `feat/<task>` (or `fix/`, `chore/`); you push |
 

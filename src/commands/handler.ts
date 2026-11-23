@@ -69,6 +69,7 @@ const ALLOWED: Record<CommandName, readonly Role[]> = {
   "thread.choose": ["user", "main"],
   "thread.cancel": ["user", "main"],
   "thread.waiting": ["coordinator"],
+  "thread.browser_check": ["user", "main", "coordinator"],
   "thread.cleanup": ["user", "main"],
   "thread.cleanup_report": ["user"],
   "ticket.add": ["coordinator"],
@@ -307,6 +308,10 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
       checkTier(cmd.tier, ctx);
       return { events: [{ type: "thread.tier_chosen", thread: t.id, payload: { tier: cmd.tier, auto: false } }] };
     }
+    case "thread.browser_check":
+      if (t.legacy) reject("the browser check applies to task threads");
+      if (t.status === "done") reject(`thread ${t.id} is done`);
+      return { events: [{ type: "thread.browser_check", thread: t.id, payload: {} }] };
     case "thread.waiting":
       if (t.legacy) reject("waiting applies to task threads");
       if (t.status === "done") reject(`thread ${t.id} is done`);

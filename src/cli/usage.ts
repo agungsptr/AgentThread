@@ -12,6 +12,7 @@ export const USAGE = `usage: agt <command>
   thread choose <id> --tier <name>
   thread cancel <id>
   thread status <id> <status> [--reason <text>]
+  thread browser-check <id>   the user asked for a browser check: stage 8 is required again (undoes agt's "not requested" skip)
   thread waiting <id> "<what>"   say the coordinator waits for the user; main is told, and it ends when the user answers
   thread cleanup <id>   a merged (done) task thread: remove its worktrees and wip/<task> branches, in the background (stops on uncommitted changes)
   ticket add <thread> <title...> --scope <path> [--scope <path>]...            (a legacy thread)

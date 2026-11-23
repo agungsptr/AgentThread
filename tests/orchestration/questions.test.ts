@@ -249,9 +249,9 @@ test("a thread.waiting while the blocked pane is open, or within 60s of it, does
   const at2 = stamped(s2);
   at2("2026-10-11T10:00:00.000Z", USER, { type: "agent.blocked", thread: "001", payload: { session: C } });
   at2("2026-10-11T10:00:05.000Z", USER, { type: "session.active", thread: "001", payload: { session: C } });
-  expect(notices(react(s2, at2("2026-10-11T10:00:40.000Z", COORD, { type: "thread.waiting", thread: "001", payload: { what: "q" } }), ctx()).events)).toEqual([]);
-  const late = react(s2, at2("2026-10-11T10:03:00.000Z", COORD, { type: "thread.waiting", thread: "001", payload: { what: "q2" } }), ctx());
-  expect(notices(late.events)).toEqual([{ session: M, text: "Thread 001 (Thread 001) is waiting for the user: q2", wait: true }]);
+  // the pane was answered at 10:00:05: a real question at 10:00:40 is told
+  const soon = react(s2, at2("2026-10-11T10:00:40.000Z", COORD, { type: "thread.waiting", thread: "001", payload: { what: "q" } }), ctx());
+  expect(notices(soon.events)).toEqual([{ session: M, text: "Thread 001 (Thread 001) is waiting for the user: q", wait: true }]);
 });
 
 test("an agt thread waiting answered by the user is dropped or followed up like a blocked pane", () => {
@@ -271,4 +271,13 @@ test("the ready-for-review notice names the stages that were skipped or n/a, wit
   at("2026-10-11T10:00:00.000Z", USER, { type: "stage.recorded", thread: "001", payload: { stage: 7, state: "na", by: "agt", reason: "no e2e commands configured" } });
   const r = react(s, at("2026-10-11T10:00:30.000Z", COORD, { type: "thread.status_changed", thread: "001", payload: { from: "in_progress", to: "review" } }), ctx());
   expect(notices(r.events)).toEqual([{ session: M, text: "Thread 001 (Thread 001) is ready for review. Not run: 7 e2e (n/a: no e2e commands configured); 8 browser check (skipped: user skipped it)." }]);
+});
+
+test("a wait notice that reaches main after the user answered is not queued", () => {
+  const s = base();
+  const at = stamped(s);
+  const b = react(s, at("2026-10-11T10:00:00.000Z", USER, { type: "agent.blocked", thread: "001", payload: { session: C } }), ctx());
+  at("2026-10-11T10:00:05.000Z", USER, { type: "session.active", thread: "001", payload: { session: C } });
+  at("2026-10-11T10:00:05.000Z", USER, ...b.events);
+  expect(s.sessions.get(M)!.notices).toEqual([]);
 });

@@ -93,6 +93,7 @@ export type EventBody =
   | { type: "ticket.accepted"; thread: string; payload: { ticket: string } }
   | { type: "ticket.returned"; thread: string; payload: { ticket: string; note: string } }
   | { type: "thread.waiting"; thread: string; payload: { what: string } }
+  | { type: "thread.browser_check"; thread: string; payload: Record<string, never> }
   | { type: "thread.cleanup_requested"; thread: string; payload: Record<string, never> }
   | { type: "thread.cleaned"; thread: string; payload: { repos: string[] } }
   /** `removed`: the repos a job that stopped mid-way had already removed. */

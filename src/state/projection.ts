@@ -261,7 +261,7 @@ export function actorSession(state: State, actor: Actor): string | undefined {
 export const COMMAND_OUTPUT_TYPES: ReadonlySet<string> = new Set([
   "thread.status_changed", "ticket.created", "ticket.files_changed", "ticket.claimed", "ticket.completed", "ticket.blocked", "ticket.reopened",
   "ticket.reviewed", "ticket.accepted", "ticket.returned", "stage.recorded", "log.appended", "decision.recorded", "note.recorded", "progress.recorded", "question.recorded", "question.answered",
-  "worker.queued", "thread.waiting", "thread.cleanup_requested",
+  "worker.queued", "thread.waiting", "thread.browser_check", "thread.cleanup_requested",
 ]);
 
 /**
@@ -525,6 +525,14 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       t.rootPane = ev.payload.pane;
       note(t, ev, `root pane is now ${ev.payload.pane}`);
       break;
+    case "thread.browser_check": {
+      t.browserCheck = true;
+      // agt's own "not requested" skip is withdrawn, so stage 8 is open again (the squash guard closes); a user's skip, done or na stays.
+      const s8 = t.stages[8];
+      if (s8?.state === "skipped" && s8.by === "agt") delete t.stages[8];
+      note(t, ev, "browser check requested");
+      break;
+    }
     case "thread.waiting":
       // A repeat replaces the text and starts the wait over.
       t.waiting = { what: ev.payload.what, since: ev.ts, idleSeen: false, ...(ev.actor.session ? { session: ev.actor.session } : {}) };
@@ -650,7 +658,10 @@ function clearWaiting(state: State, s: Session, ev: StoredEvent): void {
   const t = state.threads.get(s.thread);
   if (!t?.waiting?.idleSeen) return;
   delete t.waiting;
-  if (t.openWait && t.openWait.endedSeq === undefined && t.openWait.session === s.id) t.openWait.endedSeq = ev.seq;
+  if (t.openWait && t.openWait.endedSeq === undefined && t.openWait.session === s.id) {
+    t.openWait.endedSeq = ev.seq;
+    delete t.lastBlocked;
+  }
   note(t, ev, "the user answered; no longer waiting");
 }
 
@@ -742,7 +753,10 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
         if (userTurn) clearWaiting(state, s, ev);
         // The blocked pane was answered (the session works again): the wait ends.
         const ow = ev.type === "session.active" && s.thread ? state.threads.get(s.thread)?.openWait : undefined;
-        if (ow && ow.blocked && ow.endedSeq === undefined && ow.session === s.id) ow.endedSeq = ev.seq;
+        if (ow && ow.blocked && ow.endedSeq === undefined && ow.session === s.id) {
+          ow.endedSeq = ev.seq;
+          delete state.threads.get(s.thread!)!.lastBlocked;
+        }
       }
       return true;
     }
@@ -871,10 +885,12 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
       {
       const s = sessionOf(state, ev.seq, ev.payload.session);
       // A handoff request jumps ahead of every other queued notice (the coordinator's clock is running).
+      const ow = ev.payload.wait && ev.thread ? state.threads.get(ev.thread)?.openWait : undefined;
+      // A wait notice that arrives after the user already answered is stale: it is not queued at all.
+      if (ow && ow.endedSeq !== undefined) return true;
       if (isHandoffRequest(ev.payload.text)) s.notices.unshift(ev.payload.text);
       else s.notices.push(ev.payload.text);
-      const ow = ev.payload.wait && ev.thread ? state.threads.get(ev.thread)?.openWait : undefined;
-      if (ow && ow.endedSeq === undefined) ow.told.push(ev.payload.text);
+      if (ow) ow.told.push(ev.payload.text);
       return true;
     }
     case "notice.dropped": {
