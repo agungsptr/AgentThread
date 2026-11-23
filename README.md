@@ -4,6 +4,12 @@ AgentThread is a local orchestrator that runs a team of coding agents inside the
 to one **main manager**. For every feature, bug or chore it opens a **thread** with its own **coordinator**, which
 splits the work into tickets and starts **workers**, one per ticket, in git worktrees.
 
+![AgentThread demo: the main manager opens a thread, its coordinator splits it into two tickets, two workers implement them in parallel, and the coordinator reviews and squashes](docs/assets/demo.gif)
+
+*The demo, at 2× speed: the main manager drafts and opens a thread, the coordinator writes two tickets, and two workers
+implement them in parallel in their own worktrees. The coordinator then reviews and accepts each ticket and squashes the
+work for the PR. The run took about two minutes; its workspace comes from [`demo/`](demo/README.md).*
+
 A small local daemon keeps the state: an append-only event log, rendered as Markdown under `.agentthread/`. Agents
 report back with `agt` commands, and the daemon enforces the rules (who may commit what, who may talk to whom).
 AgentThread is agent-agnostic: Claude Code, OpenCode, Codex, omp and Antigravity can each fill any role, and you can
