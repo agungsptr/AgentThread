@@ -192,6 +192,14 @@ export interface Thread {
   waiting?: { what: string; since: string; idleSeen: boolean; session?: string };
   /** The last agt thread waiting, kept after the wait ends: the blocked notice is not sent for a session that just said it waits. */
   lastWaiting?: { session?: string; at: string };
+  /**
+   * The wait on the user that main may have been told about: a coordinator's blocked pane (agent.blocked) and/or its
+   * agt thread waiting. `told` are the wait notices queued to main (notice.queued with wait); `endedSeq` is the
+   * session.active event at which the user answered. Kept after it ends, so the reactor sees its end.
+   */
+  openWait?: { session?: string; at: string; blocked?: boolean; what?: string; told: string[]; endedSeq?: number };
+  /** The last agent.blocked of a coordinator (or planner): a thread.waiting right after it is not told to main again. */
+  lastBlocked?: { session: string; at: string };
   decisions: Entry[];
   findings: Entry[];
   questions: Question[];
@@ -518,6 +526,10 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       // A repeat replaces the text and starts the wait over.
       t.waiting = { what: ev.payload.what, since: ev.ts, idleSeen: false, ...(ev.actor.session ? { session: ev.actor.session } : {}) };
       t.lastWaiting = { ...(ev.actor.session ? { session: ev.actor.session } : {}), at: ev.ts };
+      {
+        const prev = t.openWait && t.openWait.endedSeq === undefined && t.openWait.session === ev.actor.session ? t.openWait : undefined;
+        t.openWait = { ...(ev.actor.session ? { session: ev.actor.session } : {}), at: prev?.at ?? ev.ts, ...(prev?.blocked ? { blocked: true } : {}), what: ev.payload.what, told: prev?.told ?? [] };
+      }
       note(t, ev, `waiting for the user: ${ev.payload.what}`);
       break;
     case "worker.queued":
@@ -635,6 +647,7 @@ function clearWaiting(state: State, s: Session, ev: StoredEvent): void {
   const t = state.threads.get(s.thread);
   if (!t?.waiting?.idleSeen) return;
   delete t.waiting;
+  if (t.openWait && t.openWait.endedSeq === undefined && t.openWait.session === s.id) t.openWait.endedSeq = ev.seq;
   note(t, ev, "the user answered; no longer waiting");
 }
 
@@ -724,6 +737,9 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
         s.status = atPrompt ? "idle" : "active";
         s.lastActiveAt = ev.ts;
         if (userTurn) clearWaiting(state, s, ev);
+        // The blocked pane was answered (the session works again): the wait ends.
+        const ow = ev.type === "session.active" && s.thread ? state.threads.get(s.thread)?.openWait : undefined;
+        if (ow && ow.blocked && ow.endedSeq === undefined && ow.session === s.id) ow.endedSeq = ev.seq;
       }
       return true;
     }
@@ -769,6 +785,12 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
         s.blockedNotified = true;
         s.blockedSeq = ev.seq;
         threadNote(state, ev, `session ${short(s.id)} is waiting for approval`);
+        const t = s.thread && s.role !== "main" && s.role !== "worker" ? state.threads.get(s.thread) : undefined;
+        if (t) {
+          t.lastBlocked = { session: s.id, at: ev.ts };
+          const prev = t.openWait && t.openWait.endedSeq === undefined && t.openWait.session === s.id ? t.openWait : undefined;
+          t.openWait = { session: s.id, at: prev?.at ?? ev.ts, blocked: true, ...(prev?.what !== undefined ? { what: prev.what } : {}), told: prev?.told ?? [] };
+        }
       }
       if (s.turns === 0) s.blockedEarly = true;
       return true;
@@ -848,6 +870,17 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
       // A handoff request jumps ahead of every other queued notice (the coordinator's clock is running).
       if (isHandoffRequest(ev.payload.text)) s.notices.unshift(ev.payload.text);
       else s.notices.push(ev.payload.text);
+      const ow = ev.payload.wait && ev.thread ? state.threads.get(ev.thread)?.openWait : undefined;
+      if (ow && ow.endedSeq === undefined) ow.told.push(ev.payload.text);
+      return true;
+    }
+    case "notice.dropped": {
+      const s = sessionOf(state, ev.seq, ev.payload.session);
+      // One first-equal occurrence per dropped text, like notice.delivered.
+      for (const x of ev.payload.texts) {
+        const i = s.notices.indexOf(x);
+        if (i >= 0) s.notices.splice(i, 1);
+      }
       return true;
     }
     case "notice.delivered": {

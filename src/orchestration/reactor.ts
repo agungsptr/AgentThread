@@ -3,7 +3,7 @@ import { adapterFor } from "../agents/adapters.ts";
 import { roleAgent } from "../agents/roles.ts";
 import type { Effect } from "../commands/handler.ts";
 import { type Config, durationMs } from "../config/config.ts";
-import type { EventBody, StoredEvent } from "../domain/types.ts";
+import { STAGE_NAMES, type EventBody, type StoredEvent } from "../domain/types.ts";
 import { isLive, type Session, type State, type Thread } from "../state/projection.ts";
 import { generateHandoff } from "./handoff.ts";
 import { awaitsRespawn, awaitsWorker, conflictingTicket, exitedBeforeStart, liveSessions, rotateCoordinator, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure, workerCwd, workerLimit } from "./sessions.ts";
@@ -50,6 +50,14 @@ const earlyGiveUpNotice = (thread: string, ticket: string, exits: number, failur
 const doneNotice = (ticket: string, summary: string | undefined) => `Ticket ${ticket} is done${summary ? `: ${summary}` : ""}.`;
 const reviewNotice = (thread: string, ticket: string, summary: string | undefined) =>
   `Ticket ${ticket} is ready for review: ${summary ?? ""}. Review its commits, then agt ticket accept ${thread}/${ticket} or agt ticket return ${thread}/${ticket} "<what to fix>".`;
+
+/** ` Not run: 7 e2e (n/a: reason); 8 browser check (skipped: reason).` for a task thread's stages that were not done, else nothing. */
+function skippedStages(t: Thread): string {
+  const parts = Object.entries(t.stages)
+    .filter(([, v]) => v && (v.state === "skipped" || v.state === "na"))
+    .map(([n, v]) => `${n} ${STAGE_NAMES[Number(n) - 1]} (${v!.state === "na" ? "n/a" : "skipped"}${v!.reason ? `: ${v!.reason.length > 80 ? `${v!.reason.slice(0, 77)}...` : v!.reason}` : ""})`);
+  return parts.length ? ` Not run: ${parts.join("; ")}.` : "";
+}
 
 /** How long after a held or failed notice delivery (notice.held) the sweep tries again: it doubles with each hold in a row. */
 export const NOTICE_RETRY_MS = 10_000;
@@ -316,9 +324,26 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         }
         break;
       }
-      case "session.active":
-        setTimers(state.sessions.get(ev.payload.session), "paused");
+      case "session.active": {
+        const s = state.sessions.get(ev.payload.session);
+        setTimers(s, "paused");
+        // The user answered a wait main was told about (the projection marks the event that ended it).
+        const t = s?.thread ? state.threads.get(s.thread) : undefined;
+        const w = t?.openWait;
+        const main = liveSessions(state, undefined, "main")[0];
+        if (t && w && main && w.endedSeq === ev.seq && w.told.length) {
+          // Wait notices still queued for main are dropped (one occurrence per text); if all of them were, main never heard.
+          const queued = [...main.notices];
+          const drop: string[] = [];
+          for (const x of w.told) {
+            const i = queued.indexOf(x);
+            if (i >= 0) { queued.splice(i, 1); drop.push(x); }
+          }
+          if (drop.length) out.push({ type: "notice.dropped", payload: { session: main.id, texts: drop } });
+          if (drop.length < w.told.length) notify(main, `Thread ${t.id} (${t.title}): the user answered the coordinator in its tab; nothing to relay.`);
+        }
         break;
+      }
       case "notice.delivered":
         // A pasted notice starts a turn of main's: it is working.
         setTimers(state.sessions.get(ev.payload.session), "paused");
@@ -436,15 +461,21 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         fillWorkers(ev.thread);
         notify(coordinatorToNotify(ev.thread), `Ticket ${ev.payload.ticket} is blocked: ${ev.payload.reason}.`);
         break;
-      case "thread.waiting":
-        notify(liveSessions(state, undefined, "main")[0], `Thread ${ev.thread} (${state.threads.get(ev.thread)?.title ?? ""}) is waiting for the user: ${ev.payload.what}`);
+      case "thread.waiting": {
+        const t = state.threads.get(ev.thread);
+        const main = liveSessions(state, undefined, "main")[0];
+        // Not when this session's blocked pane is open, or was reported within a minute: main already heard it waits.
+        const lb = t?.lastBlocked;
+        const heard = lb !== undefined && lb.session === ev.actor.session && (state.sessions.get(lb.session)?.blockedSeq !== undefined || Math.abs(Date.parse(ev.ts) - Date.parse(lb.at)) <= WAITING_DEDUPE_MS);
+        if (main && !heard) out.push({ type: "notice.queued", thread: ev.thread, payload: { session: main.id, text: `Thread ${ev.thread} (${t?.title ?? ""}) is waiting for the user: ${ev.payload.what}`, wait: true } });
         break;
+      }
       case "thread.status_changed": {
         const t = state.threads.get(ev.thread);
         if (ev.payload.from === "blocked" && ev.payload.to === "open") {
           notify(coordinatorToNotify(ev.thread), `Thread ${ev.thread} is unblocked: ${ev.payload.reason ?? "no reason given"}.`);
         } else if (ev.payload.to === "review") {
-          notify(liveSessions(state, undefined, "main")[0], `Thread ${ev.thread} (${t?.title ?? ""}) is ready for review.`);
+          notify(liveSessions(state, undefined, "main")[0], `Thread ${ev.thread} (${t?.title ?? ""}) is ready for review.${t ? skippedStages(t) : ""}`);
         } else if (ev.payload.to === "done") {
           for (const s of liveSessions(state, ev.thread)) end(s);
         }
@@ -631,7 +662,8 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
           if (!said) {
             const where = t ? `${s.role} of thread ${t.id} (${t.title})` : `${s.role} of thread ${s.thread}`;
             const tab = t ? ` the thread tab ${t.id}-${t.slug}` : " the thread tab";
-            notify(liveSessions(state, undefined, "main")[0], `${where} is waiting for the user in its pane: it asked a question or needs a permission. Tell the user to answer it in${tab}.`);
+            const main = liveSessions(state, undefined, "main")[0];
+            if (main) out.push({ type: "notice.queued", ...(t ? { thread: t.id } : {}), payload: { session: main.id, text: `${where} is waiting for the user in its pane: it asked a question or needs a permission. Tell the user to answer it in${tab}.`, wait: true } });
           }
         }
         break;

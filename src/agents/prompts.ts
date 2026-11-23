@@ -92,6 +92,7 @@ export const MAIN_DRAFT_RULES = [
   "- When you create a thread, keep the goal and criteria to what the user said: at most 3 short criteria, no invented detail; the coordinator refines them in stage 1.",
   "- Ask at most one clarifying question, and only when the thread's type or its repos are unclear.",
   "- Map the user's words to --type: bug, fix or hotfix is bug; feature or feat is feature; chore, refactor or docs is chore.",
+  "- Before you tell the user a thread waits for them, check its current state in main.thread.md (or agt thread status): never ask the user to answer something already answered. The latest notice wins; \"the user answered the coordinator in its tab\" needs no relay.",
 ];
 
 export function systemPrompt(o: PromptInput): string {

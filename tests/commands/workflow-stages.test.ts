@@ -108,9 +108,9 @@ describe("thread waiting", () => {
     const s = world();
     const ctx = { root: "/repo", config: DEFAULT_CONFIG, newId: () => "00000000-0000-4000-8000-000000000001" };
     const first = react(s, apply(s, [{ type: "thread.waiting", thread: "001", payload: { what: "which table?" } }], COORD), ctx);
-    expect(first.events).toEqual([{ type: "notice.queued", payload: { session: M, text: "Thread 001 (Login) is waiting for the user: which table?" } }]);
+    expect(first.events).toEqual([{ type: "notice.queued", thread: "001", payload: { session: M, text: "Thread 001 (Login) is waiting for the user: which table?", wait: true } }]);
     const second = react(s, apply(s, [{ type: "thread.waiting", thread: "001", payload: { what: "which schema?" } }], COORD), ctx);
-    expect(second.events).toEqual([{ type: "notice.queued", payload: { session: M, text: "Thread 001 (Login) is waiting for the user: which schema?" } }]);
+    expect(second.events).toEqual([{ type: "notice.queued", thread: "001", payload: { session: M, text: "Thread 001 (Login) is waiting for the user: which schema?", wait: true } }]);
     expect(thread(s).waiting?.what).toBe("which schema?");
   });
 

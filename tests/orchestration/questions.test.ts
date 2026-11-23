@@ -105,7 +105,7 @@ test("a blocked worker is reported to its coordinator, a blocked coordinator to 
     { session: C, text: "The worker for ticket T1 is blocked in pane w1:p3. Check it, replace it with agt worker spawn 001 --ticket T1, or ask the user." },
   ]);
   const c = react(s, apply(s, USER, { type: "agent.blocked", thread: "001", payload: { session: C } }), ctx());
-  expect(notices(c.events)).toEqual([{ session: M, text: "coordinator of thread 001 (Thread 001) is waiting for the user in its pane: it asked a question or needs a permission. Tell the user to answer it in the thread tab 001-thread-001." }]);
+  expect(notices(c.events)).toEqual([{ session: M, text: "coordinator of thread 001 (Thread 001) is waiting for the user in its pane: it asked a question or needs a permission. Tell the user to answer it in the thread tab 001-thread-001.", wait: true }]);
 });
 
 test("old question events without an id get Q1.. in log order", () => {
@@ -204,4 +204,71 @@ test("a repeated blocked event for the same block does not notify main again", (
   const s = base();
   expect(notices(react(s, apply(s, USER, { type: "agent.blocked", thread: "001", payload: { session: C } }), ctx()).events)).toHaveLength(1);
   expect(notices(react(s, apply(s, USER, { type: "agent.blocked", thread: "001", payload: { session: C } }), ctx()).events)).toEqual([]);
+});
+
+// A wait main is told about, and told again when it is over.
+function stamped(s: State) {
+  return (ts: string, actor: Actor, ...b: EventBody[]) => b.map((x) => { const ev = { ...x, seq: s.lastSeq + 1, ts, actor } as StoredEvent; applyEvent(s, ev); return ev; });
+}
+const BLOCKED_TEXT = "coordinator of thread 001 (Thread 001) is waiting for the user in its pane: it asked a question or needs a permission. Tell the user to answer it in the thread tab 001-thread-001.";
+const ANSWERED = "Thread 001 (Thread 001): the user answered the coordinator in its tab; nothing to relay.";
+
+test("a blocked pane answered before main got the notice drops it instead of sending both", () => {
+  const s = base();
+  const at = stamped(s);
+  const b = react(s, at("2026-10-11T10:00:00.000Z", USER, { type: "agent.blocked", thread: "001", payload: { session: C } }), ctx());
+  at("2026-10-11T10:00:00.000Z", USER, ...b.events);
+  expect(s.sessions.get(M)!.notices).toEqual([BLOCKED_TEXT]);
+  const a = react(s, at("2026-10-11T10:00:20.000Z", USER, { type: "session.active", thread: "001", payload: { session: C } }), ctx());
+  expect(a.events).toEqual([{ type: "notice.dropped", payload: { session: M, texts: [BLOCKED_TEXT] } }]);
+  at("2026-10-11T10:00:20.000Z", USER, ...a.events);
+  expect(s.sessions.get(M)!.notices).toEqual([]);
+});
+
+test("a blocked pane answered after main heard it queues one short notice", () => {
+  const s = base();
+  const at = stamped(s);
+  const b = react(s, at("2026-10-11T10:00:00.000Z", USER, { type: "agent.blocked", thread: "001", payload: { session: C } }), ctx());
+  at("2026-10-11T10:00:00.000Z", USER, ...b.events);
+  at("2026-10-11T10:00:05.000Z", USER, { type: "notice.delivered", payload: { session: M, count: 1, texts: [BLOCKED_TEXT] } });
+  const a = react(s, at("2026-10-11T10:00:20.000Z", USER, { type: "session.active", thread: "001", payload: { session: C } }), ctx());
+  expect(a.events).toEqual([{ type: "notice.queued", payload: { session: M, text: ANSWERED } }]);
+  // a second active event is not the end of another wait
+  expect(react(s, at("2026-10-11T10:00:30.000Z", USER, { type: "session.active", thread: "001", payload: { session: C } }), ctx()).events).toEqual([]);
+});
+
+test("a thread.waiting while the blocked pane is open, or within 60s of it, does not queue a second wait notice", () => {
+  const s = base();
+  const at = stamped(s);
+  const b = react(s, at("2026-10-11T10:00:00.000Z", USER, { type: "agent.blocked", thread: "001", payload: { session: C } }), ctx());
+  at("2026-10-11T10:00:00.000Z", USER, ...b.events);
+  const open = react(s, at("2026-10-11T10:05:00.000Z", COORD, { type: "thread.waiting", thread: "001", payload: { what: "q" } }), ctx());
+  expect(notices(open.events)).toEqual([]); // the pane is still blocked, however late
+  at("2026-10-11T10:05:01.000Z", USER, { type: "agent.idle", thread: "001", payload: { session: C } });
+  const s2 = base();
+  const at2 = stamped(s2);
+  at2("2026-10-11T10:00:00.000Z", USER, { type: "agent.blocked", thread: "001", payload: { session: C } });
+  at2("2026-10-11T10:00:05.000Z", USER, { type: "session.active", thread: "001", payload: { session: C } });
+  expect(notices(react(s2, at2("2026-10-11T10:00:40.000Z", COORD, { type: "thread.waiting", thread: "001", payload: { what: "q" } }), ctx()).events)).toEqual([]);
+  const late = react(s2, at2("2026-10-11T10:03:00.000Z", COORD, { type: "thread.waiting", thread: "001", payload: { what: "q2" } }), ctx());
+  expect(notices(late.events)).toEqual([{ session: M, text: "Thread 001 (Thread 001) is waiting for the user: q2", wait: true }]);
+});
+
+test("an agt thread waiting answered by the user is dropped or followed up like a blocked pane", () => {
+  const s = base();
+  const at = stamped(s);
+  const w = react(s, at("2026-10-11T10:00:00.000Z", COORD, { type: "thread.waiting", thread: "001", payload: { what: "which db?" } }), ctx());
+  at("2026-10-11T10:00:00.000Z", COORD, ...w.events);
+  at("2026-10-11T10:00:10.000Z", USER, { type: "agent.idle", thread: "001", payload: { session: C } });
+  const a = react(s, at("2026-10-11T10:01:00.000Z", USER, { type: "session.active", thread: "001", payload: { session: C } }), ctx());
+  expect(a.events).toEqual([{ type: "notice.dropped", payload: { session: M, texts: ["Thread 001 (Thread 001) is waiting for the user: which db?"] } }]);
+});
+
+test("the ready-for-review notice names the stages that were skipped or n/a, with reasons", () => {
+  const s = base();
+  const at = stamped(s);
+  at("2026-10-11T10:00:00.000Z", USER, { type: "stage.recorded", thread: "001", payload: { stage: 8, state: "skipped", by: "user", reason: "user skipped it" } });
+  at("2026-10-11T10:00:00.000Z", USER, { type: "stage.recorded", thread: "001", payload: { stage: 7, state: "na", by: "agt", reason: "no e2e commands configured" } });
+  const r = react(s, at("2026-10-11T10:00:30.000Z", COORD, { type: "thread.status_changed", thread: "001", payload: { from: "in_progress", to: "review" } }), ctx());
+  expect(notices(r.events)).toEqual([{ session: M, text: "Thread 001 (Thread 001) is ready for review. Not run: 7 e2e (n/a: no e2e commands configured); 8 browser check (skipped: user skipped it)." }]);
 });
