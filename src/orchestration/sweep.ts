@@ -14,6 +14,8 @@ import { liveSessions, rotateCoordinator } from "./sessions.ts";
 export const IDLE_NOTICE_AFTER_MS = 20_000;
 /** Idle notices per ticket; past them the coordinator gets IDLE_CAP_NOTICE once, then nothing more. */
 export const MAX_IDLE_NOTICES = 3;
+/** A coordinator is rotated for its Claude profile usage at most once per thread within this long. */
+export const USAGE_ROTATION_GAP_MS = 10 * 60_000;
 
 const idleNotice = (thread: string, ticket: string, report: string | undefined) => {
   const line = report?.split("\n")[0]?.trim() ?? "";
@@ -112,6 +114,29 @@ export function sweep(state: State, now: string, ctx: ReactorContext): { events:
     const e = noticeDelivery(s);
     if (e) effects.push(e);
   }
+  // A coordinator whose Claude profile passed its threshold (or hit a rate limit) hands over to a replacement on the newly
+  // chosen profile: never one already rotating (a handoff in progress), and at most one replacement per thread per 10 minutes.
+  const usageRotating = new Set<string>();
+  const picker = ctx.profile;
+  if (picker) {
+    for (const s of liveSessions(state, undefined, "coordinator")) {
+      const t = s.thread ? state.threads.get(s.thread) : undefined;
+      if (failed.has(s.id) || s.status === "starting" || !s.pane || s.rotation || !s.profile || !t || t.status === "done" || liveSessions(state, t.id, "coordinator")[0] !== s) continue;
+      if (!picker.exhausted(s.profile) || picker.name() === s.profile) continue;
+      const recent = [...state.sessions.values()].some((x) => x.thread === t.id && x.role === "coordinator" && x.replaces && Date.parse(now) - Date.parse(x.createdAt) <= USAGE_ROTATION_GAP_MS);
+      if (recent) continue;
+      usageRotating.add(s.id);
+      events.push(...picker.take(), { type: "session.rotation_requested", thread: t.id, payload: { session: s.id, reason: "usage limit" } });
+    }
+    // Main is the user's pane: it is only told, once, and restarts when the user chooses.
+    for (const m of liveSessions(state, undefined, "main")) {
+      if (!m.profile || m.profileNotified || !picker.exhausted(m.profile)) continue;
+      events.push(
+        { type: "profile.notified", payload: { session: m.id, profile: m.profile } },
+        { type: "notice.queued", payload: { session: m.id, text: `Claude profile ${m.profile} (main) is near its usage limit. Restart main later with agt start so it moves to ${picker.name() === m.profile ? "another profile" : `profile ${picker.name()}`}; it is not restarted automatically.` } },
+      );
+    }
+  }
   for (const s of liveSessions(state, undefined, "coordinator")) {
     if (s.status === "starting") continue;
     if (!s.pane) continue; // not attached yet: it cannot have seen a handoff request
@@ -119,7 +144,7 @@ export function sweep(state: State, now: string, ctx: ReactorContext): { events:
     // Age only matters for a coordinator that has worked; a parked one (0 turns) or one waiting on review or an
     // unblock would just be replaced by another idle coordinator.
     const working = s.turns > 0 && t0?.status !== "review" && t0?.status !== "blocked";
-    if (!s.rotation && t0 && working && liveSessions(state, t0.id, "coordinator")[0] === s && Date.parse(now) - Date.parse(s.createdAt) > durationMs(ctx.config.session.rotation.max_age)) {
+    if (!s.rotation && !usageRotating.has(s.id) && t0 && working && liveSessions(state, t0.id, "coordinator")[0] === s && Date.parse(now) - Date.parse(s.createdAt) > durationMs(ctx.config.session.rotation.max_age)) {
       events.push({ type: "session.rotation_requested", thread: t0.id, payload: { session: s.id, reason: "age" } });
       continue;
     }

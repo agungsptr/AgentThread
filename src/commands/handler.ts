@@ -10,6 +10,8 @@ import { agentName, awaitsWorker, conflictingTicket, FILE_HOLDING, liveSessions,
 import { stageNa } from "../workflow/project-config.ts";
 import { workspaceReposNoSpawn } from "../project/workspace.ts";
 import { actorSession, isLive, type State, type Thread, type Ticket } from "../state/projection.ts";
+import type { ProfilePicker } from "../orchestration/profile-pick.ts";
+import { claudeProfiles, profileDir } from "../agents/profiles.ts";
 import type { Command, CommandName } from "./schema.ts";
 
 export type Effect =
@@ -40,6 +42,8 @@ export type Effect =
       bootstrap?: "start" | "handoff";
       /** Text the bootstrap prompt ends with: a returned ticket's notice for its fresh worker. */
       notice?: string;
+      /** The Claude profile it launches on (2 or more configured): its CLAUDE_CONFIG_DIR, statusLine and rate_limit hook. */
+      profile?: string;
     }
   /** `unconfirmed`: only Herdr's poll says the agent started (it may list an agent at a startup dialog idle). */
   /** `agent` is the session's: only its adapter's trust dialog holds the delivery. */
@@ -51,6 +55,8 @@ export interface HandlerContext {
   root: string;
   config?: Config;
   newId?: () => string;
+  /** The Claude profile picker of this command (2 or more profiles configured). */
+  profile?: ProfilePicker;
 }
 
 export type HandleResult =
@@ -101,6 +107,8 @@ const ALLOWED: Record<CommandName, readonly Role[]> = {
   "session.attached": ["user"],
   "session.failed": ["user"],
   "session.open_main": ["user"],
+  "profile.limit": ROLES,
+  "profile.choose": ["user"],
 };
 
 const SIGNAL_EVENT = {
@@ -169,7 +177,7 @@ function checkTicketDoc(p: string): string {
  * no AGT_SESSION) gets one, so the stored events say who ran it.
  */
 function attribute(state: State, cmd: Command, actor: Actor): Actor {
-  if (cmd.cmd === "session.signal") return actor;
+  if (cmd.cmd === "session.signal" || cmd.cmd === "profile.limit") return actor;
   const session = (actor.session || (actor.role !== "coordinator" && actor.role !== "worker")) ? undefined : actorSession(state, actor);
   return { ...actor, ...(session ? { session } : {}), via: "command" };
 }
@@ -263,6 +271,24 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
         }
       : { events: [{ type: "session.failed", thread: s.thread, payload: { session: s.id, reason: cmd.reason } }] };
   }
+  if (cmd.cmd === "profile.choose") {
+    const cfg = ctx.config ?? DEFAULT_CONFIG;
+    const only = claudeProfiles(cfg).length === 1 ? claudeProfiles(cfg)[0]!.name : undefined;
+    const name = ctx.profile?.name() ?? only;
+    return { events: ctx.profile?.take() ?? [], result: name === undefined ? null : { profile: name, config_dir: profileDir(cfg, name) ?? null } };
+  }
+  if (cmd.cmd === "profile.limit") {
+    const cfg = ctx.config ?? DEFAULT_CONFIG;
+    if (!claudeProfiles(cfg).some((p) => p.name === cmd.profile)) return { events: [] };
+    const events: EventBody[] = [{ type: "profile.limited", payload: { profile: cmd.profile, at: new Date().toISOString() } }];
+    // A worker that hit the limit: its coordinator may return the ticket so a fresh worker continues on another profile.
+    if (actor.role === "worker" && actor.thread && actor.ticket) {
+      const coordinator = liveSessions(state, actor.thread, "coordinator")[0];
+      const text = `The worker for ticket ${actor.ticket} hit the usage limit of Claude profile ${cmd.profile}. Return the ticket so a fresh worker continues on another profile: agt ticket return ${actor.thread}/${actor.ticket} "<what is left>".`;
+      if (coordinator && !coordinator.notices.includes(text)) events.push({ type: "notice.queued", thread: actor.thread, payload: { session: coordinator.id, text } });
+    }
+    return { events };
+  }
   if (cmd.cmd === "session.open_main") {
     if (state.sessions.has(cmd.session)) reject(`session ${cmd.session} already exists`);
     const stale: EventBody[] = liveSessions(state, undefined, "main").map((s) => ({ type: "session.ended", payload: { session: s.id } }));
@@ -279,6 +305,7 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
             ...(run.model ? { model: run.model } : {}),
             ...(run.effort ? { effort: run.effort } : {}),
             name: agentName(ctx.root, "main"),
+            ...(cmd.profile && run.agent === "claude-code" ? { profile: cmd.profile } : {}),
           },
         },
         { type: "session.attached", payload: { session: cmd.session, pane: cmd.pane } },
@@ -745,9 +772,9 @@ function transitionTicket(k: Ticket, to: TicketStatus): void {
 }
 
 function spawnContext(ctx: HandlerContext) {
-  return { root: ctx.root, config: ctx.config ?? DEFAULT_CONFIG, newId: ctx.newId ?? randomUUID };
+  return { root: ctx.root, config: ctx.config ?? DEFAULT_CONFIG, newId: ctx.newId ?? randomUUID, ...(ctx.profile ? { profile: ctx.profile } : {}) };
 }
 
 function tabEnsure(t: { id: string; slug: string; dir?: string; worktree?: string; tab?: string; tier?: string }, ctx: HandlerContext): Effect {
-  return tabEnsureFor(t, { root: ctx.root, config: ctx.config ?? DEFAULT_CONFIG });
+  return tabEnsureFor(t, { root: ctx.root, config: ctx.config ?? DEFAULT_CONFIG, ...(ctx.profile ? { profile: ctx.profile } : {}) });
 }

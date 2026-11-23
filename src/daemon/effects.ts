@@ -239,6 +239,7 @@ export function createEffectRunner(opts: {
             root: opts.root,
             worktree: effect.cwd,
             legacy,
+            ...(effect.profile ? { profile: effect.profile } : {}),
             ...(ticketDoc !== undefined ? { ticketDoc } : {}),
             ...(common ? { gitCommonDir: common } : {}),
           };
@@ -251,7 +252,8 @@ export function createEffectRunner(opts: {
             name: effect.name,
             kind: adapter.herdrKind,
             cwd: effect.cwd,
-            ...(effect.pane ? { pane: effect.pane, exportEnv: launched.processEnv } : {}),
+            // A root pane's tab env was fixed when the tab opened; the profile's dir (a path, no secret) is exported too.
+            ...(effect.pane ? { pane: effect.pane, exportEnv: { ...launched.processEnv, ...(effect.profile && launched.env.CLAUDE_CONFIG_DIR ? { CLAUDE_CONFIG_DIR: launched.env.CLAUDE_CONFIG_DIR } : {}) } } : {}),
             ...(effect.splitFrom
               ? {
                   split: {

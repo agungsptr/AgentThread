@@ -75,6 +75,10 @@ export function claudeAccountNote(config: Config, env: Record<string, string | u
     ...Object.values(config.agents.complexity.tiers).map((t): [SessionRole, RoleAgent] => ["coordinator", t]),
   ].filter(([, r]) => r.agent === "claude-code");
   if (runs.length === 0) return undefined;
+  // Profiles name the accounts: 2 or more are announced by agt start (one line each); one is the account itself.
+  const profiles = config.agents.claude.profiles ?? [];
+  if (profiles.length >= 2) return undefined;
+  if (profiles.length === 1) return `claude-code agents use CLAUDE_CONFIG_DIR=${profiles[0]!.config_dir}`;
   const dirs = new Set(runs.map(([role, run]) => userAgentEnv(config, role, run, env).CLAUDE_CONFIG_DIR ?? env.CLAUDE_CONFIG_DIR).filter((d): d is string => !!d));
   if (dirs.size === 0) return "claude-code agents use the default Claude config (~/.claude); set agents.env.CLAUDE_CONFIG_DIR to pick an account";
   return `claude-code agents use ${[...dirs].map((d) => `CLAUDE_CONFIG_DIR=${d}`).join(", ")}`;

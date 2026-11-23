@@ -8,6 +8,7 @@ import { isLive, type Session, type State, type Thread } from "../state/projecti
 import { generateHandoff } from "./handoff.ts";
 import { awaitsRespawn, awaitsWorker, conflictingTicket, exitedBeforeStart, liveSessions, rotateCoordinator, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure, workerCwd, workerLimit } from "./sessions.ts";
 import { tierRun } from "./tiers.ts";
+import type { ProfilePicker } from "./profile-pick.ts";
 
 const CHECKPOINT_NOTICE = (thread: string | undefined) =>
   `CHECKPOINT: record where you are with: agt progress ${thread ?? "<thread>"} "<what is done, what is next>"`;
@@ -25,6 +26,8 @@ export interface ReactorContext {
   root: string;
   config: Config;
   newId: () => string;
+  /** The Claude profile picker of this pass (2 or more profiles configured). */
+  profile?: ProfilePicker;
 }
 
 /** Pure follow-ups for freshly applied events: spawns, notifications, deliveries, worker teardown, coordinator rotation, recovery. */

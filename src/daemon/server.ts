@@ -17,6 +17,8 @@ import { writeAll } from "../render/write.ts";
 import { applyEvent, project } from "../state/projection.ts";
 import { EventStore } from "../store/event-store.ts";
 import { createEffectRunner } from "./effects.ts";
+import { claudeProfiles, readAllUsage } from "../agents/profiles.ts";
+import { profilePicker, type ProfilePicker } from "../orchestration/profile-pick.ts";
 import { LineReader, LineWriter } from "./framing.ts";
 import type { Request, Response } from "./protocol.ts";
 import { HerdrCli } from "../herdr/bridge.ts";
@@ -104,6 +106,11 @@ export async function startDaemon(
   });
 
   const log = opts.log ?? console.error;
+  /** The Claude profile picker for one decision (2 or more profiles configured); its usage files are read when first used. */
+  const pc = (): { profile?: ProfilePicker } => {
+    const picker = profilePicker(state, config, { usage: () => readAllUsage(root, claudeProfiles(config).map((x) => x.name)) });
+    return picker ? { profile: picker } : {};
+  };
   const runEffects = async (effects: Effect[]): Promise<EventBody[]> => {
     const out: EventBody[] = [];
     for (const e of effects) out.push(...(await runEffect(e)));
@@ -139,7 +146,7 @@ export async function startDaemon(
     await runFollowUps(
       fresh,
       async (evs) => {
-        const next = react(state, evs, { root, config, newId: randomUUID });
+        const next = react(state, evs, { root, config, newId: randomUUID, ...pc() });
         // Commit the follow-up events first, and render before any agent starts: a replacement must find its
         // generated handoff (and the current state) in brief.md when it reads it.
         const committed = next.events.length ? commit(next.events) : [];
@@ -157,7 +164,7 @@ export async function startDaemon(
     if (!command.success) return { ok: false, error: `invalid command: ${command.error.issues.map((i) => i.message).join("; ")}` };
     const actor = ActorSchema.safeParse(raw.actor);
     if (!actor.success) return { ok: false, error: `invalid actor: ${actor.error.issues.map((i) => i.message).join("; ")}` };
-    const decision = handle(state, command.data, actor.data, { root, config, newId: randomUUID });
+    const decision = handle(state, command.data, actor.data, { root, config, newId: randomUUID, ...pc() });
     if (!decision.ok) return decision;
     await applyAndReact(decision.events, decision.actor ?? actor.data, await runEffects(decision.effects));
     return { ok: true, result: decision.result };
@@ -217,7 +224,7 @@ export async function startDaemon(
   const sweepTimer = setInterval(() => {
     if (shuttingDown) return;
     void enqueue(async () => {
-      const r = sweep(state, new Date().toISOString(), { root, config, newId: randomUUID });
+      const r = sweep(state, new Date().toISOString(), { root, config, newId: randomUUID, ...pc() });
       const bodies = [...r.events, ...(await runEffects(r.effects))];
       if (bodies.length) await applyAndReact(bodies, { role: "user" });
     }).catch((e) => (opts.log ?? console.error)(`sweep failed: ${e instanceof Error ? e.message : String(e)}`));
@@ -230,7 +237,7 @@ export async function startDaemon(
     void enqueue(async () => {
       const actor: Actor = { role: "user" };
       const run = async (command: Command) => {
-        const decision = handle(state, command, actor, { root, config, newId: randomUUID });
+        const decision = handle(state, command, actor, { root, config, newId: randomUUID, ...pc() });
         if (decision.ok) await applyAndReact(decision.events, decision.actor ?? actor, await runEffects(decision.effects));
       };
       const layout = state.layout;

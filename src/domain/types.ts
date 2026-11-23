@@ -123,8 +123,16 @@ export type EventBody =
         ticket?: string;
         replaces?: string;
         retirePane?: string;
+        /** The Claude profile the session launched on (2 or more profiles configured). */
+        profile?: string;
       };
     }
+  /** The profile new launches use changed (the projection's current profile). */
+  | { type: "profile.switched"; thread?: undefined; payload: { from?: string; to: string; reason: string } }
+  /** A rate_limit failure (StopFailure hook): the profile counts as exhausted until its known reset, or 60 minutes. */
+  | { type: "profile.limited"; thread?: undefined; payload: { profile: string; at: string } }
+  /** Main was told its profile is over the threshold (once per session). */
+  | { type: "profile.notified"; thread?: undefined; payload: { session: string; profile: string } }
   | { type: "session.attached"; thread?: string; payload: { session: string; pane: string } }
   | {
       type: "session.started" | "session.active" | "agent.idle" | "session.compacting" | "session.ended";

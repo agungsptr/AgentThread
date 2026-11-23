@@ -23,6 +23,9 @@ import { applyConfig, redactEnv, showConfig, workspaceWarnings } from "../projec
 import { findRoot } from "../project/root.ts";
 import { project, type State } from "../state/projection.ts";
 import { USAGE, helpRequest } from "./usage.ts";
+import { statuslineLine } from "./statusline.ts";
+import { formatUsage, usageRows } from "./profile-usage.ts";
+import { claudeProfiles, switching } from "../agents/profiles.ts";
 import { runLogs } from "./logs.ts";
 import { guide, isLegacyThread } from "../agents/guide.ts";
 import { formatStatus, restartStack, stackLogs, stackStatus, startStack, stopStack } from "../stack/runner.ts";
@@ -328,7 +331,23 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
       return send(findRoot(cwd, env), env, { cmd: "tell", target, message: words.join(" ") });
     }
     case "event":
-      return hookEvent(sub, env, cwd);
+      return hookEvent(sub, env, cwd, rest);
+    case "statusline": {
+      // Claude Code's statusLine command: always exits 0 and prints something, whatever happens.
+      try {
+        const { values } = parse(argv.slice(1), { profile: { type: "string" }, root: { type: "string" } });
+        const stdin = process.stdin.isTTY ? "" : ((await Promise.race([Bun.stdin.text(), Bun.sleep(1_500).then(() => "")])) as string);
+        console.log(await statuslineLine({ profile: String(values.profile ?? ""), root: resolve(String(values.root ?? env.AGT_ROOT ?? cwd)), stdin, env, cwd }));
+      } catch {
+        console.log("");
+      }
+      return 0;
+    }
+    case "usage": {
+      const { values, positionals } = parse(argv.slice(1), { json: { type: "boolean" } });
+      if (positionals.length) throw new UsageError("usage takes only --json");
+      return usageCommand(findRoot(cwd, env), env, Boolean(values.json));
+    }
     case "logs": {
       const { values } = parse(argv.slice(1), { follow: { type: "boolean", short: "f" }, all: { type: "boolean" } });
       return logs(findRoot(cwd, env), Boolean(values.follow), Boolean(values.all));
@@ -672,6 +691,7 @@ async function start(root: string, env: Env, argv: string[]): Promise<number> {
   for (const w of warnings) console.error(`agt: warning: ${w}`);
   const account = claudeAccountNote(config, env);
   if (account) console.log(account);
+  if (switching(config)) for (const p of claudeProfiles(config)) console.log(`Claude profile ${p.name} (${p.config_dir}) asks once to trust ${root}`);
   const socket = paths(root).socket;
   // The daemon reads the config only when it starts: one running with an older config (agt setup, an edit) is
   // replaced. Its state lives in the event log, so a restart loses nothing.
@@ -711,14 +731,21 @@ async function start(root: string, env: Env, argv: string[]): Promise<number> {
 
   if (values["no-manager"]) return 0;
   const session = randomUUID();
-  await commandOrThrow(socket, { cmd: "session.open_main", session, pane: managerPane });
-  console.log(`main manager session ${session}`);
   const run = roleAgent(config, "main");
+  // Several Claude profiles: main launches on the one the daemon picks (usage files, sticky current profile).
+  let profile: string | undefined;
+  if (switching(config) && run.agent === "claude-code") {
+    const chosen = (await commandOrThrow(socket, { cmd: "profile.choose" })) as { profile: string } | null;
+    profile = chosen?.profile;
+    if (profile) console.log(`main manager uses Claude profile ${profile}`);
+  }
+  await commandOrThrow(socket, { cmd: "session.open_main", session, pane: managerPane, ...(profile ? { profile } : {}) });
+  console.log(`main manager session ${session}`);
   const adapter = adapterFor(run.agent);
   const bin = agentBin(run.agent, env);
   let code: number;
   try {
-    const input = { role: "main", run, config, root, ...gitCommonDir(root) } as const;
+    const input = { role: "main", run, config, root, ...(profile ? { profile } : {}), ...gitCommonDir(root) } as const;
     const launched = prepareLaunch(adapter, input, adapter.launch(input), (m) => console.error(`agt: ${m}`));
     const proc = Bun.spawn([bin, ...launched.args, ...adapter.promptArgs(systemPrompt({ root, role: "main", config }))], {
       stdio: ["inherit", "inherit", "inherit"],
@@ -743,6 +770,26 @@ function gitCommonDir(root: string): { gitCommonDir?: string } {
   return r.exitCode === 0 && out ? { gitCommonDir: resolve(root, out) } : {};
 }
 
+/** `agt usage [--json]`: each Claude profile's recorded usage; the daemon (when up) adds the current profile and limited marks. */
+async function usageCommand(root: string, env: Env, json: boolean): Promise<number> {
+  const config = loadConfig(root, env);
+  if (claudeProfiles(config).length === 0) {
+    console.log("no Claude profiles configured (agents.claude.profiles)");
+    return 0;
+  }
+  let state: State | undefined;
+  try {
+    const res = await request(paths(root).socket, { op: "events.since", seq: 0 }, 3_000);
+    if (res.ok) state = project(res.result as StoredEvent[]);
+  } catch {
+    // no daemon: the usage files alone
+  }
+  const now = Date.now();
+  const rows = usageRows(root, config, state, now);
+  console.log(json ? JSON.stringify(rows, null, 2) : formatUsage(rows, now));
+  return 0;
+}
+
 async function endMainSession(socket: string, session: string): Promise<void> {
   try {
     await request(socket, { op: "command", command: { cmd: "session.signal", session, signal: "ended" }, actor: { role: "user" } }, 3_000);
@@ -752,8 +799,16 @@ async function endMainSession(socket: string, session: string): Promise<void> {
 }
 
 /** Runs inside Claude Code hooks: it must never fail or hang the agent, so every problem is reported and swallowed. */
-async function hookEvent(signal: string | undefined, env: Env, cwd: string): Promise<number> {
+async function hookEvent(signal: string | undefined, env: Env, cwd: string, args: string[] = []): Promise<number> {
   try {
+    if (signal === "rate-limited") {
+      // StopFailure (matcher rate_limit): the Claude profile this session runs on is exhausted.
+      const profile = args[0] === "--profile" ? args[1] : undefined;
+      if (!profile) throw new Error("rate-limited needs --profile <name>");
+      const res = await request(paths(findRoot(cwd, env)).socket, { op: "command", command: { cmd: "profile.limit", profile }, actor: actorFromEnv(env) }, 3_000);
+      if (!res.ok) throw new Error(res.error);
+      return 0;
+    }
     if (!signal || !(SESSION_SIGNALS as readonly string[]).includes(signal)) throw new Error(`unknown signal '${signal ?? ""}'`);
     // A hook runner may leave stdin open; never wait on it for long.
     const input = process.stdin.isTTY ? "" : ((await Promise.race([Bun.stdin.text(), Bun.sleep(1_500).then(() => "")])) as string).trim();

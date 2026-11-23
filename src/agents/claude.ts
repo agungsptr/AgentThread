@@ -13,13 +13,27 @@ export function hookCommand(signal: SessionSignal): string {
   return `${shellQuote(process.execPath)} ${shellQuote(AGT_BIN)} event ${signal}`;
 }
 
-export function hookSettings() {
+/** How often Claude Code reruns agt's statusLine on its own, so an idle pane still reports its usage. */
+export const STATUSLINE_REFRESH_SECONDS = 60;
+
+export const statuslineCommand = (profile: string, root: string): string =>
+  `${shellQuote(process.execPath)} ${shellQuote(AGT_BIN)} statusline --profile ${shellQuote(profile)} --root ${shellQuote(root)}`;
+
+/**
+ * The hooks of a Claude Code launch. With `profile` (2 or more profiles): agt's statusLine, which records the profile's
+ * usage, and a StopFailure hook for `rate_limit`, which marks the profile exhausted.
+ */
+export function hookSettings(o?: { profile: string; root: string }) {
   const on = (signal: SessionSignal) => [{ hooks: [{ type: "command" as const, command: hookCommand(signal) }] }];
   return {
+    ...(o ? { statusLine: { type: "command" as const, command: statuslineCommand(o.profile, o.root), refreshInterval: STATUSLINE_REFRESH_SECONDS } } : {}),
     hooks: {
       SessionStart: on("started"),
       UserPromptSubmit: on("active"),
       Stop: on("idle"),
+      ...(o
+        ? { StopFailure: [{ matcher: "rate_limit", hooks: [{ type: "command" as const, command: `${shellQuote(process.execPath)} ${shellQuote(AGT_BIN)} event rate-limited --profile ${shellQuote(o.profile)}` }] }] }
+        : {}),
       PreCompact: on("compacting"),
       SessionEnd: on("ended"),
     },

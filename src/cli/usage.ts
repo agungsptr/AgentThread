@@ -44,6 +44,9 @@ export const USAGE = `usage: agt <command>
   tell <thread|main> <message...>
   tell <thread>/<ticket> <message...>   a task thread's coordinator: the ticket's live worker hears it
   event started|active|idle|compacting|ended   (used by Claude Code hooks)
+  event rate-limited --profile <name>   (used by the Claude Code StopFailure hook: the profile hit its usage limit)
+  statusline --profile <name> --root <root>   (Claude Code's statusLine command: records the profile's usage, prints one line)
+  usage [--json]   several Claude accounts: each profile's 5h and 7d use, resets, last seen and limited mark, and which one new launches use
   guide [main|coordinator|worker|all]   how to use agt in a role (default: $AGT_ROLE, else all)
   logs [-f] [--all]   print the event log as readable lines (HH:MM:SS thread role event summary), hiding heartbeat events; -f follows and survives daemon restarts; --all shows every event
   help [<command>]   this text, or only the lines of one command (also agt <command> --help; -h/--help anywhere before a -- prints help)`;

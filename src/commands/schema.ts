@@ -107,7 +107,11 @@ export const CommandSchema = z.discriminatedUnion("cmd", [
   }),
   z.object({ cmd: z.literal("session.attached"), session: sessionId, pane: herdrId, pending: text.optional() }),
   z.object({ cmd: z.literal("session.failed"), session: sessionId, reason: text }),
-  z.object({ cmd: z.literal("session.open_main"), session: sessionId, pane: herdrId }),
+  z.object({ cmd: z.literal("session.open_main"), session: sessionId, pane: herdrId, profile: z.string().regex(/^[a-z][a-z0-9-]*$/).optional() }),
+  /** A rate_limit failure on a Claude profile (the StopFailure hook): the profile counts as exhausted for a while. */
+  z.object({ cmd: z.literal("profile.limit"), profile: z.string().regex(/^[a-z][a-z0-9-]*$/) }),
+  /** `agt start`: which profile main launches on (recorded when it changes); the result is {profile, config_dir} or null. */
+  z.object({ cmd: z.literal("profile.choose") }),
 ]);
 
 export type Command = z.infer<typeof CommandSchema>;

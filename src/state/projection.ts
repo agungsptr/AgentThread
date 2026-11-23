@@ -19,6 +19,10 @@ export interface Session {
   contextTokens?: number;
   rotation?: { reason: string; requestedAt: string; /** When the handoff request reached the pane (notice.delivered): the fallback window runs from here. */ deliveredAt?: string };
   replaces?: string;
+  /** The Claude profile it launched on (session.created), when several are configured. */
+  profile?: string;
+  /** Main was told that its profile is over the threshold (profile.notified). */
+  profileNotified?: boolean;
   /** A pane to close once this session attaches elsewhere (the pane of a session it takes over from). */
   retirePane?: string;
   /** When the last resume of this session started (old logs only: sessions are no longer resumed). */
@@ -228,11 +232,13 @@ export interface State {
   sessions: Map<string, Session>;
   /** The workspace's one stack lock: who holds it and who waits, in order. */
   stack: { holder?: { thread: string; purpose?: string; since: string }; queue: { thread: string; purpose?: string }[] };
+  /** Claude profiles: the one new launches use (profile.switched) and the rate_limit marks (profile.limited, the latest per profile). */
+  profiles: { current?: string; limited: Record<string, { at: string }> };
   lastSeq: number;
 }
 
 export function emptyState(): State {
-  return { threads: new Map(), sessions: new Map(), stack: { queue: [] }, lastSeq: 0 };
+  return { threads: new Map(), sessions: new Map(), stack: { queue: [] }, profiles: { limited: {} }, lastSeq: 0 };
 }
 
 export function project(events: StoredEvent[]): State {
@@ -311,6 +317,20 @@ export function applyEvent(state: State, ev: StoredEvent): void {
     if (ev.type === "stack.acquired") stack.holder = { ...entry, since: stack.holder?.thread === thread ? stack.holder.since : ev.ts };
     else if (ev.type === "stack.queued") stack.queue.push(entry);
     else if (stack.holder?.thread === thread) delete stack.holder;
+    return;
+  }
+
+  if (ev.type === "profile.switched") {
+    state.profiles.current = ev.payload.to;
+    return;
+  }
+  if (ev.type === "profile.limited") {
+    state.profiles.limited[ev.payload.profile] = { at: ev.payload.at };
+    return;
+  }
+  if (ev.type === "profile.notified") {
+    const s = state.sessions.get(ev.payload.session);
+    if (s) s.profileNotified = true;
     return;
   }
 
@@ -711,6 +731,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
         createdAt: ev.ts,
         ...(p.replaces ? { replaces: p.replaces } : {}),
         ...(p.retirePane ? { retirePane: p.retirePane } : {}),
+        ...(p.profile ? { profile: p.profile } : {}),
       });
       const t = ev.thread ? state.threads.get(ev.thread) : undefined;
       if (t && p.ticket) {

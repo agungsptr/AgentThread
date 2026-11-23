@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { Config } from "../config/config.ts";
 import type { AgentKind, SessionRole } from "../domain/types.ts";
 import { allowedTools, hookSettings } from "./claude.ts";
-import { expandHome } from "./profiles.ts";
+import { expandHome, profileDir } from "./profiles.ts";
 import type { RoleAgent } from "./roles.ts";
 import { AGY_TRUST_PROMPT, CLAUDE_TRUST_PROMPT, type TrustPrompt } from "./trust.ts";
 
@@ -19,6 +19,8 @@ export interface LaunchInput {
   legacy?: boolean;
   /** A task-thread worker's ticket doc (workspace-root-relative): the one file outside its worktree it may write. */
   ticketDoc?: string;
+  /** The Claude profile this launch runs on (2 or more configured): sets CLAUDE_CONFIG_DIR, the statusLine and the rate_limit hook. */
+  profile?: string;
   /** The launching process's env (default process.env); only the release e2e's AGT_E2E_* overrides are read from it. */
   env?: Record<string, string | undefined>;
 }
@@ -75,9 +77,9 @@ const claudeAdapter: AgentAdapter = {
   bin: "claude",
   instructionFiles: ["CLAUDE.md"],
   prompt: "positional",
-  launch({ role, run, config, root, legacy, ticketDoc }) {
+  launch({ role, run, config, root, legacy, ticketDoc, profile, env = process.env }) {
     // Pushing is the user's call: denied by Claude Code's own rules, whatever the permission mode.
-    const settings = { ...hookSettings(), permissions: { deny: ["Bash(git push:*)"] } };
+    const settings = { ...hookSettings(profile ? { profile, root } : undefined), permissions: { deny: ["Bash(git push:*)"] } };
     const args = config.agents.autonomous
       ? ["--permission-mode", "bypassPermissions", "--settings", JSON.stringify({ ...settings, skipDangerousModePermissionPrompt: true })]
       : [
@@ -87,7 +89,9 @@ const claudeAdapter: AgentAdapter = {
         ];
     if (run.model) args.push("--model", run.model);
     if (run.effort) args.push("--effort", run.effort);
-    return { args, env: {}, processEnv: processEnv() };
+    const dir = profile ? profileDir(config, profile, env) : undefined;
+    const out: Record<string, string> = dir !== undefined ? { CLAUDE_CONFIG_DIR: dir } : {};
+    return { args, env: out, processEnv: processEnv() };
   },
   promptArgs: positional,
   capabilities: { hooks: true, contextSize: true, preCompact: true },

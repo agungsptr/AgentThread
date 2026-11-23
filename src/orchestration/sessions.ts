@@ -7,12 +7,21 @@ import type { Effect } from "../commands/handler.ts";
 import type { Config } from "../config/config.ts";
 import { scopesOverlap } from "../domain/rules.ts";
 import type { AgentKind, EventBody, SessionRole } from "../domain/types.ts";
+import type { ProfilePicker } from "./profile-pick.ts";
 import { isLive, threadCwd, type Session, type State, type Thread } from "../state/projection.ts";
 
 export interface SpawnContext {
   root: string;
   config: Config;
   newId: () => string;
+  /** The profile picker of this decision (2 or more Claude profiles configured); absent otherwise. */
+  profile?: ProfilePicker;
+}
+
+/** The Claude profile a launch of `agent` uses, and the events recording the choice (first use of the picker only). */
+function profileFor(ctx: { profile?: ProfilePicker }, agent: AgentKind): { profile?: string; events: EventBody[] } {
+  if (agent !== "claude-code" || !ctx.profile) return { events: [] };
+  return { profile: ctx.profile.name(), events: ctx.profile.take() };
 }
 
 /** The agent, model and effort fields of a session.created payload (model and effort only when set). */
@@ -22,10 +31,10 @@ const runFields = (run: RoleAgent) => ({ agent: run.agent, ...(run.model ? { mod
  * The env of a thread's tab, which its first coordinator inherits in the root pane: the AGT_* env with the
  * coordinator adapter's env merged over it.
  */
-export function tabEnv(t: { id: string; tier?: string; dir?: string; task?: string }, ctx: { root: string; config: Config }): Record<string, string> {
+export function tabEnv(t: { id: string; tier?: string; dir?: string; task?: string }, ctx: { root: string; config: Config; profile?: ProfilePicker }): Record<string, string> {
   const run = tierAgent(ctx.config, t.tier);
   const base = agentEnv({ root: ctx.root, role: "coordinator", agent: run.agent, thread: t.id, ...(t.dir !== undefined && t.task ? { task: t.task } : {}), configDir: claudeConfigDir(ctx.config) });
-  return { ...base, ...adapterFor(run.agent).launch({ role: "coordinator", run, config: ctx.config, root: ctx.root }).env, ...threadGitEnv(t, ctx.root) };
+  return { ...base, ...adapterFor(run.agent).launch({ role: "coordinator", run, config: ctx.config, root: ctx.root, ...(profileFor(ctx, run.agent).profile ? { profile: profileFor(ctx, run.agent).profile! } : {}) }).env, ...threadGitEnv(t, ctx.root) };
 }
 
 /**
@@ -38,7 +47,7 @@ export function threadGitEnv(t: { dir?: string }, root: string): Record<string, 
 }
 
 /** Opens (or re-finds) a thread's Herdr tab in its thread directory (a legacy thread's worktree), with the env its first coordinator inherits. */
-export function tabEnsure(t: { id: string; slug: string; dir?: string; worktree?: string; tab?: string; tier?: string }, ctx: { root: string; config: Config }): Effect {
+export function tabEnsure(t: { id: string; slug: string; dir?: string; worktree?: string; tab?: string; tier?: string }, ctx: { root: string; config: Config; profile?: ProfilePicker }): Effect {
   return { kind: "herdr.tab.ensure", thread: t.id, label: `${t.id}-${t.slug}`, cwd: threadCwd(t), env: tabEnv(t, ctx), ...(t.tab ? { tab: t.tab } : {}) };
 }
 
@@ -131,12 +140,14 @@ export function spawnCoordinator(
   const name = agentName(ctx.root, "coordinator", t.id, undefined, session);
   // A thread's coordinator runs at the thread's tier, else as roles.coordinator.
   const run = tierAgent(ctx.config, t.tier);
+  const pf = profileFor(ctx, run.agent);
   return {
     events: [
+      ...pf.events,
       {
         type: "session.created",
         thread: t.id,
-        payload: { session, role: "coordinator", ...runFields(run), name, ...(how.splitFrom ? { retirePane: how.splitFrom } : {}) },
+        payload: { session, role: "coordinator", ...runFields(run), name, ...(how.splitFrom ? { retirePane: how.splitFrom } : {}), ...(pf.profile ? { profile: pf.profile } : {}) },
       },
     ],
     effects: [
@@ -150,6 +161,7 @@ export function spawnCoordinator(
         cwd: threadCwd(t),
         ...(how.splitFrom ? { splitFrom: how.splitFrom, direction: "right" as const } : { pane: t.rootPane! }),
         ...(how.bootstrap ? { bootstrap: how.bootstrap } : {}),
+        ...(pf.profile ? { profile: pf.profile } : {}),
       },
     ],
   };
@@ -176,8 +188,9 @@ export function spawnWorker(state: State, t: Thread, ticket: string, ctx: SpawnC
   // A worker for a returned ticket starts with what the coordinator asked to fix.
   const k = t.tickets.find((x) => x.id === ticket);
   const notice = k?.returnNote !== undefined ? returnNotice(t.id, ticket, k.returnNote) : undefined;
+  const pf = profileFor(ctx, run.agent);
   return {
-    events: [{ type: "session.created", thread: t.id, payload: { session, role: "worker", ...runFields(run), name, ticket } }],
+    events: [...pf.events, { type: "session.created", thread: t.id, payload: { session, role: "worker", ...runFields(run), name, ticket, ...(pf.profile ? { profile: pf.profile } : {}) } }],
     effects: [
       {
         kind: "agent.spawn",
@@ -191,6 +204,7 @@ export function spawnWorker(state: State, t: Thread, ticket: string, ctx: SpawnC
         splitFrom: last?.pane ?? t.rootPane!,
         direction: last ? "down" : "right",
         ...(notice ? { notice } : {}),
+        ...(pf.profile ? { profile: pf.profile } : {}),
       },
     ],
   };
@@ -211,12 +225,14 @@ export function spawnReplacement(
   const run: RoleAgent = tierGone
     ? roleAgent(ctx.config, "coordinator")
     : { agent: old.agent, ...(old.model ? { model: old.model } : {}), ...(old.effort ? { effort: old.effort } : {}) };
+  const pf = profileFor(ctx, run.agent);
   return {
     events: [
+      ...pf.events,
       {
         type: "session.created",
         thread: t.id,
-        payload: { session, role: "coordinator", ...runFields(run), name, replaces: old.id, ...(how.retirePane ? { retirePane: how.retirePane } : {}) },
+        payload: { session, role: "coordinator", ...runFields(run), name, replaces: old.id, ...(how.retirePane ? { retirePane: how.retirePane } : {}), ...(pf.profile ? { profile: pf.profile } : {}) },
       },
       ...(carried.length ? [{ type: "notice.queued" as const, thread: t.id, payload: { session, text: carried.join("\n") } }] : []),
     ],
@@ -238,6 +254,7 @@ export function spawnReplacement(
               direction: "right" as const,
             }),
         bootstrap: how.bootstrap,
+        ...(pf.profile ? { profile: pf.profile } : {}),
       },
     ],
   };

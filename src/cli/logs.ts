@@ -20,6 +20,8 @@ export function summarize(e: { type: string; payload?: unknown }): string {
   if (str("ticket")) parts.push(str("ticket")!);
   if (typeof p.stage === "number") parts.push(`stage ${p.stage}${str("state") ? ` ${str("state")}` : ""}`);
   if (str("from") && str("to")) parts.push(`${str("from")}→${str("to")}`);
+  if (e.type.startsWith("profile.") && str("profile")) parts.push(str("profile")!);
+  if (e.type.startsWith("profile.") && str("to") && !str("from")) parts.push(`${str("from") ?? "-"}→${str("to")}`);
   const session = str("session");
   if (session) parts.push(session.slice(0, 8));
   const text = ["title", "message", "text", "summary", "note", "what", "answer", "reason", "tier", "content"].map(str).find((v) => v !== undefined);
