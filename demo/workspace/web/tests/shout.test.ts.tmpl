@@ -1,0 +1,6 @@
+import { expect, test } from "bun:test";
+import { shout } from "../src/index.ts";
+
+test("shout adds a mark", () => {
+  expect(shout("hi")).toBe("hi!");
+});
