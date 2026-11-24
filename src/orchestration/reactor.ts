@@ -359,6 +359,15 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         if (c && c.pane && c.pane !== t.rootPane) {
           lose(c, "tab was reopened");
           for (const w of liveSessions(state, t.id, "worker")) lose(w, "tab was reopened");
+        } else if (c && !c.pane && c.retirePane && c.retirePane !== t.rootPane) {
+          // Still starting as a split of the old root pane, which went with the tab this one replaces (agt start's
+          // recovery splits from it while its tab.ensure reopens a tab Herdr lost). Its replacement starts in the fresh
+          // root pane; its own spawn's failure, or attach, is then refused.
+          lose(c, "tab was reopened");
+          const r = spawnReplacement(t, c, ctx, { pane: t.rootPane, bootstrap: t.handoff ? "handoff" : "start" });
+          const created = r.events.find((e) => e.type === "session.created");
+          if (created?.type === "session.created") redirect(c.id, created.payload.session);
+          take(r);
         } else if (!c && !coordinatorLostIn.has(t.id)) {
           // A tab reopened after its coordinator failed or ended (a root pane gone, or agt start reopening it): the new
           // coordinator replaces that session in the fresh root pane, carrying its queued notices; the brake counts it.
@@ -492,7 +501,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         const s = state.sessions.get(ev.payload.session);
         const lostSpawn = /^spawn report lost after (.+)$/.exec(ev.payload.reason);
         // Herdr's missing-pane errors: the code itself, or the bridge's "herdr <cmd>: [agent target ]pane <id> not found".
-        const paneGone = /pane_not_found|\bpane \S+ not found/i.test(ev.payload.reason);
+        const paneGone = /pane_not_found|\bpane (?:\S+ )?not found/i.test(ev.payload.reason);
         let reopened = false;
         const text = lostSpawn && s ? `Session ${s.id} (${s.role}) never reported back from its spawn; marked failed after ${lostSpawn[1]}.` : undefined;
         const t = s?.thread ? state.threads.get(s.thread) : undefined;

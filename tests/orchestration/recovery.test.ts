@@ -399,7 +399,7 @@ const replaced = () => {
 };
 
 test("a coordinator replacement whose root pane is gone closes the old tab, opens a fresh one and tells main", () => {
-  for (const reason of ["pane_not_found", "herdr pane split: pane w1:p2 not found", "herdr agent start: agent target pane w1:p2 not found"]) {
+  for (const reason of ["pane_not_found", "herdr pane split: pane not found", "herdr pane split: pane w1:p2 not found", "herdr agent start: agent target pane w1:p2 not found"]) {
     const { s, R } = replaced();
     const r = react(s, apply(s, { type: "session.failed", thread: "001", payload: { session: R, reason } }), ctx());
     expect(r.events).toEqual([{ type: "notice.queued", payload: { session: M, text: TAB_RECREATED } }]);
@@ -552,4 +552,39 @@ test("tab_opened does not spawn a second coordinator for a failed one already re
   );
   const r = react(s, evs, ctx());
   expect(r.events.filter((e) => e.type === "session.created")).toHaveLength(1);
+});
+
+/**
+ * agt start after Herdr lost the tabs: layout.reconcile records a recovery coordinator split from the old root pane, and
+ * its tab.ensure reopens the tab in the same batch. A coordinator still starting without a pane when a tab opens can
+ * only target the old tab (a spawn into this tab follows its tab_opened), so it is replaced in the fresh root pane.
+ */
+test("a tab reopened while a recovery coordinator is still starting replaces it in the fresh root pane", () => {
+  n = 0;
+  const F = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+  const R = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const s = stateOf(INIT, threadCreated("002", { status: "open" }), { type: "thread.tab_opened", thread: "002", payload: { tab: "wC:t9", rootPane: "wC:pQ" } });
+  apply(
+    s,
+    { type: "session.created", thread: "002", payload: { session: F, role: "coordinator", agent: "claude-code", name: "c" } },
+    { type: "session.failed", thread: "002", payload: { session: F, reason: "herdr agent start: input contains a 1481-byte line" } },
+  );
+  const batch = apply(
+    s,
+    { type: "session.created", thread: "002", payload: { session: R, role: "coordinator", agent: "claude-code", name: "r", replaces: F, retirePane: "wC:pQ" } },
+    { type: "notice.queued", thread: "002", payload: { session: R, text: "carried" } },
+    { type: "thread.tab_opened", thread: "002", payload: { tab: "wD:t1", rootPane: "wD:p1" } },
+  );
+  const r = react(s, batch, ctx());
+  expect(r.events.find((e) => e.type === "session.lost")).toEqual({ type: "session.lost", thread: "002", payload: { session: R, reason: "tab was reopened" } });
+  const created = r.events.filter((e) => e.type === "session.created");
+  expect(created).toEqual([expect.objectContaining({ payload: expect.objectContaining({ role: "coordinator", replaces: R }) })]);
+  expect(r.events).toContainEqual(expect.objectContaining({ type: "notice.queued", payload: expect.objectContaining({ text: "carried" }) }));
+  expect(r.effects).toEqual([expect.objectContaining({ kind: "agent.spawn", role: "coordinator", pane: "wD:p1", bootstrap: "start" })]);
+  expect(r.effects[0]).not.toHaveProperty("splitFrom");
+  // the loss is not replaced a second time, and the old split's failure later changes nothing
+  apply(s, ...r.events);
+  const next = react(s, apply(s, ...r.events.filter((e) => e.type === "session.lost")), ctx());
+  expect(next.effects.filter((e) => e.kind === "agent.spawn")).toEqual([]);
+  expect([...s.sessions.values()].filter((x) => x.role === "coordinator" && x.status === "starting")).toHaveLength(1);
 });
