@@ -225,8 +225,8 @@ export const clockOf = (ms: number): string => {
 };
 
 /** The line `agt statusline` prints: `<profile> · 5h 25% ↻14:10 · 7d 48%`, only the parts that are present. */
-export function statuslineText(profile: string, usage: ProfileUsage): string {
-  const parts = [profile];
+export function statuslineText(profile: string, usage: ProfileUsage, session: string[] = []): string {
+  const parts = [profile, ...session];
   const { five_hour: five, seven_day: seven } = usage;
   if (five) parts.push(`5h ${Math.round(five.used)}% ↻${clockOf(five.resets_at * 1000)}`);
   if (seven) parts.push(`7d ${Math.round(seven.used)}%`);

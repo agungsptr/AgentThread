@@ -40,6 +40,26 @@ test("statusline records the usage atomically and prints the short line", async 
   expect(readdirSync(join(r, ".agentthread", "usage"))).toEqual(["personal.json"]);
 });
 
+test("statusline shows the session's model, effort level and context window after the profile", async () => {
+  const r = root();
+  const session = (o: object) => JSON.stringify({ session_id: "s-1", ...o, rate_limits: { five_hour: { used_percentage: 25, resets_at: T(130) } } });
+  const full = session({
+    model: { id: "claude-opus-5-5", display_name: "Opus 5.5" },
+    effort: { level: "xhigh" },
+    context_window: { total_input_tokens: 68_400, context_window_size: 200_000, used_percentage: 34.2 },
+  });
+  expect(await statuslineLine({ profile: "personal", root: r, stdin: full, env: env(), now: NOW })).toMatch(/^personal · Opus 5\.5 · xhigh · ctx 68k\/200k 34% · 5h 25% ↻\d\d:\d\d$/);
+  // a 1M window, and a percentage worked out when Claude Code has not sent one yet
+  const big = session({ model: { display_name: "Sonnet 5.5" }, context_window: { total_input_tokens: 250_000, context_window_size: 1_000_000, used_percentage: null } });
+  expect(await statuslineLine({ profile: "personal", root: r, stdin: big, env: env(), now: NOW })).toMatch(/^personal · Sonnet 5\.5 · ctx 250k\/1M 25% · 5h/);
+  // a model without effort, before the first response: no context part
+  const early = session({ model: { display_name: "Haiku 5.5" }, context_window: { total_input_tokens: 0, context_window_size: 200_000, used_percentage: null } });
+  expect(await statuslineLine({ profile: "personal", root: r, stdin: early, env: env(), now: NOW })).toMatch(/^personal · Haiku 5\.5 · ctx 0\/200k 0% · 5h/);
+  // fields of the wrong type are left out
+  const odd = session({ model: "x", effort: 3, context_window: { total_input_tokens: "a" } });
+  expect(await statuslineLine({ profile: "personal", root: r, stdin: odd, env: env(), now: NOW })).toMatch(/^personal · 5h/);
+});
+
 test("statusline with one window prints and records only that window", async () => {
   const r = root();
   expect(await statuslineLine({ profile: "work", root: r, stdin: stdin(undefined, [7, T(900)]), env: env(), now: NOW })).toBe("work · 7d 7%");

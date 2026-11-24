@@ -381,7 +381,8 @@ tier's `env`, because each profile sets it.
 
 **How the choice works.** Claude Code reports usage only through its statusLine command, so agt gives every Claude Code
 agent a statusLine that records the account's 5-hour and 7-day usage in `.agentthread/usage/<profile>.json` and prints a
-short line (`personal · 5h 25% ↻14:10 · 7d 48%`); agt also adds a `StopFailure` hook for `rate_limit`, which marks the
+short line with the session's model, effort level and context window
+(`personal · Opus 5.5 · xhigh · ctx 68k/200k 34% · 5h 25% ↻14:10 · 7d 48%`); agt also adds a `StopFailure` hook for `rate_limit`, which marks the
 account exhausted until its latest known reset (or 60 minutes). A profile is eligible while both windows are under
 `switch_at` (a window past its reset counts as 0) and it is not marked exhausted. New launches stick to the current
 profile while it is eligible (use up the first account). When it is not, agt picks the eligible profile whose 5-hour

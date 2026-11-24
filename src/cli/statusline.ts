@@ -35,9 +35,46 @@ export function runUserStatusline(command: string, stdin: string, env: Env, cwd:
   });
 }
 
+const obj = (v: unknown): Record<string, unknown> => (typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
+const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : undefined);
+
+/** A token count in a few characters: 950, 68k, 1M, 1.5M. */
+export function tokens(n: number): string {
+  if (n < 1_000) return String(Math.round(n));
+  if (n < 1_000_000) return `${Math.round(n / 1_000)}k`;
+  return `${Math.round(n / 100_000) / 10}M`;
+}
+
+/**
+ * The session's own parts of the line, from Claude Code's statusLine stdin: the model's display name, the effort
+ * (thinking) level, and the context window as used/size and percent. A field missing or of the wrong type is left out.
+ */
+export function sessionParts(stdin: string): string[] {
+  let j: unknown;
+  try {
+    j = JSON.parse(stdin);
+  } catch {
+    return [];
+  }
+  const o = obj(j);
+  const parts: string[] = [];
+  const model = obj(o.model).display_name;
+  if (typeof model === "string" && model) parts.push(model);
+  const effort = typeof o.effort === "string" ? o.effort : obj(o.effort).level;
+  if (typeof effort === "string" && effort) parts.push(effort);
+  const ctx = obj(o.context_window);
+  const used = num(ctx.total_input_tokens);
+  const size = num(ctx.context_window_size);
+  const pct = num(ctx.used_percentage) ?? (used !== undefined && size ? (used / size) * 100 : undefined);
+  if (used !== undefined && size) parts.push(`ctx ${tokens(used)}/${tokens(size)} ${Math.round(pct!)}%`);
+  else if (pct !== undefined) parts.push(`ctx ${Math.round(pct)}%`);
+  return parts;
+}
+
 /**
  * `agt statusline --profile <name> --root <root>`: Claude Code's statusLine command. Records the profile's usage
- * (.agentthread/usage/<profile>.json, atomically) and returns the text to print: agt's one short line, then the user's
+ * (.agentthread/usage/<profile>.json, atomically) and returns the text to print: agt's one short line (the profile, the
+ * session's model, effort and context window, then the profile's usage windows), then the user's
  * own statusLine output (agents.claude.statusline) on a second line. Never throws and never talks to the daemon.
  */
 export async function statuslineLine(o: { profile: string; root: string; stdin: string; env: Env; cwd?: string; now?: Date }): Promise<string> {
@@ -57,7 +94,7 @@ export async function statuslineLine(o: { profile: string; root: string; stdin: 
   } catch {
     // the usage file is telemetry: a failed write must not break the status line
   }
-  let line = statuslineText(o.profile, usage);
+  let line = statuslineText(o.profile, usage, sessionParts(o.stdin));
   const own = config.agents.claude.statusline;
   if (own) {
     const extra = await runUserStatusline(own, o.stdin, o.env, o.cwd ?? o.root);
