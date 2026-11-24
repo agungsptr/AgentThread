@@ -91,6 +91,13 @@ TUI's onboarding shows a directory-trust prompt for a project without a trust le
 No agent pushes; the vendors' own rules say so in both autonomy modes:
 - Claude Code: `"permissions": {"deny": ["Bash(git push:*)"]}` in the `--settings` JSON, in both modes. That the rule
   holds under `bypassPermissions` is not yet seen in a release run.
+
+### Claude Code settings file
+agt passes Claude Code's settings (hooks, the profile statusLine, push deny, and when not autonomous the role's allowed
+tools as `permissions.allow`) as a file, `--settings <root>/.agentthread/claude-settings/<hash>.json`, named by its
+content. Herdr types an agent's command line into the pane's shell, and a terminal in canonical mode refuses a line past
+1024 bytes on macOS: with a profile the inline JSON reached about 1.5 KB (a non-autonomous coordinator's
+`--allowed-tools` about 2 KB), and coordinators failed to start. When the file cannot be written the JSON goes inline.
 - OpenCode: `"bash": {"*": "allow", "git push*": "deny"}` inside `permission` when autonomous, `{"*": "ask", "git push*": "deny"}`
   when not. Per https://opencode.ai/docs/permissions (fetched 2026-10-24) `*` "matches zero or more of any character",
   so `git push*` covers a bare `git push` as well as `git push <args>` (the docs' own example, `"git push *"`, misses

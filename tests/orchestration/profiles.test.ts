@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { adapterFor } from "../../src/agents/adapters.ts";
+import { adapterFor, claudeSettings } from "../../src/agents/adapters.ts";
 import { hookSettings } from "../../src/agents/claude.ts";
 import type { ProfileUsage, UsageMap } from "../../src/agents/profiles.ts";
 import { handle } from "../../src/commands/handler.ts";
@@ -111,23 +111,24 @@ test("a session on another agent gets no profile", () => {
 });
 
 test("the claude adapter: settings carry the statusLine and the StopFailure hook, and CLAUDE_CONFIG_DIR is expanded", () => {
-  const launched = adapterFor("claude-code").launch({ role: "worker", run: { agent: "claude-code" }, config: cfg(), root: "/my root", profile: "personal", env: { HOME: "/home/u" } });
+  const input = { role: "worker", run: { agent: "claude-code" }, config: cfg(), root: "/my root", profile: "personal", env: { HOME: "/home/u" } } as const;
+  const launched = adapterFor("claude-code").launch(input);
   expect(launched.env).toEqual({ CLAUDE_CONFIG_DIR: "/home/u/.claude-a" });
-  const settings = JSON.parse(launched.args[launched.args.indexOf("--settings") + 1]!);
+  const settings = claudeSettings(input) as Record<string, any>;
   expect(settings.statusLine).toMatchObject({ type: "command", refreshInterval: 60 });
   expect(settings.statusLine.command).toContain("statusline --profile 'personal' --root '/my root'");
   expect(settings.hooks.StopFailure).toEqual([{ matcher: "rate_limit", hooks: [{ type: "command", command: expect.stringContaining("event rate-limited --profile 'personal'") }] }]);
   expect(Object.keys(settings.hooks)).toContain("Stop");
   // not autonomous: the same settings
-  const manual = adapterFor("claude-code").launch({ role: "worker", run: { agent: "claude-code" }, config: ConfigSchema.parse({ agents: { autonomous: false, claude: { profiles: cfg().agents.claude.profiles! } } }), root: "/r", profile: "work" });
-  expect(manual.env).toEqual({ CLAUDE_CONFIG_DIR: "/abs/.claude-b" });
-  expect(JSON.parse(manual.args[manual.args.indexOf("--settings") + 1]!).statusLine).toBeDefined();
+  const manualInput = { role: "worker", run: { agent: "claude-code" }, config: ConfigSchema.parse({ agents: { autonomous: false, claude: { profiles: cfg().agents.claude.profiles! } } }), root: "/r", profile: "work" } as const;
+  expect(adapterFor("claude-code").launch(manualInput).env).toEqual({ CLAUDE_CONFIG_DIR: "/abs/.claude-b" });
+  expect(claudeSettings(manualInput).statusLine).toBeDefined();
 });
 
 test("without a profile the launch is exactly what it was", () => {
-  const l = adapterFor("claude-code").launch({ role: "worker", run: { agent: "claude-code" }, config: DEFAULT_CONFIG, root: "/r" });
-  expect(l.env).toEqual({});
-  const settings = JSON.parse(l.args[l.args.indexOf("--settings") + 1]!);
+  const input = { role: "worker", run: { agent: "claude-code" }, config: DEFAULT_CONFIG, root: "/r" } as const;
+  expect(adapterFor("claude-code").launch(input).env).toEqual({});
+  const settings = claudeSettings(input) as Record<string, any>;
   expect(settings.statusLine).toBeUndefined();
   expect(settings.hooks.StopFailure).toBeUndefined();
   expect(hookSettings()).toEqual({ hooks: expect.objectContaining({ Stop: expect.anything() }) });

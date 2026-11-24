@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { adapterFor, prepareLaunch } from "../../src/agents/adapters.ts";
+import { adapterFor, claudeSettings, claudeSettingsFile, prepareLaunch } from "../../src/agents/adapters.ts";
 import { hookSettings } from "../../src/agents/claude.ts";
-import { DEFAULT_CONFIG } from "../../src/config/config.ts";
+import { ConfigSchema, DEFAULT_CONFIG } from "../../src/config/config.ts";
+import { shellQuote } from "../../src/herdr/bridge.ts";
 import { AGENT_KINDS } from "../../src/domain/types.ts";
 import { tabEnv } from "../../src/orchestration/sessions.ts";
 
@@ -50,38 +51,81 @@ test("agy with model and effort; not autonomous has no skip flag", () => {
   expect(adapterFor("agy").launch({ ...base, config: nonAuto, run: { agent: "agy" } }).args).toEqual(["--settings", AGY_SETTINGS]);
 });
 
-test("claude autonomous: bypassPermissions, skip prompt setting, model and effort, no allowed-tools", () => {
-  const { args, env } = adapterFor("claude-code").launch({ ...base, run: { agent: "claude-code", model: "claude-opus-5-5", effort: "high" } });
-  expect(args).toEqual([
-    "--permission-mode", "bypassPermissions",
-    "--settings", JSON.stringify({ ...hookSettings(), permissions: { deny: ["Bash(git push:*)"] }, skipDangerousModePermissionPrompt: true }),
-    "--model", "claude-opus-5-5",
-    "--effort", "high",
-  ]);
+/** The settings a Claude launch names: the file `--settings` points at, as prepare writes it. */
+const claudeSettingsOf = (input: Parameters<typeof claudeSettings>[0]) => claudeSettings(input) as { permissions: { allow?: string[]; deny: string[] } } & Record<string, unknown>;
+
+test("claude autonomous: bypassPermissions, the settings file, model and effort, no allow rules", () => {
+  const input = { ...base, run: { agent: "claude-code", model: "claude-opus-5-5", effort: "high" } } as const;
+  const { args, env } = adapterFor("claude-code").launch(input);
+  const settings = { ...hookSettings(), permissions: { deny: ["Bash(git push:*)"] }, skipDangerousModePermissionPrompt: true };
+  expect(claudeSettings(input)).toEqual(settings);
+  expect(args).toEqual(["--permission-mode", "bypassPermissions", "--settings", claudeSettingsFile("/r", settings), "--model", "claude-opus-5-5", "--effort", "high"]);
   expect(args).not.toContain("--allowed-tools");
   expect(env).toEqual({});
 });
 
-test("claude non-autonomous keeps permission mode and allowed tools", () => {
-  const { args } = adapterFor("claude-code").launch({ ...base, config: nonAuto, run: { agent: "claude-code" } });
-  expect(args).toEqual([
-    "--permission-mode", "acceptEdits",
-    "--allowed-tools", "Bash(agt *),Bash(git status*),Bash(git diff*),Bash(git log*),Read(//r/.agentthread/**)",
-    "--settings", JSON.stringify({ ...hookSettings(), permissions: { deny: ["Bash(git push:*)"] } }),
-  ]);
-  const main = adapterFor("claude-code").launch({ ...base, role: "main", config: nonAuto, run: { agent: "claude-code", model: "opus" } }).args;
-  expect(main.slice(2, 4)).toEqual(["--allowed-tools", "Bash(agt *)"]);
-  expect(main.slice(-2)).toEqual(["--model", "opus"]);
+test("claude non-autonomous keeps the permission mode; its allowed tools are the settings' allow rules", () => {
+  const input = { ...base, config: nonAuto, run: { agent: "claude-code" } } as const;
+  const { args } = adapterFor("claude-code").launch(input);
+  const settings = { ...hookSettings(), permissions: { allow: ["Bash(agt *)", "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)", "Read(//r/.agentthread/**)"], deny: ["Bash(git push:*)"] } };
+  expect(claudeSettings(input)).toEqual(settings);
+  expect(args).toEqual(["--permission-mode", "acceptEdits", "--settings", claudeSettingsFile("/r", settings)]);
+  const mainInput = { ...base, role: "main", config: nonAuto, run: { agent: "claude-code", model: "opus" } } as const;
+  expect(claudeSettingsOf(mainInput).permissions.allow).toEqual(["Bash(agt *)"]);
+  expect(adapterFor("claude-code").launch(mainInput).args.slice(-2)).toEqual(["--model", "opus"]);
 });
 
 test("I1: a claude worker of a task thread, not autonomous, may git add and git commit", () => {
-  const tools = (legacy?: boolean) => {
-    const args = adapterFor("claude-code").launch({ ...base, config: nonAuto, run: { agent: "claude-code" }, ...(legacy !== undefined ? { legacy } : {}) }).args;
-    return args[args.indexOf("--allowed-tools") + 1];
-  };
+  const tools = (legacy?: boolean) => claudeSettingsOf({ ...base, config: nonAuto, run: { agent: "claude-code" }, ...(legacy !== undefined ? { legacy } : {}) }).permissions.allow!.join(",");
   expect(tools(false)).toBe("Bash(agt *),Bash(git status*),Bash(git diff*),Bash(git log*),Bash(git add *),Bash(git commit *),Read(//r/.agentthread/**)");
   expect(tools(true)).toBe("Bash(agt *),Bash(git status*),Bash(git diff*),Bash(git log*),Read(//r/.agentthread/**)");
   expect(tools()).toBe("Bash(agt *),Bash(git status*),Bash(git diff*),Bash(git log*),Read(//r/.agentthread/**)");
+});
+
+/** Herdr types the agent's command line into the pane's shell: past the canonical limit (1024 bytes on macOS) it is refused. */
+test("a claude launch line stays well under the terminal's canonical limit, with a profile, in both modes, for every role", () => {
+  const root = "/Users/someone/Projects/Some Client/A Rather Long Workspace Name-agt";
+  const profiles = ConfigSchema.parse({ agents: { claude: { profiles: [{ name: "claude-a-long-profile-name", config_dir: "/a" }, { name: "b", config_dir: "/b" }] } } });
+  for (const autonomous of [true, false])
+    for (const role of ["main", "coordinator", "worker"] as const) {
+      const config = { ...profiles, agents: { ...profiles.agents, autonomous } };
+      const input = { role, config, root, legacy: false, ticketDoc: ".docs/shared/issues/some-feature/03-a-long-ticket-name.md", profile: "claude-a-long-profile-name", run: { agent: "claude-code", model: "claude-opus-5-5", effort: "xhigh" } } as const;
+      const line = ["claude", ...adapterFor("claude-code").launch(input).args].map(shellQuote).join(" ");
+      expect({ role, autonomous, bytes: Buffer.byteLength(line) < 512 }).toEqual({ role, autonomous, bytes: true });
+    }
+});
+
+test("claude's prepare writes the settings file the launch names, the same file for the same settings", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "agt-claude-")));
+  try {
+    const adapter = adapterFor("claude-code");
+    const input = { ...base, root, config: nonAuto, run: { agent: "claude-code" } } as const;
+    const args = adapter.launch(input).args;
+    const file = args[args.indexOf("--settings") + 1]!;
+    expect(file.startsWith(join(root, ".agentthread", "claude-settings") + "/")).toBe(true);
+    expect(existsSync(file)).toBe(false);
+    expect(adapter.prepare!(input)).toBe(true);
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual(claudeSettings(input));
+    expect(adapter.prepare!(input)).toBe(true);
+    expect(readdirSync(join(root, ".agentthread", "claude-settings"))).toHaveLength(1);
+    // other settings, another file
+    const coordinator = { ...input, role: "coordinator" } as const;
+    expect(adapter.prepare!(coordinator)).toBe(true);
+    const other = adapter.launch(coordinator).args;
+    expect(other[other.indexOf("--settings") + 1]).not.toBe(file);
+    expect(readdirSync(join(root, ".agentthread", "claude-settings"))).toHaveLength(2);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("prepareLaunch starts claude with the settings inline (and logs) when the file cannot be written", () => {
+  const adapter = adapterFor("claude-code");
+  const input = { ...base, root: "/nonexistent-agt-root/x", run: { agent: "claude-code", model: "m" } } as const;
+  const msgs: string[] = [];
+  const launched = prepareLaunch(adapter, input, adapter.launch(input), (m) => msgs.push(m));
+  expect(launched.args).toEqual(["--permission-mode", "bypassPermissions", "--settings", JSON.stringify(claudeSettings(input)), "--model", "m"]);
+  expect(msgs).toHaveLength(1);
 });
 
 // OpenCode 2 TUIs attach to a shared background service by default, whose own config wins over the TUI's
@@ -176,8 +220,7 @@ test("codex: also trusts the realpath of the root and the worktree when it diffe
 
 test("push is denied by the vendor's own rules in both modes (Claude Code, OpenCode)", () => {
   for (const config of [DEFAULT_CONFIG, nonAuto]) {
-    const claude = adapterFor("claude-code").launch({ ...base, config, run: { agent: "claude-code" } }).args;
-    expect(JSON.parse(claude[claude.indexOf("--settings") + 1]!).permissions).toEqual({ deny: ["Bash(git push:*)"] });
+    expect(claudeSettingsOf({ ...base, config, run: { agent: "claude-code" } }).permissions.deny).toEqual(["Bash(git push:*)"]);
     const oc = JSON.parse(adapterFor("opencode").launch({ ...base, config, run: { agent: "opencode" } }).env.OPENCODE_CONFIG_CONTENT!);
     expect(oc.permission.bash["git push*"]).toBe("deny");
     // the catch-all comes first: the last matching rule wins
@@ -186,12 +229,12 @@ test("push is denied by the vendor's own rules in both modes (Claude Code, OpenC
 });
 
 test("§13: claude passes the worker's ticket doc into its allow rules (task threads, not autonomous)", () => {
-  const args = adapterFor("claude-code").launch({ ...base, config: nonAuto, legacy: false, ticketDoc: ".docs/a/02.md", run: { agent: "claude-code" } }).args;
-  const tools = args[args.indexOf("--allowed-tools") + 1]!.split(",");
+  const { permissions } = claudeSettingsOf({ ...base, config: nonAuto, legacy: false, ticketDoc: ".docs/a/02.md", run: { agent: "claude-code" } });
+  const tools = permissions.allow!;
   expect(tools).toContain("Edit(//r/.docs/a/02.md)");
   expect(tools).toContain("Write(//r/.docs/a/02.md)");
   expect(tools).toContain("Read(//r/.docs/a/02.md)");
-  expect(JSON.parse(args[args.indexOf("--settings") + 1]!).permissions).toEqual({ deny: ["Bash(git push:*)"] });
+  expect(permissions.deny).toEqual(["Bash(git push:*)"]);
 });
 
 test("§13: opencode ask mode lets a task-thread worker add and commit, the coordinator switch, squash and commit; push stays denied last", () => {
@@ -287,7 +330,6 @@ test("a failing prepare is not mangled by omp's fallback: another adapter withou
 
 // agents.env / roles.<role>.env: the user's env for every agent agt launches, under the adapter's own env.
 import { claudeAccountNote } from "../../src/agents/roles.ts";
-import { ConfigSchema } from "../../src/config/config.ts";
 import { expandHome } from "../../src/agents/adapters.ts";
 
 const envConfig = (agents: object) => ConfigSchema.parse({ agents });

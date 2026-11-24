@@ -9,7 +9,7 @@ import { startDaemon, type Daemon } from "../../src/daemon/server.ts";
 import type { Actor, StoredEvent } from "../../src/domain/types.ts";
 import { initProject } from "../../src/project/init.ts";
 import { paths } from "../../src/project/paths.ts";
-import { FAKE_HERDR, fakeHerdrState, isolatedConfigHome, tempRepo, waitFor } from "../helpers.ts";
+import { FAKE_HERDR, fakeHerdrState, isolatedConfigHome, launchedSettings, tempRepo, waitFor } from "../helpers.ts";
 
 let root: string;
 let daemon: Daemon;
@@ -53,7 +53,7 @@ test("the first coordinator launches on the profile chosen from the usage files,
   await waitFor(() => jobs.length > 0, 10_000);
   const job = jobs[0]!;
   expect(job.exportEnv?.CLAUDE_CONFIG_DIR).toBe("/fixture/b");
-  const settings = JSON.parse(job.args[job.args.indexOf("--settings") + 1]!);
+  const settings = launchedSettings(job.args);
   expect(settings.statusLine.command).toContain("statusline --profile 'work'");
   expect(settings.hooks.StopFailure[0].matcher).toBe("rate_limit");
   const evs = await events();
@@ -100,7 +100,7 @@ test("a single profile or none: no switching, no statusLine, no profile events",
   await boot(jobs, "agents:\n  claude:\n    profiles:\n      - { name: solo, config_dir: /fixture/s }\n");
   await cmd({ cmd: "thread.new", title: "X", type: "bug" });
   await waitFor(() => jobs.length > 0, 10_000);
-  const settings = JSON.parse(jobs[0]!.args[jobs[0]!.args.indexOf("--settings") + 1]!);
+  const settings = launchedSettings(jobs[0]!.args);
   expect(settings.statusLine).toBeUndefined();
   expect(settings.hooks.StopFailure).toBeUndefined();
   expect((await events()).some((e) => e.type.startsWith("profile."))).toBe(false);

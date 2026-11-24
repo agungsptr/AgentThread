@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../config/config.ts";
@@ -49,8 +50,8 @@ export interface AgentAdapter {
   promptArgs(text: string): string[];
   /** Writes files `launch()` names; run it just before the agent starts (launch itself stays pure). False: it failed. */
   prepare?(o: LaunchInput): boolean;
-  /** The args to start with when `prepare` failed: `launch()`'s args minus whatever names the files it could not write. */
-  degradedArgs?(args: string[]): string[];
+  /** The args to start with when `prepare` failed: `launch()`'s args without the files it could not write. */
+  degradedArgs?(args: string[], o: LaunchInput): string[];
   capabilities: { hooks: boolean; contextSize: boolean; preCompact: boolean };
   /**
    * The agent's one-time folder-trust dialog, which agt answers itself when the agent starts in a folder agt created
@@ -70,6 +71,49 @@ export const AGENT_PROCESS_ENV: Readonly<Record<string, string>> = { AGT_AGENT_P
 const processEnv = () => ({ ...AGENT_PROCESS_ENV });
 const NO_HOOKS = { hooks: false, contextSize: false, preCompact: false };
 
+/**
+ * The settings of a Claude Code launch: agt's hooks (and with a profile its statusLine and rate_limit hook), push denied
+ * by Claude Code's own rules whatever the permission mode, and, not autonomous, the role's allowed tools as allow rules.
+ */
+export function claudeSettings({ role, config, root, legacy, ticketDoc, profile }: LaunchInput): Record<string, unknown> {
+  const deny = ["Bash(git push:*)"];
+  const hooks = hookSettings(profile ? { profile, root } : undefined);
+  if (config.agents.autonomous) return { ...hooks, permissions: { deny }, skipDangerousModePermissionPrompt: true };
+  const allow = allowedTools(role, config, root, { ...(legacy === undefined ? {} : { legacy }), ...(ticketDoc === undefined ? {} : { doc: ticketDoc }) });
+  return { ...hooks, permissions: { allow, deny } };
+}
+
+/**
+ * Where `settings` are written for `--settings`: named by their content, so concurrent launches with the same settings
+ * share one file and a launch never reads another's. A file, not inline JSON: Herdr types the agent's command line into
+ * the pane's shell, which refuses a line past the terminal's canonical limit (1024 bytes on macOS).
+ */
+export function claudeSettingsFile(root: string, settings: Record<string, unknown>): string {
+  const hash = createHash("sha256").update(JSON.stringify(settings)).digest("hex").slice(0, 16);
+  return join(root, ".agentthread", "claude-settings", `${hash}.json`);
+}
+
+/** Writes the settings file `launch()` names (atomically: a concurrent launch may read it); false when it cannot. */
+function prepareClaude(input: LaunchInput): boolean {
+  const settings = claudeSettings(input);
+  const file = claudeSettingsFile(input.root, settings);
+  const text = JSON.stringify(settings);
+  try {
+    try {
+      if (readFileSync(file, "utf8") === text) return true;
+    } catch {
+      // Not written yet: written below.
+    }
+    mkdirSync(join(input.root, ".agentthread", "claude-settings"), { recursive: true });
+    const tmp = `${file}.${process.pid}.tmp`;
+    writeFileSync(tmp, text);
+    renameSync(tmp, file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const claudeAdapter: AgentAdapter = {
   agent: "claude-code",
   displayName: "Claude Code",
@@ -77,16 +121,18 @@ const claudeAdapter: AgentAdapter = {
   bin: "claude",
   instructionFiles: ["CLAUDE.md"],
   prompt: "positional",
-  launch({ role, run, config, root, legacy, ticketDoc, profile, env = process.env }) {
-    // Pushing is the user's call: denied by Claude Code's own rules, whatever the permission mode.
-    const settings = { ...hookSettings(profile ? { profile, root } : undefined), permissions: { deny: ["Bash(git push:*)"] } };
-    const args = config.agents.autonomous
-      ? ["--permission-mode", "bypassPermissions", "--settings", JSON.stringify({ ...settings, skipDangerousModePermissionPrompt: true })]
-      : [
-          "--permission-mode", config.agents.claude.permission_mode,
-          "--allowed-tools", allowedTools(role, config, root, { ...(legacy === undefined ? {} : { legacy }), ...(ticketDoc === undefined ? {} : { doc: ticketDoc }) }).join(","),
-          "--settings", JSON.stringify(settings),
-        ];
+  prepare: prepareClaude,
+  // Without the file the settings go inline: a long line Herdr may refuse, but never an agent without its hooks and push deny.
+  degradedArgs(args, input) {
+    const i = args.indexOf("--settings");
+    if (i >= 0) args[i + 1] = JSON.stringify(claudeSettings(input));
+    return args;
+  },
+  launch(input) {
+    const { run, config, root, profile, env = process.env } = input;
+    const settings = claudeSettingsFile(root, claudeSettings(input));
+    const mode = config.agents.autonomous ? "bypassPermissions" : config.agents.claude.permission_mode;
+    const args = ["--permission-mode", mode, "--settings", settings];
     if (run.model) args.push("--model", run.model);
     if (run.effort) args.push("--effort", run.effort);
     const dir = profile ? profileDir(config, profile, env) : undefined;
@@ -206,12 +252,13 @@ function prepareOmp({ root, config }: LaunchInput): boolean {
 
 /**
  * Runs the adapter's prepare step (if any) just before its agent starts, and returns the launch with the files it names
- * dropped when preparing failed (the agent then starts without them; `onFail` logs once).
+ * replaced by its `degradedArgs` when preparing failed (omp starts without its overlay, Claude with its settings inline;
+ * `onFail` logs once).
  */
 export function prepareLaunch<L extends { args: string[] }>(adapter: AgentAdapter, input: LaunchInput, launched: L, onFail: (msg: string) => void = () => {}): L {
   if (!adapter.prepare || adapter.prepare(input)) return launched;
-  onFail(`cannot write the ${adapter.displayName} launch files under ${join(input.root, ".agentthread")}; starting without them`);
-  return adapter.degradedArgs ? { ...launched, args: adapter.degradedArgs([...launched.args]) } : launched;
+  onFail(`cannot write the ${adapter.displayName} launch files under ${join(input.root, ".agentthread")}; starting with its fallback launch`);
+  return adapter.degradedArgs ? { ...launched, args: adapter.degradedArgs([...launched.args], input) } : launched;
 }
 
 const ompAdapter: AgentAdapter = {

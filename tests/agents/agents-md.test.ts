@@ -15,7 +15,7 @@ import { handle } from "../../src/commands/handler.ts";
 import { CommandSchema } from "../../src/commands/schema.ts";
 import type { StoredEvent } from "../../src/domain/types.ts";
 import { writeAll } from "../../src/render/write.ts";
-import { INIT, isolatedConfigHome, stateOf, taskThreadCreated, tempRepo } from "../helpers.ts";
+import { INIT, isolatedConfigHome, launchedSettings, stateOf, taskThreadCreated, tempRepo } from "../helpers.ts";
 
 function git(dir: string, ...args: string[]): string {
   const r = Bun.spawnSync(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" });
@@ -921,7 +921,7 @@ describe("thread directory", () => {
     const nonAuto = { ...NO_SKILL, agents: { ...NO_SKILL.agents, autonomous: false } };
     const runAsk = createEffectRunner({ root, config: nonAuto, layout: () => LAYOUT, thread: () => thread, launch: (job) => asked.push(job), log: () => {} });
     expect(await runAsk({ ...split, session: "s-3", role: "worker", ticket: "T1", splitFrom: "p2", direction: "down" })).toEqual([]);
-    const tools = asked[0]!.args[asked[0]!.args.indexOf("--allowed-tools") + 1]!.split(",");
+    const tools: string[] = launchedSettings(asked[0]!.args).permissions.allow;
     expect(tools.filter((x) => x.startsWith("Edit(") || x.startsWith("Write("))).toEqual([`Edit(/${doc})`, `Write(/${doc})`]);
     expect(tools).toContain(`Read(/${doc})`);
   });

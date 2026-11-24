@@ -184,3 +184,9 @@ export function loggerStandIn(): number {
   process.on("exit", () => p.kill());
   return p.pid;
 }
+
+/** The Claude settings an agent was launched with: the file `--settings` names (its fallback: the JSON itself). */
+export function launchedSettings(args: string[]): Record<string, any> {
+  const v = args[args.indexOf("--settings") + 1]!;
+  return JSON.parse(v.startsWith("{") ? v : readFileSync(v, "utf8"));
+}
