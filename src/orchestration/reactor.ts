@@ -74,9 +74,12 @@ export const noticeRetryMs = (held: number): number => Math.min(NOTICE_RETRY_MS 
 /** The hold count at which the backoff first reaches its cap. */
 export const NOTICE_HELD_CAPPED_AT = Math.ceil(Math.log2(NOTICE_RETRY_MAX_MS / NOTICE_RETRY_MS)) + 1;
 
-/** The delivery of a live idle session's queued notices to its pane, or undefined when there is nothing to deliver now. */
-export function noticeDelivery(s: Session): Extract<Effect, { kind: "notice.deliver" }> | undefined {
-  if (!isLive(s) || s.status !== "idle" || !s.pane || s.notices.length === 0) return undefined;
+/**
+ * The delivery of a live idle session's queued notices to its pane, or undefined when there is nothing to deliver now.
+ * `busy`: to a working session as well (the sweep's late delivery to a busy Claude Code agent).
+ */
+export function noticeDelivery(s: Session, o: { busy?: boolean } = {}): Extract<Effect, { kind: "notice.deliver" }> | undefined {
+  if (!isLive(s) || !(s.status === "idle" || (o.busy && s.status === "active")) || !s.pane || s.notices.length === 0) return undefined;
   return {
     kind: "notice.deliver",
     session: s.id,

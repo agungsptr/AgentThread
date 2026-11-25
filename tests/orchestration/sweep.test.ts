@@ -383,3 +383,47 @@ test("a busy coordinator with notices queued for over 10 minutes has main told o
   );
   expect(told(sweep(idle, min(20), ctx()))).toEqual([]);
 });
+
+/**
+ * Claude Code takes a message while it works (verified with Herdr 2026-11-25: a prompt typed while the agent waited on a
+ * background task woke it within 5s), so a busy Claude Code agent's notices go in after NOTICE_BUSY_DELIVER_AFTER_MS
+ * instead of waiting for an idle that may not come. Other agents, main, and an agent at a dialog keep waiting.
+ */
+test("a busy Claude Code coordinator or worker gets its notices after 3 minutes; other agents, main and a blocked one wait", () => {
+  const M = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const min = (m: number) => new Date(Date.parse(T0) + m * 60_000).toISOString();
+  const busy = (agent: "claude-code" | "codex", role: "coordinator" | "worker" | "main" = "coordinator") => {
+    const s = stateOf(INIT, threadCreated("001", { status: "in_progress" }), { type: "thread.tab_opened", thread: "001", payload: { tab: "w1:t2", rootPane: "w1:p2" } });
+    const id = role === "main" ? M : C;
+    apply(
+      s,
+      T0,
+      ...(role === "main" ? [] : [{ type: "session.created" as const, payload: { session: M, role: "main" as const, agent: "claude-code" as const, name: "m" } }, { type: "session.attached" as const, payload: { session: M, pane: "w1:p0" } }]),
+      { type: "session.created", ...(role === "main" ? {} : { thread: "001" }), payload: { session: id, role, agent, name: "c", ...(role === "worker" ? { ticket: "T1" } : {}) } } as EventBody,
+      { type: "session.attached", ...(role === "main" ? {} : { thread: "001" }), payload: { session: id, pane: "w1:p2" } } as EventBody,
+      { type: "session.started", ...(role === "main" ? {} : { thread: "001" }), payload: { session: id } } as EventBody,
+      { type: "session.active", ...(role === "main" ? {} : { thread: "001" }), payload: { session: id } } as EventBody,
+    );
+    apply(s, min(1), { type: "notice.queued", ...(role === "main" ? {} : { thread: "001" }), payload: { session: id, text: "Ticket T3 is ready for review." } } as EventBody);
+    return { s, id };
+  };
+  const deliveries = (r: { effects: Effect[] }) => r.effects.filter((e) => e.kind === "notice.deliver");
+  const { s, id } = busy("claude-code");
+  expect(deliveries(sweep(s, min(3.9), ctx()))).toEqual([]);
+  expect(deliveries(sweep(s, min(4.1), ctx()))).toEqual([
+    { kind: "notice.deliver", session: id, thread: "001", agent: "claude-code", pane: "w1:p2", text: "Ticket T3 is ready for review.", count: 1, texts: ["Ticket T3 is ready for review."] },
+  ]);
+  // a held busy delivery backs off like any other
+  apply(s, min(4.1), { type: "notice.held", thread: "001", payload: { session: id, reason: "delivery failed: x" } });
+  expect(deliveries(sweep(s, min(4.2), ctx()))).toEqual([]);
+  expect(deliveries(sweep(s, min(4.5), ctx()))).toHaveLength(1);
+  // a worker too
+  const w = busy("claude-code", "worker");
+  expect(deliveries(sweep(w.s, min(5), ctx()))).toHaveLength(1);
+  // not another agent kind, not main (the user's pane), not one blocked on a dialog
+  expect(deliveries(sweep(busy("codex").s, min(9), ctx()))).toEqual([]);
+  expect(deliveries(sweep(busy("claude-code", "main").s, min(9), ctx()))).toEqual([]);
+  const b = busy("claude-code");
+  apply(b.s, min(2), { type: "agent.blocked", thread: "001", payload: { session: b.id } });
+  expect(deliveries(sweep(b.s, min(9), ctx()))).toEqual([]);
+});

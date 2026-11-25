@@ -469,9 +469,11 @@ make wt-new TASK=my-task REPOS=api,web SRC=main
 Asked again before you answer (in other words, or by a coordinator that replaced it after a rotation), it is not told
 to main a second time.
 
-**A busy coordinator.** Notices reach an agent when it goes idle. When a coordinator has been busy for over 10 minutes
-without reading its notices (for example stuck in a long wait of its own), main is told once, with the thread tab to
-check: Esc there interrupts it so it reads them.
+**A busy coordinator.** Notices reach an agent when it goes idle. A Claude Code coordinator or worker that stays busy
+gets them anyway after 3 minutes: Claude Code takes a message while it works and reads it at its next step (it wakes
+from a wait on background work). Other agents keep waiting for their idle. When a coordinator has still not read its
+notices after 10 minutes (for example stuck in a long wait of its own), main is told once, with the thread tab to check:
+Esc there interrupts it so it reads them.
 
 **After a merge.** When your PRs are merged, tell the thread's coordinator. It verifies each repo contains the squash
 branch, releases the stack lock and tells main. Main then marks the thread done, restarts the stack on `main` if needed

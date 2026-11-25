@@ -19,6 +19,11 @@ export const MAX_IDLE_NOTICES = 3;
  * (a shell loop, a background watcher) never goes idle, so they are never delivered.
  */
 export const NOTICE_STUCK_AFTER_MS = 10 * 60_000;
+/**
+ * How long a busy Claude Code agent's notices wait for its idle before they go in anyway: Claude Code takes a message
+ * while it works and reads it at its next step, waking from a wait on background work (verified with Herdr 2026-11-25).
+ */
+export const NOTICE_BUSY_DELIVER_AFTER_MS = 3 * 60_000;
 /** A coordinator is rotated for its Claude profile usage at most once per thread within this long. */
 export const USAGE_ROTATION_GAP_MS = 10 * 60_000;
 
@@ -117,6 +122,15 @@ export function sweep(state: State, now: string, ctx: ReactorContext): { events:
       }
     }
     const e = noticeDelivery(s);
+    if (e) effects.push(e);
+  }
+  // A busy Claude Code coordinator or worker whose notices have waited NOTICE_BUSY_DELIVER_AFTER_MS gets them now, on the
+  // held backoff. Not main (the user types in its pane), not another agent kind, never into a dialog.
+  for (const s of state.sessions.values()) {
+    if (!isLive(s) || failed.has(s.id) || s.role === "main" || s.agent !== "claude-code" || s.status !== "active" || s.blockedNotified) continue;
+    if (!s.noticesSince || !s.notices.length || Date.parse(now) - Date.parse(s.noticesSince) <= NOTICE_BUSY_DELIVER_AFTER_MS) continue;
+    if (s.noticeHeldAt && Date.parse(now) - Date.parse(s.noticeHeldAt) <= noticeRetryMs(s.noticeHeldCount ?? 1)) continue;
+    const e = noticeDelivery(s, { busy: true });
     if (e) effects.push(e);
   }
   // A busy coordinator that has not read its notices for NOTICE_STUCK_AFTER_MS: main hears once per stretch (not for an
