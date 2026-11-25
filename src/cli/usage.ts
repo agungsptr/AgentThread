@@ -10,7 +10,7 @@ export const USAGE = `usage: agt <command>
   thread new <title...> --type feature|bug|chore [--goal <text>] [--criteria <text>]... [--depends <id>]... [--max-workers <n>] [--task <name>] [--browser-check]
              [--tier <name> --reason <why> [--now]]
   thread choose <id> --tier <name>
-  thread cancel <id>
+  thread cancel <id> [--reason <text>]   stop a thread: its agents end, its tab closes, it is done (its worktrees stay)
   thread status <id> <status> [--reason <text>]
   thread browser-check <id>   the user asked for a browser check: stage 8 is required again (undoes agt's "not requested" skip)
   thread waiting <id> "<what>"   say the coordinator waits for the user; main is told, and it ends when the user answers

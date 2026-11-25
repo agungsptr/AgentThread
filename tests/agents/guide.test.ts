@@ -97,3 +97,13 @@ describe("guide", () => {
     }
   });
 });
+
+test("main's task-thread guide stops a thread with cancel and a reason; a legacy guide stays as it was", () => {
+  const task = guide({ role: "main", root: "/repo", config: DEFAULT_CONFIG });
+  expect(task).toContain("agt thread cancel <id> [--reason <text>]");
+  expect(task).toContain("run `agt thread cancel <id> --reason \"<why>\"`; never park it with `agt thread status <id> blocked`");
+  const legacy = guide({ role: "main", root: "/repo", config: DEFAULT_CONFIG, legacy: true });
+  expect(legacy).toContain("agt thread cancel <id>\n");
+  expect(legacy).not.toContain("--reason <text>]   stop a thread");
+  expect(legacy).not.toContain("never park it");
+});

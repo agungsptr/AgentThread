@@ -58,9 +58,14 @@ const COMMAND_OVERRIDES: Partial<Record<SessionRole, Record<string, string>>> = 
 
 const NEVER_LEGACY = "- Never push; never commit as a worker; never bypass the commit guard.";
 
+/** Task threads only (a legacy guide stays as it was): main stops a running thread with cancel, not a parked status. */
+const MAIN_CANCEL =
+  "- The user wants a thread stopped or dropped (a duplicate, no longer needed): run `agt thread cancel <id> --reason \"<why>\"`; never park it with `agt thread status <id> blocked`, which an agt start would pick up again.";
+
 const WRONG: Record<SessionRole, string[]> = {
   main: [
     "- A thread waits for the user's tier choice: relay the choice with `agt thread choose`, or stop it with `agt thread cancel`.",
+    MAIN_CANCEL,
     "- A notification arrives from a thread: relay it to the user; use `agt tell` to pass their answer on to the coordinator.",
   ],
   coordinator: [
@@ -114,12 +119,12 @@ function roleGuide(role: SessionRole, o: GuideInput, level: "#" | "##"): string 
     `${h} Commands`,
     "",
     "```",
-    ...[...COMMANDS[role], ...(t.dir !== undefined ? (COMMANDS_TASK[role] ?? []) : [])].flatMap((c) => (COMMAND_OVERRIDES[role]?.[c] ? [COMMAND_OVERRIDES[role][c]!] : usageLines(c)).map((l) => (t.dir === undefined ? l.replace(" [--browser-check]", "") : l)).map((l, i) => (i === 0 ? `agt ${l}` : `    ${l}`))),
+    ...[...COMMANDS[role], ...(t.dir !== undefined ? (COMMANDS_TASK[role] ?? []) : [])].flatMap((c) => (COMMAND_OVERRIDES[role]?.[c] ? [COMMAND_OVERRIDES[role][c]!] : usageLines(c)).map((l) => (t.dir === undefined ? l.replace(" [--browser-check]", "").replace(/^(thread cancel <id>) .*$/, "$1") : l)).map((l, i) => (i === 0 ? `agt ${l}` : `    ${l}`))),
     "```",
     "",
     `${h} When things go wrong`,
     "",
-    ...WRONG[role].flatMap((l) => (l === NEVER_LEGACY && t.dir !== undefined ? [...(WRONG_TASK[role] ?? []), NEVER_TASK[role] ?? l] : [l])),
+    ...WRONG[role].flatMap((l) => (l === NEVER_LEGACY && t.dir !== undefined ? [...(WRONG_TASK[role] ?? []), NEVER_TASK[role] ?? l] : l === MAIN_CANCEL && t.dir === undefined ? [] : [l])),
     "",
     `${h} Where state lives`,
     "",

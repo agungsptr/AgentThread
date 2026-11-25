@@ -166,6 +166,8 @@ Override a prefix with `workflow.branch_prefix` (`wip` and `thread` are refused:
 creates threads with `agt thread new <title...> --type feature|bug|chore`. It can also propose a complexity tier
 (`--tier <name> --reason <why>`): the thread waits for your `agt thread choose <id> --tier <name>` (or
 `agt thread cancel <id>`), and when `agents.complexity.timeout` runs out the proposed tier is accepted automatically.
+`agt thread cancel <id> [--reason <text>]` also stops a running thread, whatever its status: its agents end, its tab
+closes and it is done. Its worktrees and branches stay until `agt thread cleanup <id>`.
 
 ### Tickets and file lists
 

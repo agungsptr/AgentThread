@@ -512,8 +512,9 @@ async function thread(sub: string | undefined, args: string[], root: string, env
     return send(root, env, { cmd: "thread.choose", thread: positionals[0], tier: values.tier });
   }
   if (sub === "cancel") {
-    if (!args[0] || args.length > 1) throw new UsageError("thread cancel needs <id>");
-    return send(root, env, { cmd: "thread.cancel", thread: args[0] });
+    const { values, positionals } = parse(args, { reason: { type: "string" } });
+    if (!positionals[0] || positionals.length > 1) throw new UsageError("thread cancel needs <id> [--reason <text>]");
+    return send(root, env, { cmd: "thread.cancel", thread: positionals[0], ...(values.reason ? { reason: values.reason } : {}) });
   }
   if (sub === "cleanup") {
     if (!args[0] || args.length > 1) throw new UsageError("thread cleanup needs <id>");

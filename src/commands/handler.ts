@@ -356,9 +356,10 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
       return { events: [{ type: "thread.waiting", thread: t.id, payload: { what: cmd.what } }] };
     case "thread.cancel":
       if (t.cleanupRequested) reject(cleanupRunning(t));
-      if (!t.tierProposal) reject(`thread ${t.id} is not waiting for a tier`);
-      // The usual path to done (dependents unblock), though an open or blocked thread cannot otherwise go straight to done.
-      return threadStatus(state, t, "done", "cancelled before start", ctx, { cancel: true });
+      if (t.status === "done") reject(`thread ${t.id} is done`);
+      // The usual path to done from any status: its agents end, its tab closes, dependents unblock. Its worktrees and
+      // branches stay (agt thread cleanup removes them).
+      return threadStatus(state, t, "done", cmd.reason ? `cancelled: ${cmd.reason}` : t.tierProposal ? "cancelled before start" : "cancelled", ctx, { cancel: true });
     case "ticket.add": {
       if (t.status === "done") reject(`thread ${t.id} is done`);
       const ticket = `T${t.tickets.length + 1}`;

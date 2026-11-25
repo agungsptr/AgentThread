@@ -133,7 +133,6 @@ test("choose after the timer fired is rejected", () => {
   const auto = run(s, { cmd: "thread.choose", thread: "001", tier: "big", auto: true }, USER);
   expect(auto.r.ok && auto.r.events).toEqual([{ type: "thread.tier_chosen", thread: "001", payload: { tier: "big", auto: true } }]);
   expect(run(s, { cmd: "thread.choose", thread: "001", tier: "small" }).r).toEqual({ ok: false, error: "thread 001 is not waiting for a tier" });
-  expect(run(s, { cmd: "thread.cancel", thread: "001" }).r).toEqual({ ok: false, error: "thread 001 is not waiting for a tier" });
 });
 
 test("only the user (the daemon) may auto-choose", () => {
@@ -185,11 +184,34 @@ test("a proposal runs and comes due with no main session at all", () => {
   expect(dueProposals(s, Date.parse("2026-10-24T10:00:10.000Z"), 10_000)).toEqual(["001"]);
 });
 
-test("choose and cancel are rejected for a thread that was never proposed", () => {
+test("choose is rejected for a thread that was never proposed", () => {
   const s = base();
   run(s, NEW);
   expect(run(s, { cmd: "thread.choose", thread: "001", tier: "big" }).r).toEqual({ ok: false, error: "thread 001 is not waiting for a tier" });
-  expect(run(s, { cmd: "thread.cancel", thread: "001" }).r).toEqual({ ok: false, error: "thread 001 is not waiting for a tier" });
+});
+
+test("cancel stops a running thread from any status: done with the reason, its agents ended, its tab closed", () => {
+  for (const status of ["open", "in_progress", "blocked", "review"] as const) {
+    const s = base();
+    run(s, NEW);
+    // its tab opens and its coordinator starts
+    const tab = apply(s, [{ type: "thread.tab_opened", thread: "001", payload: { tab: "w1:t2", rootPane: "w1:p2" } }]);
+    const spawned = react(s, tab, ctx);
+    apply(s, spawned.events);
+    const c = [...s.sessions.values()].find((x) => x.role === "coordinator")!;
+    apply(s, [{ type: "session.attached", thread: "001", payload: { session: c.id, pane: "w1:p2" } }]);
+    if (status !== "open") apply(s, [{ type: "thread.status_changed", thread: "001", payload: { from: "open", to: status } }]);
+    const { r, effects, events } = run(s, { cmd: "thread.cancel", thread: "001", reason: "duplicate of 002" });
+    expect(r.ok && r.events).toEqual([{ type: "thread.status_changed", thread: "001", payload: { from: status, to: "done", reason: "cancelled: duplicate of 002" } }]);
+    expect(effects).toContain("herdr.tab.close");
+    expect(events).toContainEqual({ type: "session.ended", thread: "001", payload: { session: c.id } });
+    expect(s.threads.get("001")!.status).toBe("done");
+  }
+  // without a reason; a done thread cannot be cancelled again
+  const s = base();
+  run(s, NEW);
+  expect(run(s, { cmd: "thread.cancel", thread: "001" }).r).toMatchObject({ ok: true, events: [{ payload: { reason: "cancelled" } }] });
+  expect(run(s, { cmd: "thread.cancel", thread: "001" }).r).toEqual({ ok: false, error: "thread 001 is done" });
 });
 
 test("brief.md and sub.thread.md show the tier line", () => {
