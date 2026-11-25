@@ -483,7 +483,9 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
         // Not when this session's blocked pane is open, or was reported within a minute: main already heard it waits.
         const lb = t?.lastBlocked;
         const heard = lb !== undefined && lb.session === ev.actor.session && (state.sessions.get(lb.session)?.blockedSeq !== undefined || Math.abs(Date.parse(ev.ts) - Date.parse(lb.at)) <= WAITING_DEDUPE_MS);
-        if (main && !heard) out.push({ type: "notice.queued", thread: ev.thread, payload: { session: main.id, text: `Thread ${ev.thread} (${t?.title ?? ""}) is waiting for the user: ${ev.payload.what}`, wait: true } });
+        // Asked again before the user answered (in other words, or by a rotated coordinator): main was told already.
+        const told = (t?.openWait?.told.length ?? 0) > 0;
+        if (main && !heard && !told) out.push({ type: "notice.queued", thread: ev.thread, payload: { session: main.id, text: `Thread ${ev.thread} (${t?.title ?? ""}) is waiting for the user: ${ev.payload.what}`, wait: true } });
         break;
       }
       case "thread.status_changed": {

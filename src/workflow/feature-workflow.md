@@ -73,7 +73,8 @@ ids or private-doc mentions — this overrides any harness attribution reminder.
    then `agt ticket accept <id>/<T>` or `agt ticket return <id>/<T> "<what to fix>"`.
    Returned → same worker, new commit; small extras → follow-up `NNb`.
 6. **Combined verification:** full unit suite + type check once per repo in the task worktree.
-7. **Staged e2e:** take the stack with `agt stack acquire <id>`, restart it from the task worktrees (config), and give it
+7. **Staged e2e:** take the stack with `agt stack acquire <id>`, restart it from the task worktrees (config) and block on
+   `agt stack wait` until it is up (never a readiness loop of your own), and give it
    back with `agt stack release <id>` when done. Stage 2 = new spec(s); stage 3 = related suites;
    stage 4 = all suites — **only after the user confirms** (state scope and duration; record the yes with
    `agt stage <id> 7 approve --by user`, then `agt stack acquire <id> --for e2e4`), on a known commit; re-run

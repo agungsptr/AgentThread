@@ -14,6 +14,11 @@ import { liveSessions, rotateCoordinator } from "./sessions.ts";
 export const IDLE_NOTICE_AFTER_MS = 20_000;
 /** Idle notices per ticket; past them the coordinator gets IDLE_CAP_NOTICE once, then nothing more. */
 export const MAX_IDLE_NOTICES = 3;
+/**
+ * How long a busy coordinator's notices may stay queued before main hears of it: a coordinator in a long wait of its own
+ * (a shell loop, a background watcher) never goes idle, so they are never delivered.
+ */
+export const NOTICE_STUCK_AFTER_MS = 10 * 60_000;
 /** A coordinator is rotated for its Claude profile usage at most once per thread within this long. */
 export const USAGE_ROTATION_GAP_MS = 10 * 60_000;
 
@@ -113,6 +118,27 @@ export function sweep(state: State, now: string, ctx: ReactorContext): { events:
     }
     const e = noticeDelivery(s);
     if (e) effects.push(e);
+  }
+  // A busy coordinator that has not read its notices for NOTICE_STUCK_AFTER_MS: main hears once per stretch (not for an
+  // idle one, whose delivery is retried above, nor one blocked on a dialog, which main heard of already).
+  const main = liveSessions(state, undefined, "main")[0];
+  for (const s of liveSessions(state, undefined, "coordinator")) {
+    if (!main || failed.has(s.id) || s.status !== "active" || s.blockedNotified || s.noticeStuckReported || !s.noticesSince || !s.notices.length) continue;
+    const busy = Date.parse(now) - Date.parse(s.noticesSince);
+    if (busy <= NOTICE_STUCK_AFTER_MS) continue;
+    const t = s.thread ? state.threads.get(s.thread) : undefined;
+    if (!t || t.status === "done") continue;
+    const first = s.notices[0]!.split("\n")[0]!.trim();
+    const oldest = first.length > 120 ? `${first.slice(0, 119)}…` : first;
+    const n = s.notices.length;
+    events.push(
+      { type: "notice.stuck_reported", thread: t.id, payload: { session: s.id } },
+      {
+        type: "notice.queued",
+        thread: t.id,
+        payload: { session: main.id, text: `The coordinator of thread ${t.id} has been busy for ${Math.floor(busy / 60_000)} min without reading ${n} message${n === 1 ? "" : "s"} (the oldest: "${oldest}"); it may be stuck in a long wait. Tell the user to check the thread tab ${t.id}-${t.slug} (Esc there interrupts it so it reads them).` },
+      },
+    );
   }
   // A coordinator whose Claude profile passed its threshold (or hit a rate limit) hands over to a replacement on the newly
   // chosen profile: never one already rotating (a handoff in progress), and at most one replacement per thread per 10 minutes.

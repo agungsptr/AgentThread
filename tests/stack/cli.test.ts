@@ -81,15 +81,20 @@ test("agt stack restart detaches, writes restart.log and returns at once; --wait
   expect(bg.code).toBe(0);
   expect(bg.out).toContain(join(root, ".local-run", "restart.log"));
   const log = join(root, ".local-run", "restart.log");
-  const deadline = Date.now() + 30_000;
-  const text = () => (existsSync(log) ? readFileSync(log, "utf8") : "");
-  while (Date.now() < deadline && !text().includes("web: started")) await Bun.sleep(200);
-  expect(text()).toContain("web: started");
+  // agt stack wait blocks until the background restart has finished, and prints its lines
+  const waited = await capture(() => main(["stack", "wait"], env, root));
+  expect(waited.code).toBe(0);
+  expect(waited.out).toContain("web: started");
+  expect(waited.out.split("\n").at(-1)).toBe("restart finished: ok");
   expect(await portHeld(port)).toBe(true);
+  // each line once (the background process's stdout is not the log as well)
+  expect(readFileSync(log, "utf8").split("\n").filter((l) => l.startsWith("web: started"))).toHaveLength(1);
   const fg = await capture(() => main(["stack", "restart", "--main", "--wait"], env, root));
   expect(fg.code).toBe(0);
   expect(fg.out).toContain("web: started");
   expect(readFileSync(log, "utf8")).toContain("web: started");
+  // a foreground restart is a restart of its own in the log: wait sees it finished
+  expect(await capture(() => main(["stack", "wait", "--timeout", "5"], env, root))).toMatchObject({ code: 0, out: expect.stringMatching(/restart finished: ok$/) });
 }, 60_000);
 
 test("agt thread find --task fails without a daemon (and without --task)", async () => {

@@ -425,11 +425,17 @@ When `workspace.services` is configured, agt can run your local stack. These com
 agt stack start [--task <slug>|--main] [--only a,b] [--migrate]
 agt stack stop [--only a,b] [--force]
 agt stack restart [--task <slug>|--main] [--only a,b] [--migrate]
+agt stack wait [--timeout <seconds>]
 agt stack status [--json]
 agt stack logs <service> [-f] [-n <lines>]
 ```
 
-- Services start in `after` order and are waited on until healthy (`health`, default `tcp:<port>`).
+- Services start in `after` order and are waited on until healthy (`health`, default `tcp:<port>`; an HTTP 2xx-4xx
+  answer counts as up).
+- `agt stack restart` runs in the background. `agt stack wait` blocks until that restart has finished, printing its
+  lines: exit 0 when every service is healthy, 1 when one failed (or the restart process died), 2 when it is still
+  restarting at the timeout (default 540s, under an agent's 10-minute shell limit; run it again). Coordinators use it
+  instead of a readiness loop of their own.
 - `--task <slug>` runs the services from `.worktrees/<slug>/<repo>` where it exists; `--main` runs the main checkouts.
   The current target is recorded in `.local-run/task`.
 - State lives in the git-ignored `.local-run/`: `<service>.pid`, `.log`, `.stamp` (install reruns when the checkout state
@@ -460,6 +466,12 @@ make wt-new TASK=my-task REPOS=api,web SRC=main
 `agt logs` prints once. It survives daemon restarts. Run `agt start` again to repair a closed or ended logger pane.
 
 **Waiting for you.** When a coordinator needs a decision it runs `agt thread waiting <id> "<what>"`, which tells main.
+Asked again before you answer (in other words, or by a coordinator that replaced it after a rotation), it is not told
+to main a second time.
+
+**A busy coordinator.** Notices reach an agent when it goes idle. When a coordinator has been busy for over 10 minutes
+without reading its notices (for example stuck in a long wait of its own), main is told once, with the thread tab to
+check: Esc there interrupts it so it reads them.
 
 **After a merge.** When your PRs are merged, tell the thread's coordinator. It verifies each repo contains the squash
 branch, releases the stack lock and tells main. Main then marks the thread done, restarts the stack on `main` if needed
@@ -499,7 +511,7 @@ Run `agt help <command>` for exact flags.
 | Stages | `stage <thread> <1-10> done\|skipped\|na\|approve` |
 | Workers and worktrees | `worker spawn <thread> --ticket <T> [--agent <kind>]`, `worktree add <thread> <repo> [--from]` |
 | Messages | `tell <thread\|main\|thread/ticket> <message>`, `question`, `answer`, `handoff`, `log`, `decide`, `note`, `progress` |
-| Stack | `stack start\|stop\|restart\|status\|logs`, `stack acquire\|release` |
+| Stack | `stack start\|stop\|restart\|wait\|status\|logs`, `stack acquire\|release` |
 | Help | `guide [main\|coordinator\|worker\|all]`, `help [<command>]` |
 | Internal | `event started\|active\|idle\|compacting\|ended`, `event rate-limited --profile <name>`, `statusline --profile <name> --root <root>` (used by Claude Code hooks and its statusLine) |
 

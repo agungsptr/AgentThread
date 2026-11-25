@@ -29,6 +29,7 @@ import { claudeProfiles, switching } from "../agents/profiles.ts";
 import { runLogs } from "./logs.ts";
 import { guide, isLegacyThread } from "../agents/guide.ts";
 import { formatStatus, restartStack, stackLogs, stackStatus, startStack, stopStack } from "../stack/runner.ts";
+import { RESTART_CHILD_ENV, RESTART_OK, RESTART_REQUESTED, restartLog, restartPidFile, waitRestart } from "../stack/restart-wait.ts";
 import { writeStackMakefiles } from "../stack/makefile.ts";
 import { checkOnly, hasServices, resolveTarget, runDir } from "../stack/target.ts";
 import { AGT_BIN } from "../agents/claude.ts";
@@ -235,7 +236,7 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
     }
     case "stack": {
       const stackRoot = findRoot(cwd, env);
-      if (sub === "start" || sub === "stop" || sub === "restart" || sub === "logs") return stackServices(stackRoot, env, sub, rest);
+      if (sub === "start" || sub === "stop" || sub === "restart" || sub === "logs" || sub === "wait") return stackServices(stackRoot, env, sub, rest);
       if (sub === "status") {
         let withServices = false;
         try {
@@ -389,6 +390,15 @@ async function stackServices(root: string, env: Env, sub: string, args: string[]
     }
     return 0;
   }
+  if (sub === "wait") {
+    const { values, positionals } = parse(args, { timeout: { type: "string" } });
+    if (positionals.length) throw new UsageError("stack wait takes only --timeout <seconds>");
+    const secs = values.timeout === undefined ? undefined : Number(values.timeout);
+    if (secs !== undefined && (!Number.isFinite(secs) || secs <= 0)) throw new UsageError("--timeout needs a positive number of seconds");
+    const r = await waitRestart(root, secs !== undefined ? { timeoutMs: secs * 1000 } : {});
+    for (const l of r.lines) console.log(l);
+    return r.code;
+  }
   if (!hasServices(config)) {
     console.log("no services configured (workspace.services)");
     return 0;
@@ -406,30 +416,45 @@ async function stackServices(root: string, env: Env, sub: string, args: string[]
     } catch (e) {
       throw new UsageError(e instanceof Error ? e.message : String(e));
     }
-    const log = join(runDir(root), "restart.log");
+    const log = restartLog(root);
     mkdirSync(runDir(root), { recursive: true });
-    appendFileSync(log, "restart requested\n");
+    appendFileSync(log, `${RESTART_REQUESTED}\n`);
     const fd = openSync(log, "a");
     const flags = [...(values.task !== undefined ? ["--task", values.task] : []), ...(values.main ? ["--main"] : []), ...(values.only !== undefined ? ["--only", values.only] : []), ...(values.migrate ? ["--migrate"] : [])];
-    const child = spawn(process.execPath, [AGT_BIN, "stack", "restart", "--wait", ...flags], { cwd: root, env: { ...process.env, ...env, AGT_ROOT: root }, detached: true, stdio: ["ignore", fd, fd] });
+    // The child writes each line to the log itself: its stdout goes nowhere (else every line lands twice), its stderr
+    // (a crash) to the log.
+    const child = spawn(process.execPath, [AGT_BIN, "stack", "restart", "--wait", ...flags], { cwd: root, env: { ...process.env, ...env, AGT_ROOT: root, [RESTART_CHILD_ENV]: "1" }, detached: true, stdio: ["ignore", "ignore", fd] });
     child.on("error", () => {});
+    if (child.pid) writeFileSync(restartPidFile(root), String(child.pid));
     child.unref();
     closeSync(fd);
-    console.log(`restarting the stack in the background; follow ${log} (or agt stack status)`);
+    console.log(`restarting the stack in the background; run agt stack wait to block until it has finished (or follow ${log})`);
     return 0;
+  }
+  // A foreground restart is a restart of its own in the log (the background one's parent wrote its first line).
+  if (sub === "restart" && !env[RESTART_CHILD_ENV]) {
+    mkdirSync(runDir(root), { recursive: true });
+    appendFileSync(restartLog(root), `${RESTART_REQUESTED}\n`);
+    writeFileSync(restartPidFile(root), String(process.pid));
   }
   let results;
   try {
     results = await (sub === "stop" ? stopStack(o) : sub === "restart" ? restartStack(o) : startStack(o));
   } catch (e) {
-    if (sub === "restart" && values.wait) {
+    if (sub === "restart") {
       try {
-        appendFileSync(join(runDir(root), "restart.log"), `restart failed: ${e instanceof Error ? e.message : String(e)}\n`);
+        appendFileSync(restartLog(root), `restart failed: ${e instanceof Error ? e.message : String(e)}\n`);
       } catch {}
     }
     throw e;
   }
-  return results.some((r) => r.outcome === "failed") ? 1 : 0;
+  const failed = results.filter((r) => r.outcome === "failed").map((r) => r.name);
+  if (sub === "restart") {
+    try {
+      appendFileSync(restartLog(root), `${failed.length ? `restart finished: failed (${failed.join(", ")})` : RESTART_OK}\n`);
+    } catch {}
+  }
+  return failed.length ? 1 : 0;
 }
 
 function parse(args: string[], options: ParseArgsConfig["options"]) {

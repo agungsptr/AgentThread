@@ -177,6 +177,8 @@ describe("stack restart rule", () => {
   const withServices = { ...DEFAULT_CONFIG, workspace: { ...DEFAULT_CONFIG.workspace, repos: { a: { path: "a" } }, services: { web: { repo: "a", dir: ".", start: "x", enabled: true } } } } as unknown as Config;
   test("a task coordinator is told agt stack restart --task <task> when services exist", () => {
     expect(coordinator(withServices)).toContain("agt stack restart --task pay-reject");
+    expect(coordinator(withServices)).toContain("then agt stack wait: it blocks until every service passes agt's health check");
+    expect(coordinator(withServices)).toContain("Never write your own readiness check");
     expect(coordinator(DEFAULT_CONFIG)).not.toContain("agt stack restart");
   });
 });

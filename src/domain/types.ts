@@ -154,6 +154,7 @@ export type EventBody =
   /** The sweep told the coordinator that a worker sits idle with its ticket unfinished (once per idle stretch). */
   | { type: "worker.idle_reported"; thread: string; payload: { session: string } }
   | { type: "notice.held_reported"; thread?: string; payload: { session: string } }
+  | { type: "notice.stuck_reported"; thread?: string; payload: { session: string } }
   /** The coordinator was told a worker's context grew large (once per ticket). */
   | { type: "worker.context_reported"; thread: string; payload: { session: string; ticket: string } };
 

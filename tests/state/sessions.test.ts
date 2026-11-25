@@ -25,6 +25,8 @@ test("session lifecycle and notices", () => {
   );
   expect(s.sessions.get(S1)).toEqual({
     id: S1, role: "coordinator", agent: "claude-code", name: "n-1111", thread: "001", pane: "w1:p2", status: "active", notices: ["b"], turns: 0, turnsSinceProgress: 0, createdAt: "2026-10-09T10:00:02.000Z", lastActiveAt: "2026-10-09T10:00:08.000Z",
+    // "b" is still queued: the stretch started with "a"
+    noticesSince: "2026-10-09T10:00:06.000Z",
   });
   expect(s.threads.get("001")!.maxWorkers).toBe(2);
 });

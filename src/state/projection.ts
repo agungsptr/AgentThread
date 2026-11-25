@@ -60,6 +60,10 @@ export interface Session {
   noticeHeldReason?: string;
   /** The coordinator was told the notices stay held (notice.held_reported; cleared with the stretch). */
   noticeHeldReported?: boolean;
+  /** Since when notices have been queued for it without a break (set when its queue fills, cleared when it empties). */
+  noticesSince?: string;
+  /** Main was told this busy session has not read its notices (notice.stuck_reported; cleared when the queue empties). */
+  noticeStuckReported?: boolean;
   /** The message of the session's latest progress or note. */
   lastReport?: string;
   /** Herdr reported it blocked before it finished any turn (it got a blocked notice instead). */
@@ -558,8 +562,11 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       t.waiting = { what: ev.payload.what, since: ev.ts, idleSeen: false, ...(ev.actor.session ? { session: ev.actor.session } : {}) };
       t.lastWaiting = { ...(ev.actor.session ? { session: ev.actor.session } : {}), at: ev.ts };
       {
-        const prev = t.openWait && t.openWait.endedSeq === undefined && t.openWait.session === ev.actor.session ? t.openWait : undefined;
-        t.openWait = { ...(ev.actor.session ? { session: ev.actor.session } : {}), at: prev?.at ?? ev.ts, ...(prev?.blocked ? { blocked: true } : {}), what: ev.payload.what, told: prev?.told ?? [] };
+        // A wait not answered yet carries on, whoever asks again (the same coordinator, or its replacement after a
+        // rotation): what main was told stays told. Its blocked pane is only the same session's.
+        const open = t.openWait && t.openWait.endedSeq === undefined ? t.openWait : undefined;
+        const same = open && open.session === ev.actor.session ? open : undefined;
+        t.openWait = { ...(ev.actor.session ? { session: ev.actor.session } : {}), at: open?.at ?? ev.ts, ...(same?.blocked ? { blocked: true } : {}), what: ev.payload.what, told: open?.told ?? [] };
       }
       note(t, ev, `waiting for the user: ${ev.payload.what}`);
       break;
@@ -909,6 +916,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
       const ow = ev.payload.wait && ev.thread ? state.threads.get(ev.thread)?.openWait : undefined;
       // A wait notice that arrives after the user already answered is stale: it is not queued at all.
       if (ow && ow.endedSeq !== undefined) return true;
+      if (s.notices.length === 0) s.noticesSince = ev.ts;
       if (isHandoffRequest(ev.payload.text)) s.notices.unshift(ev.payload.text);
       else s.notices.push(ev.payload.text);
       if (ow) ow.told.push(ev.payload.text);
@@ -921,6 +929,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
         const i = s.notices.indexOf(x);
         if (i >= 0) s.notices.splice(i, 1);
       }
+      endNoticeStretch(s);
       return true;
     }
     case "notice.delivered": {
@@ -939,6 +948,7 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
       }
       delete s.noticeHeldAt;
       endHeldStretch(s);
+      endNoticeStretch(s);
       if (isLive(s)) {
         delete s.polledStart;
         endIdleStretch(s);
@@ -957,6 +967,9 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
     case "notice.held_reported":
       sessionOf(state, ev.seq, ev.payload.session).noticeHeldReported = true;
       return true;
+    case "notice.stuck_reported":
+      sessionOf(state, ev.seq, ev.payload.session).noticeStuckReported = true;
+      return true;
     case "worker.context_reported": {
       const k = state.threads.get(ev.thread)?.tickets.find((x) => x.id === ev.payload.ticket);
       if (k) k.contextReported = true;
@@ -972,6 +985,13 @@ function applySessionEvent(state: State, ev: StoredEvent): boolean {
     default:
       return false;
   }
+}
+
+/** Its queue emptied: a later notice starts a new stretch, reported afresh. */
+function endNoticeStretch(s: Session): void {
+  if (s.notices.length > 0) return;
+  delete s.noticesSince;
+  delete s.noticeStuckReported;
 }
 
 /** A held stretch of notice deliveries is over: its backoff count, reason and report start afresh. */

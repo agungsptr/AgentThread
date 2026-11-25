@@ -26,7 +26,8 @@ export const USAGE = `usage: agt <command>
   stage <thread> <1-10> done|skipped|na|approve [--reason <why>] [--by user]   record a task thread's stage (skipped and na need a reason; approve is stage 7, --by user)
   stack start [--task <slug>|--main] [--only a,b] [--migrate]   start the workspace services (.local-run/); --task runs from .worktrees/<slug>/<repo> where it exists
   stack stop [--only a,b] [--force]     stop them (process group, then a workspace process still holding the port; --force also kills a foreign one)
-  stack restart [--task <slug>|--main] [--only a,b] [--migrate]   (--migrate runs each service's migrate; otherwise only with migrate_on_start: true)
+  stack restart [--task <slug>|--main] [--only a,b] [--migrate]   in the background (agt stack wait blocks until it has finished); --migrate runs each service's migrate, otherwise only with migrate_on_start: true
+  stack wait [--timeout <seconds>]      block until the latest restart has finished: exit 0 every service healthy, 1 failed, 2 still restarting at the timeout (default 540s; run it again)
   stack status [--json]                 service | state | port | pid | cwd | branch | target plus the stack lock; --json prints {services, lock}
   stack logs <service> [-f] [-n <lines>]
   stack acquire <thread> [--for e2e4]   take the workspace stack lock, or queue for it (e2e4 needs the user's stage-7 approval)

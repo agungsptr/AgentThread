@@ -281,3 +281,34 @@ test("a wait notice that reaches main after the user answered is not queued", ()
   at("2026-10-11T10:00:05.000Z", USER, ...b.events);
   expect(s.sessions.get(M)!.notices).toEqual([]);
 });
+
+test("a wait asked again before the user answered, by the same or a rotated coordinator, is told to main once", () => {
+  const s = base();
+  const at = stamped(s);
+  const C2 = "c2c2c2c2-c2c2-4c2c-8c2c-c2c2c2c2c2c2";
+  const COORD2: Actor = { role: "coordinator", thread: "001", session: C2 };
+  const first = react(s, at("2026-10-11T10:00:00.000Z", COORD, { type: "thread.waiting", thread: "001", payload: { what: "yes/no on full e2e?" } }), ctx());
+  expect(notices(first.events)).toEqual([{ session: M, text: "Thread 001 (Thread 001) is waiting for the user: yes/no on full e2e?", wait: true }]);
+  at("2026-10-11T10:00:00.000Z", COORD, ...first.events);
+  at("2026-10-11T10:00:05.000Z", USER, { type: "notice.delivered", payload: { session: M, count: 1, texts: ["Thread 001 (Thread 001) is waiting for the user: yes/no on full e2e?"] } });
+  // the coordinator rotates; its replacement asks the same thing in other words, then again later
+  at("2026-10-11T10:01:00.000Z", USER,
+    { type: "session.rotated", thread: "001", payload: { session: C, reason: "usage limit" } },
+    { type: "session.created", thread: "001", payload: { session: C2, role: "coordinator", agent: "claude-code", name: "c2", replaces: C } },
+    { type: "session.attached", thread: "001", payload: { session: C2, pane: "w1:p5" } },
+  );
+  const again = react(s, at("2026-10-11T10:01:30.000Z", COORD2, { type: "thread.waiting", thread: "001", payload: { what: "run the full e2e suite (~8.5 min)?" } }), ctx());
+  expect(notices(again.events)).toEqual([]);
+  const third = react(s, at("2026-10-11T10:03:00.000Z", COORD2, { type: "thread.waiting", thread: "001", payload: { what: "run the full e2e suite (~8.5 min)?" } }), ctx());
+  expect(notices(third.events)).toEqual([]);
+  // the latest wording is the thread's wait
+  expect(s.threads.get("001")!.waiting?.what).toBe("run the full e2e suite (~8.5 min)?");
+  // the user answers the replacement in its tab: the wait ends, and main hears that once
+  at("2026-10-11T10:03:10.000Z", USER, { type: "agent.idle", thread: "001", payload: { session: C2 } });
+  const answered = react(s, at("2026-10-11T10:04:00.000Z", USER, { type: "session.active", thread: "001", payload: { session: C2 } }), ctx());
+  expect(notices(answered.events)).toEqual([{ session: M, text: ANSWERED }]);
+  at("2026-10-11T10:04:00.000Z", USER, ...answered.events);
+  // a later question is a new wait: told again
+  const next = react(s, at("2026-10-11T10:10:00.000Z", COORD2, { type: "thread.waiting", thread: "001", payload: { what: "merged?" } }), ctx());
+  expect(notices(next.events)).toEqual([{ session: M, text: "Thread 001 (Thread 001) is waiting for the user: merged?", wait: true }]);
+});

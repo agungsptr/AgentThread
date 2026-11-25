@@ -331,3 +331,55 @@ test("the reactor does not deliver to a session inside its held backoff, and del
   const [later] = apply(s, "2026-10-11T10:00:30.000Z", { type: "agent.idle", thread: "001", payload: { session: C } });
   expect(react(s, [later!], ctx()).effects.filter((e) => e.kind === "notice.deliver").length).toBe(1);
 });
+
+/**
+ * A coordinator busy for long (a long wait of its own) never goes idle, so its notices are never delivered: past
+ * NOTICE_STUCK_AFTER_MS of queued notices, main hears once per stretch, with the thread tab to look at.
+ */
+test("a busy coordinator with notices queued for over 10 minutes has main told once per stretch", () => {
+  const M = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const min = (m: number) => new Date(Date.parse(T0) + m * 60_000).toISOString();
+  const s = stateOf(INIT, threadCreated("001", { status: "in_progress" }), { type: "thread.tab_opened", thread: "001", payload: { tab: "w1:t2", rootPane: "w1:p2" } });
+  apply(
+    s,
+    T0,
+    { type: "session.created", payload: { session: M, role: "main", agent: "claude-code", name: "m" } },
+    { type: "session.attached", payload: { session: M, pane: "w1:p0" } },
+    { type: "session.created", thread: "001", payload: { session: C, role: "coordinator", agent: "claude-code", name: "c" } },
+    { type: "session.attached", thread: "001", payload: { session: C, pane: "w1:p2" } },
+    { type: "session.started", thread: "001", payload: { session: C } },
+    { type: "session.active", thread: "001", payload: { session: C } },
+  );
+  apply(s, min(1), { type: "notice.queued", thread: "001", payload: { session: C, text: "Ticket T3 is ready for review: e2e updated.\nReview its commits." } });
+  apply(s, min(3), { type: "notice.queued", thread: "001", payload: { session: C, text: "The worker for ticket T3 went idle without reporting." } });
+  const told = (r: { events: EventBody[] }) => r.events.filter((e) => e.type === "notice.queued" && e.payload.session === M);
+  expect(told(sweep(s, min(10), ctx()))).toEqual([]);
+  const r = sweep(s, min(11.5), ctx());
+  expect(r.events).toEqual([
+    { type: "notice.stuck_reported", thread: "001", payload: { session: C } },
+    {
+      type: "notice.queued",
+      thread: "001",
+      payload: { session: M, text: 'The coordinator of thread 001 has been busy for 10 min without reading 2 messages (the oldest: "Ticket T3 is ready for review: e2e updated."); it may be stuck in a long wait. Tell the user to check the thread tab 001-thread-001 (Esc there interrupts it so it reads them).' },
+    },
+  ]);
+  apply(s, min(11.5), ...r.events);
+  expect(told(sweep(s, min(30), ctx()))).toEqual([]);
+  // the coordinator goes idle and gets its notices: the stretch is over, and a later one is reported again
+  apply(s, min(31), { type: "agent.idle", thread: "001", payload: { session: C } }, { type: "notice.delivered", thread: "001", payload: { session: C, count: 2 } });
+  expect(s.sessions.get(C)!.notices).toEqual([]);
+  apply(s, min(32), { type: "session.active", thread: "001", payload: { session: C } }, { type: "notice.queued", thread: "001", payload: { session: C, text: "Ticket T4 is ready." } });
+  expect(told(sweep(s, min(43), ctx()))).toHaveLength(1);
+  // not for an idle coordinator (its delivery is retried instead), nor one blocked on a dialog (main heard that)
+  const idle = stateOf(INIT, threadCreated("001"));
+  apply(idle, T0,
+    { type: "session.created", payload: { session: M, role: "main", agent: "claude-code", name: "m" } },
+    { type: "session.attached", payload: { session: M, pane: "w1:p0" } },
+    { type: "session.created", thread: "001", payload: { session: C, role: "coordinator", agent: "claude-code", name: "c" } },
+    { type: "session.attached", thread: "001", payload: { session: C, pane: "w1:p2" } },
+    { type: "session.started", thread: "001", payload: { session: C } },
+    { type: "agent.idle", thread: "001", payload: { session: C } },
+    { type: "notice.queued", thread: "001", payload: { session: C, text: "x" } },
+  );
+  expect(told(sweep(idle, min(20), ctx()))).toEqual([]);
+});
