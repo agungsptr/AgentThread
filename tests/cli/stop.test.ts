@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Layout } from "../../src/domain/types.ts";
-import { mainPidFile, runStop, stopMainManager, stopTargets, type StopDeps } from "../../src/cli/stop.ts";
+import { mainPidFile, removeMainPid, runStop, stopMainManager, stopTargets, writeMainPid, type StopDeps } from "../../src/cli/stop.ts";
 import { INIT, stateOf, taskThreadCreated } from "../helpers.ts";
 import type { State } from "../../src/state/projection.ts";
 
@@ -64,7 +64,51 @@ describe("stopTargets", () => {
   });
 });
 
+describe("stopTargets: recorded ids", () => {
+  test("a recorded thread tab id whose label is not agt's (a recycled id) is never closed", () => {
+    const tabs = [{ tabId: "w1:t2", label: "my notes" }, ...TABS.filter((t) => t.tabId !== "w1:t2")];
+    expect(stopTargets(state(), tabs).tabs).toEqual(["w1:t3", "w1:t4", "w1:t5"]);
+  });
+});
+
 describe("runStop", () => {
+  test("a state that cannot be read: the daemon, stack and main still stop, no tabs are touched", async () => {
+    const { calls, deps } = fakes();
+    deps.readState = async () => {
+      throw new Error("database is locked");
+    };
+    const r = await runStop(deps);
+    expect(calls).toEqual(["stopDaemon", "stopStack", "stopMain"]);
+    expect(r.lines).toContain("state: database is locked; no tabs closed");
+    expect(r.code).toBe(1);
+  });
+
+  test("one tab that fails to close does not keep the others open; a tab already gone is not an error", async () => {
+    const { calls, deps } = fakes();
+    const h = deps.herdr;
+    deps.herdr = (l) => ({
+      ...h(l),
+      closeTab: (id) => {
+        if (id === "w1:t2") throw new Error("tab_not_found: w1:t2");
+        if (id === "w1:t3") throw new Error("permission denied");
+        calls.push(`closeTab ${id}`);
+      },
+    });
+    const r = await runStop(deps);
+    expect(calls).toEqual(["stopDaemon", "closeTab w1:t4", "closeTab w1:t5", "closePane w1:p2", "stopStack", "stopMain"]);
+    expect(r.lines).toContain("closed 2 thread tabs");
+    expect(r.lines).toContain("herdr: closing tab w1:t3: permission denied");
+    expect(r.code).toBe(1);
+  });
+
+  test("Herdr not reachable (after a reboot): nothing to close, not an error", async () => {
+    const { calls, deps } = fakes({ herdrThrows: true });
+    const r = await runStop(deps);
+    expect(calls).toEqual(["stopDaemon", "stopStack", "stopMain"]);
+    expect(r.lines).toContain("Herdr not reachable (herdr is not running): no tabs to close");
+    expect(r.code).toBe(0);
+  });
+
   test("stops the daemon, closes the tabs and the logger, stops the stack, then the main manager, in that order", async () => {
     const { calls, deps } = fakes();
     const r = await runStop(deps);
@@ -85,14 +129,6 @@ describe("runStop", () => {
     const r = await runStop(deps);
     expect(calls).toEqual(["stopDaemon", "stopStack", "stopMain"]);
     expect(r.lines).toContain("no Herdr layout: no tabs to close");
-  });
-
-  test("a Herdr failure is reported, and the stack and main still stop", async () => {
-    const { calls, deps } = fakes({ herdrThrows: true });
-    const r = await runStop(deps);
-    expect(calls).toEqual(["stopDaemon", "stopStack", "stopMain"]);
-    expect(r.lines).toContain("herdr: herdr is not running");
-    expect(r.code).toBe(1);
   });
 
   test("a logger pane already gone is not closed; a main manager not running says so", async () => {
@@ -142,6 +178,45 @@ describe("stopMainManager", () => {
     writeFileSync(mainPidFile(root), "999999\nclaude\n");
     expect(stopMainManager(root, (pid) => void sent.push(pid))).toBeUndefined();
     expect(sent).toEqual([]);
+    expect(existsSync(mainPidFile(root))).toBe(false);
+  });
+});
+
+describe("main.pid identity and removal", () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, existsSync, realpathSync } = require("node:fs") as typeof import("node:fs");
+  const { join } = require("node:path") as typeof import("node:path");
+  const { tmpdir } = require("node:os") as typeof import("node:os");
+  const project = () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "agt-stop-")));
+    mkdirSync(join(root, ".agentthread"), { recursive: true });
+    return root;
+  };
+
+  test("a recorded start time that differs (a recycled pid) is never signalled", () => {
+    const root = project();
+    const child = Bun.spawn(["sleep", "30"]);
+    writeFileSync(mainPidFile(root), `${child.pid}\nsleep\nMon Jan  1 00:00:00 2001\n`);
+    const sent: number[] = [];
+    expect(stopMainManager(root, (pid) => void sent.push(pid))).toBeUndefined();
+    expect(sent).toEqual([]);
+    child.kill();
+  });
+
+  test("the recorded start time of the live process matches: signalled", async () => {
+    const root = project();
+    const child = Bun.spawn(["sleep", "30"]);
+    writeMainPid(root, child.pid, "sleep");
+    expect(stopMainManager(root)).toBe("main manager stopped");
+    await child.exited;
+    expect(child.signalCode).toBe("SIGTERM");
+  });
+
+  test("removeMainPid removes the file only while it still holds that pid", () => {
+    const root = project();
+    writeFileSync(mainPidFile(root), "111\nclaude\n");
+    removeMainPid(root, 222);
+    expect(existsSync(mainPidFile(root))).toBe(true);
+    removeMainPid(root, 111);
     expect(existsSync(mainPidFile(root))).toBe(false);
   });
 });

@@ -7,7 +7,7 @@ import { spawnAsync } from "../herdr/bridge.ts";
 
 export type CleanupEffect = Extract<Effect, { kind: "git.thread.cleanup" }>;
 /** A stopped job names the repo and the reason, and the repos it had already removed. */
-export type CleanupOutcome = { ok: true; repos: string[]; notes?: string[] } | { ok: false; repo: string; error: string; removed: string[] };
+export type CleanupOutcome = { ok: true; repos: string[]; notes?: string[]; /** A doc thread without worktrees: whether its folder went. */ dirRemoved?: boolean } | { ok: false; repo: string; error: string; removed: string[] };
 
 const GIT_TIMEOUT_MS = 60_000;
 
@@ -77,8 +77,9 @@ export async function cleanupThread(e: CleanupEffect, stopping: () => boolean = 
     }
     removed.push(r.repo);
   }
-  if (await onlyGenerated(e.dir)) await rm(e.dir, { recursive: true, force: true });
-  return { ok: true, repos: removed, ...(notes.length ? { notes } : {}) };
+  const gone = await onlyGenerated(e.dir);
+  if (gone) await rm(e.dir, { recursive: true, force: true });
+  return { ok: true, repos: removed, ...(notes.length ? { notes } : {}), ...(e.doc && !e.repos.length ? { dirRemoved: gone } : {}) };
 }
 
 /**

@@ -49,6 +49,8 @@ export const CommandSchema = z.discriminatedUnion("cmd", [
     removed: z.array(text).optional(),
     /** A finished job's notes for main (a doc thread's kept wip branch). */
     notes: z.array(text).optional(),
+    /** A doc thread without worktrees: whether its thread directory was removed. */
+    dirRemoved: z.boolean().optional(),
   }),
   z.object({ cmd: z.literal("thread.status"), thread: threadId, status: z.enum(THREAD_STATUSES), reason: z.string().optional() }),
   z.object({

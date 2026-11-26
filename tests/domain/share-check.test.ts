@@ -59,3 +59,9 @@ test("a short root matches only as a whole path, not inside a URL or a longer na
   expect(shareCheckHits("see https://www.app.io/apple and /apple/x", h)).toEqual([]);
   expect(shareCheckHits("see /app/src/a.ts and /app.", h).map((x) => x.match)).toEqual(["/app", "/app"]);
 });
+
+test("the root inside file:// and editor links is a hit", () => {
+  const h = { root: "/Users/me/work/acme", thread: "004", banned: [] };
+  expect(shareCheckHits("file:///Users/me/work/acme/src/a.ts", h).map((x) => x.match)).toEqual(["/Users/me/work/acme"]);
+  expect(shareCheckHits("vscode://file/Users/me/work/acme/src/a.ts:3", h).map((x) => x.match)).toEqual(["/Users/me/work/acme"]);
+});

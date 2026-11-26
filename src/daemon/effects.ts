@@ -187,7 +187,7 @@ export function createEffectRunner(opts: {
           try {
             opts.reportCleanup?.(
               outcome.ok
-                ? { cmd: "thread.cleanup_report", thread: e.thread, ok: true, repos: outcome.repos, ...(outcome.notes?.length ? { notes: outcome.notes } : {}) }
+                ? { cmd: "thread.cleanup_report", thread: e.thread, ok: true, repos: outcome.repos, ...(outcome.notes?.length ? { notes: outcome.notes } : {}), ...(outcome.dirRemoved !== undefined ? { dirRemoved: outcome.dirRemoved } : {}) }
                 : { cmd: "thread.cleanup_report", thread: e.thread, ok: false, repo: outcome.repo, error: outcome.error, removed: outcome.removed },
             );
           } catch (err) {

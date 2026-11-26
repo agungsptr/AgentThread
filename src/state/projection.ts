@@ -413,7 +413,7 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       // The worktrees are gone: nothing may run in them or read their git trail any more.
       delete t.cleanupRequested;
       for (const repo of ev.payload.repos) delete t.worktrees[repo];
-      note(t, ev, `cleaned up: removed the worktrees${isDocType(t.type) ? "" : ` and wip/${t.task ?? ""}`} of ${ev.payload.repos.join(", ")}`);
+      note(t, ev, ev.payload.repos.length ? `cleaned up: removed the worktrees${isDocType(t.type) ? "" : ` and wip/${t.task ?? ""}`} of ${ev.payload.repos.join(", ")}` : "cleaned up: it had no worktrees");
       break;
     case "thread.cleanup_failed":
       delete t.cleanupRequested;

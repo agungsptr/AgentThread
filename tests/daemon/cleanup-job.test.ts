@@ -29,8 +29,17 @@ describe("cleanup of a doc thread", () => {
     const dir = join(root, ".worktrees", "rv-1");
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "AGENTS.md"), "# AgentThread\n");
-    expect(await cleanupThread({ kind: "git.thread.cleanup", thread: "001", task: "rv-1", doc: true, dir, repos: [] })).toEqual({ ok: true, repos: [] });
+    expect(await cleanupThread({ kind: "git.thread.cleanup", thread: "001", task: "rv-1", doc: true, dir, repos: [] })).toEqual({ ok: true, repos: [], dirRemoved: true });
     expect(existsSync(dir)).toBe(false);
+  });
+
+  test("with no worktrees and a file of someone else's in its directory, the directory stays and says so", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "agt-clean-")));
+    const dir = join(root, ".worktrees", "rv-1");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "scratch.md"), "mine\n");
+    expect(await cleanupThread({ kind: "git.thread.cleanup", thread: "001", task: "rv-1", doc: true, dir, repos: [] })).toEqual({ ok: true, repos: [], dirRemoved: false });
+    expect(existsSync(dir)).toBe(true);
   });
 
   test("stops when the detached HEAD has commits made after the checkout (a user's own)", async () => {

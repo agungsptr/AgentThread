@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { paths } from "../project/paths.ts";
 import { workersTabOrder } from "../agents/spawn-job.ts";
@@ -15,7 +15,8 @@ export function stopTargets(state: State, tabs: Tab[]): { tabs: string[]; logger
   const threads = [...state.threads.values()];
   for (const tab of tabs) {
     if (tab.tabId === main) continue;
-    const own = threads.some((t) => t.tab === tab.tabId || workersTabOrder(tab.label, `${t.id}-${t.slug}-workers`) !== undefined);
+    // A recorded tab id counts only with agt's own label: an id Herdr reused for another tab is never closed.
+    const own = threads.some((t) => (t.tab === tab.tabId && tab.label === `${t.id}-${t.slug}`) || workersTabOrder(tab.label, `${t.id}-${t.slug}-workers`) !== undefined);
     if (own) ids.add(tab.tabId);
   }
   return { tabs: tabs.map((t) => t.tabId).filter((id) => ids.has(id)), ...(state.layout ? { loggerPane: state.layout.loggerPane } : {}) };
@@ -53,33 +54,80 @@ export async function runStop(d: StopDeps): Promise<{ code: number; lines: strin
       code = 1;
     }
   };
-  // The state is read before the daemon goes: while it runs, it holds the event log.
-  const state = await d.readState();
+  // The state is read before the daemon goes: while it runs, it holds the event log. Without it no tab is closed (none
+  // is known to be agt's), but the daemon, stack and main manager still stop.
+  let state: State | undefined;
+  try {
+    state = await d.readState();
+  } catch (e) {
+    lines.push(`state: ${why(e)}; no tabs closed`);
+    code = 1;
+  }
   await step("daemon", async () => {
     if (!(await d.daemonAlive())) return void lines.push("daemon not running");
     await d.stopDaemon();
     lines.push("daemon stopped");
   });
-  const layout = state.layout;
-  if (!layout) lines.push("no Herdr layout: no tabs to close");
-  else
-    await step("herdr", () => {
-      const h = d.herdr(layout);
-      const targets = stopTargets(state, h.tabList(layout.workspace));
-      for (const id of targets.tabs) h.closeTab(id);
-      lines.push(`closed ${targets.tabs.length} thread tab${targets.tabs.length === 1 ? "" : "s"}`);
-      if (targets.loggerPane && h.paneExists(targets.loggerPane)) {
-        h.closePane(targets.loggerPane);
-        lines.push("logger pane closed");
+  const layout = state?.layout;
+  if (state && !layout) lines.push("no Herdr layout: no tabs to close");
+  if (state && layout) {
+    const h = d.herdr(layout);
+    let tabs: Tab[] | undefined;
+    try {
+      tabs = h.tabList(layout.workspace);
+    } catch (e) {
+      // After a reboot Herdr is not running: no tab of agt's is open.
+      lines.push(`Herdr not reachable (${why(e)}): no tabs to close`);
+    }
+    if (tabs) {
+      const targets = stopTargets(state, tabs);
+      let closed = 0;
+      for (const id of targets.tabs) {
+        try {
+          h.closeTab(id);
+          closed++;
+        } catch (e) {
+          // A tab closed since the listing is already gone; any other failure is reported and the rest go on.
+          if (!/not.?found/i.test(why(e))) {
+            lines.push(`herdr: closing tab ${id}: ${why(e)}`);
+            code = 1;
+          }
+        }
       }
-    });
+      lines.push(`closed ${closed} thread tab${closed === 1 ? "" : "s"}`);
+      await step("herdr", () => {
+        if (targets.loggerPane && h.paneExists(targets.loggerPane)) {
+          h.closePane(targets.loggerPane);
+          lines.push("logger pane closed");
+        }
+      });
+    }
+  }
   await step("stack", async () => void lines.push(...(await d.stopStack())));
   await step("main manager", () => void lines.push(d.stopMain() ?? "main manager not running"));
   return { code, lines: out };
 }
 
-/** `agt start` records the main agent's pid and binary here while it runs (one per line). */
+/** `agt start` records the main agent's pid, binary and start time here while it runs (one per line). */
 export const mainPidFile = (root: string): string => join(paths(root).dir, "main.pid");
+
+/** The process's start time as ps prints it; with the pid it names one process, even after the pid is reused. */
+function startedAt(pid: number): string | undefined {
+  const r = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8" });
+  return r.status === 0 ? r.stdout.trim() || undefined : undefined;
+}
+
+/** `agt start`: records the main agent it launched. */
+export function writeMainPid(root: string, pid: number, bin: string): void {
+  writeFileSync(mainPidFile(root), `${pid}\n${bin}\n${startedAt(pid) ?? ""}\n`);
+}
+
+/** `agt start`, when its main agent exits: removes the file only while it still names that agent (another start may own it now). */
+export function removeMainPid(root: string, pid: number): void {
+  try {
+    if (Number(readFileSync(mainPidFile(root), "utf8").split("\n")[0]) === pid) rmSync(mainPidFile(root), { force: true });
+  } catch {}
+}
 
 const alive = (pid: number): boolean => {
   try {
@@ -104,9 +152,11 @@ export function stopMainManager(root: string, kill: (pid: number, signal: NodeJS
     return undefined;
   }
   rmSync(file, { force: true });
-  const [pidText, bin] = text.split("\n").map((l) => l.trim());
+  const [pidText, bin, started] = text.split("\n").map((l) => l.trim());
   const pid = Number(pidText);
   if (!Number.isInteger(pid) || pid <= 0 || !bin || !alive(pid)) return undefined;
+  // A recorded start time must match: a reused pid is another process, even one of the same program.
+  if (started && startedAt(pid) !== started) return undefined;
   const ps = spawnSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8" });
   if (ps.status !== 0 || !ps.stdout.includes(basename(bin))) return undefined;
   kill(pid, "SIGTERM");

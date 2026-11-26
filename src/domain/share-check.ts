@@ -16,8 +16,16 @@ type Opts = {
   rootAliases?: string[];
 };
 
-/** A path matched as a whole: not inside a longer name, a URL host or another path. */
-const wholePath = (p: string) => new RegExp(`(?<![\\w.~/-])${escape(p.replace(/\/+$/, ""))}(?=$|/|[^\\w.-]|\\.(?![\\w-]))`, "gi");
+/**
+ * A path matched as a whole at its end (not `<root>-old`). A one-segment root (`/app`) is also matched as a whole at its
+ * start, so it is not found inside a URL (`https://www.app.io/apple`); a longer one is found anywhere, also inside a
+ * `file:///…` or editor link.
+ */
+const wholePath = (p: string) => {
+  const path = p.replace(/\/+$/, "");
+  const start = path.split("/").filter(Boolean).length <= 1 ? "(?<![\\w.~/-])" : "";
+  return new RegExp(`${start}${escape(path)}(?=$|/|[^\\w.-]|\\.(?![\\w-]))`, "gi");
+};
 
 function patterns(o: Opts): RegExp[] {
   const id = escape(o.thread);
@@ -45,8 +53,14 @@ export function shareCheckHits(text: string, o: Opts): ShareHit[] {
   text.split("\n").forEach((line, i) => {
     const found: { at: number; match: string }[] = [];
     for (const re of res) for (const m of line.matchAll(re)) found.push({ at: m.index ?? 0, match: m[0] });
-    found.sort((a, b) => a.at - b.at);
-    for (const f of found) hits.push({ line: i + 1, match: f.match });
+    // One place is one hit: a match inside a longer one (the root inside its realpath) is left out.
+    found.sort((a, b) => a.at - b.at || b.match.length - a.match.length);
+    let end = -1;
+    for (const f of found) {
+      if (f.at + f.match.length <= end) continue;
+      end = Math.max(end, f.at + f.match.length);
+      hits.push({ line: i + 1, match: f.match });
+    }
   });
   return hits;
 }

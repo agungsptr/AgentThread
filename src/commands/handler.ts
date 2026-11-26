@@ -821,7 +821,7 @@ function reportCleanup(state: State, t: Thread, cmd: Extract<Command, { cmd: "th
       events: [
         { type: "thread.cleaned", thread: t.id, payload: { repos } },
         ...notice(
-          `Thread ${t.id} is cleaned up: ${repos.length ? `removed the worktrees${isDocType(t.type) ? "" : ` and wip/${t.task ?? ""}`} of ${repos.join(", ")}` : "removed its thread directory"}.${(cmd.notes ?? []).map((n) => ` ${n}.`).join("")}`,
+          `Thread ${t.id} is cleaned up: ${repos.length ? `removed the worktrees${isDocType(t.type) ? "" : ` and wip/${t.task ?? ""}`} of ${repos.join(", ")}` : cmd.dirRemoved === false ? `it had no worktrees; its folder ${t.dir ?? ""} holds files of someone else's and stays` : "removed its thread directory"}.${(cmd.notes ?? []).map((n) => ` ${n}.`).join("")}`,
         ),
       ],
     };

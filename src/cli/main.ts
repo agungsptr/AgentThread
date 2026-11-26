@@ -1,8 +1,8 @@
-import { mainPidFile, runStop, stopMainManager } from "./stop.ts";
+import { mainPidFile, removeMainPid, runStop, stopMainManager, writeMainPid } from "./stop.ts";
 import { EventStore } from "../store/event-store.ts";
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { stringify } from "yaml";
@@ -786,6 +786,7 @@ async function start(root: string, env: Env, argv: string[]): Promise<number> {
   const adapter = adapterFor(run.agent);
   const bin = agentBin(run.agent, env);
   let code: number;
+  let spawned: ReturnType<typeof Bun.spawn> | undefined;
   try {
     const input = { role: "main", run, config, root, ...(profile ? { profile } : {}), ...gitCommonDir(root) } as const;
     const launched = prepareLaunch(adapter, input, adapter.launch(input), (m) => console.error(`agt: ${m}`));
@@ -794,12 +795,18 @@ async function start(root: string, env: Env, argv: string[]): Promise<number> {
       cwd: root,
       env: { ...env, ...launched.env, ...agentEnv({ root, role: "main", agent: run.agent, session }), ...launched.processEnv },
     });
-    // agt stop finds the main manager here (its pid and binary); removed when it exits.
-    writeFileSync(mainPidFile(root), `${proc.pid}\n${bin}\n`);
+    spawned = proc;
+    // agt stop finds the main manager here (pid, binary, start time); removed when it exits, if still ours.
+    writeMainPid(root, proc.pid, bin);
     code = await proc.exited;
-    rmSync(mainPidFile(root), { force: true });
+    // agt stop ended it (SIGTERM, and took the pid file): a normal end, not a failure.
+    if (proc.signalCode === "SIGTERM" && !existsSync(mainPidFile(root))) code = 0;
+    removeMainPid(root, proc.pid);
   } catch (e) {
-    rmSync(mainPidFile(root), { force: true });
+    if (spawned) {
+      removeMainPid(root, spawned.pid);
+      spawned.kill();
+    }
     await endMainSession(socket, session);
     throw new Error(`cannot start ${AGENT_NAMES[run.agent]} (${bin}): ${e instanceof Error ? e.message : String(e)}`);
   }

@@ -98,6 +98,22 @@ describe("thread.cleanup in the handler", () => {
     expect(r.events[1]).toMatchObject({ type: "notice.queued", payload: { text: "Thread 001 is cleaned up: removed the worktrees of api. kept wip/rv-1 in api: it has commits of its own." } });
   });
 
+  test("a doc thread without worktrees: main hears whether its directory went", () => {
+    const main = [
+      { type: "session.created", payload: { session: MAIN_SESSION, role: "main", agent: "claude-code", name: "main" } },
+      { type: "session.attached", payload: { session: MAIN_SESSION, pane: "p0" } },
+    ] as const;
+    const s = stateOf(INIT, ...main, taskThreadCreated("001", "rv-1", { threadType: "review", status: "done" }), { type: "thread.cleanup_requested", thread: "001", payload: {} });
+    const kept = run(s, { cmd: "thread.cleanup_report", thread: "001", ok: true, repos: [], dirRemoved: false });
+    if (!kept.ok) throw new Error(kept.error);
+    expect(kept.events[1]).toMatchObject({ payload: { text: "Thread 001 is cleaned up: it had no worktrees; its folder /repo/.worktrees/rv-1 holds files of someone else's and stays." } });
+    const gone = run(s, { cmd: "thread.cleanup_report", thread: "001", ok: true, repos: [], dirRemoved: true });
+    if (!gone.ok) throw new Error(gone.error);
+    expect(gone.events[1]).toMatchObject({ payload: { text: "Thread 001 is cleaned up: removed its thread directory." } });
+    const after = stateOf(INIT, taskThreadCreated("001", "rv-1", { threadType: "review", status: "done" }), { type: "thread.cleanup_requested", thread: "001", payload: {} }, { type: "thread.cleaned", thread: "001", payload: { repos: [] } });
+    expect(after.threads.get("001")!.log.at(-1)!.message).toBe("cleaned up: it had no worktrees");
+  });
+
   test("a doc thread's log notes the removed worktrees without a wip branch", () => {
     const docAdded = { type: "worktree.added", thread: "001", payload: { repo: "api", path: "/repo/.worktrees/rv-1/api", branch: "(detached)", source: "main" } } as const;
     const s = stateOf(INIT, taskThreadCreated("001", "rv-1", { threadType: "review", status: "done" }), docAdded, { type: "thread.cleanup_requested", thread: "001", payload: {} }, { type: "thread.cleaned", thread: "001", payload: { repos: ["api"] } });

@@ -311,3 +311,10 @@ test("agt start records the main agent's pid and binary in main.pid while it run
   expect(recordedBin).toBe(bin);
   expect(existsSync(pidFile)).toBe(false);
 });
+
+test("agt start exits 0 when agt stop ended the main manager (SIGTERM, its pid file taken)", () => {
+  const bin = join(root, "fake-claude.sh");
+  const pidFile = join(root, ".agentthread", "main.pid");
+  writeFileSync(bin, `#!/bin/sh\nrm -f ${shellQuote(pidFile)}\nkill -TERM $$\n`, { mode: 0o755 });
+  expect(agt(["start"], { AGT_CLAUDE_BIN: bin }).code).toBe(0);
+});
