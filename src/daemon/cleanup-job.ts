@@ -7,7 +7,7 @@ import { spawnAsync } from "../herdr/bridge.ts";
 
 export type CleanupEffect = Extract<Effect, { kind: "git.thread.cleanup" }>;
 /** A stopped job names the repo and the reason, and the repos it had already removed. */
-export type CleanupOutcome = { ok: true; repos: string[] } | { ok: false; repo: string; error: string; removed: string[] };
+export type CleanupOutcome = { ok: true; repos: string[]; notes?: string[] } | { ok: false; repo: string; error: string; removed: string[] };
 
 const GIT_TIMEOUT_MS = 60_000;
 
@@ -24,6 +24,7 @@ export async function cleanupThread(e: CleanupEffect, stopping: () => boolean = 
   const git = (cwd: string, args: string[], env: Record<string, string | undefined> = process.env) => spawnAsync("git", ["-C", cwd, ...args], env, GIT_TIMEOUT_MS);
   const why = (r: { exitCode: number; stderr: string; timedOut?: boolean }) => (r.timedOut ? "timed out" : r.stderr.trim() || `exit ${r.exitCode}`);
   const removed: string[] = [];
+  const notes: string[] = [];
   const stop = (repo: string, error: string): CleanupOutcome => ({ ok: false, repo, error: removed.length ? `${error} (already removed: ${removed.join(", ")})` : error, removed });
   const branch = `wip/${e.task}`;
   const hasBranch = async (repoPath: string, name: string) => (await git(repoPath, ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`])).exitCode === 0;
@@ -31,7 +32,9 @@ export async function cleanupThread(e: CleanupEffect, stopping: () => boolean = 
     if (stopping()) return stop(r.repo, "the daemon is stopping");
     // Without the squash branch the squash may never have happened: wip/<task> commits no other branch has would be lost.
     // (A thread made before the branch followed its type squashed onto feat/<task>.)
-    const squashed = (await hasBranch(r.repoPath, e.squashBranch)) || (await hasBranch(r.repoPath, `feat/${e.task}`));
+    // A doc thread commits nothing: no squash to check, and its worktrees hold only throwaway files.
+    if (e.doc) continue;
+    const squashed = (e.squashBranch !== undefined && (await hasBranch(r.repoPath, e.squashBranch))) || (await hasBranch(r.repoPath, `feat/${e.task}`));
     if (!squashed && (await hasBranch(r.repoPath, branch))) {
       const own = await git(r.repoPath, ["rev-list", `refs/heads/${branch}`, "--not", `--exclude=${branch}`, "--branches"]);
       if (own.exitCode !== 0 || own.timedOut) return stop(r.repo, `git rev-list failed: ${why(own)}`);
@@ -48,8 +51,18 @@ export async function cleanupThread(e: CleanupEffect, stopping: () => boolean = 
     // A folder deleted by hand leaves a stale (prunable) entry: `git worktree remove` on its path drops that entry
     // alone, where `git worktree prune` would drop every stale entry in the user's checkout.
     if (existsSync(r.path) || (await registered(r.repoPath, r.path))) {
-      const out = await git(r.repoPath, ["worktree", "remove", r.path]);
+      const out = await git(r.repoPath, ["worktree", "remove", ...(e.doc ? ["--force"] : []), r.path]);
       if (out.exitCode !== 0 || out.timedOut) return stop(r.repo, `git worktree remove failed: ${why(out)}`);
+    }
+    // A doc thread's wip branch (a worktree_setup may make one) goes only when no commit would be lost with it.
+    if (e.doc && (await hasBranch(r.repoPath, branch))) {
+      const own = await git(r.repoPath, ["rev-list", `refs/heads/${branch}`, "--not", `--exclude=${branch}`, "--branches"]);
+      if (own.exitCode !== 0 || own.timedOut) return stop(r.repo, `git rev-list failed: ${why(own)}`);
+      if (own.stdout.trim()) {
+        notes.push(`kept ${branch} in ${r.repo}: it has commits of its own`);
+        removed.push(r.repo);
+        continue;
+      }
     }
     if (await hasBranch(r.repoPath, branch)) {
       const out = await git(r.repoPath, ["branch", "-D", branch]);
@@ -58,7 +71,7 @@ export async function cleanupThread(e: CleanupEffect, stopping: () => boolean = 
     removed.push(r.repo);
   }
   if (await onlyGenerated(e.dir)) await rm(e.dir, { recursive: true, force: true });
-  return { ok: true, repos: removed };
+  return { ok: true, repos: removed, ...(notes.length ? { notes } : {}) };
 }
 
 /** Whether git lists a worktree at `path` (it may be stale: its folder gone). */

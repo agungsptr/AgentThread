@@ -47,6 +47,8 @@ export const CommandSchema = z.discriminatedUnion("cmd", [
     error: z.string().optional(),
     /** A failed job: the repos it had already removed. */
     removed: z.array(text).optional(),
+    /** A finished job's notes for main (a doc thread's kept wip branch). */
+    notes: z.array(text).optional(),
   }),
   z.object({ cmd: z.literal("thread.status"), thread: threadId, status: z.enum(THREAD_STATUSES), reason: z.string().optional() }),
   z.object({

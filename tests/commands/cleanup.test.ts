@@ -66,6 +66,33 @@ describe("thread.cleanup in the handler", () => {
     ]);
   });
 
+  test("a done doc thread without worktrees cleans up to nothing", () => {
+    const s = stateOf(INIT, taskThreadCreated("001", "rv-1", { threadType: "report", status: "done" }));
+    expect(run(s, { cmd: "thread.cleanup", thread: "001" }, { role: "main" })).toMatchObject({ ok: true, events: [], effects: [], result: { requested: false, repos: [] } });
+  });
+
+  test("a done doc thread's cleanup effect is doc, without a squash branch", () => {
+    const docAdded = { type: "worktree.added", thread: "001", payload: { repo: "api", path: "/repo/.worktrees/rv-1/api", branch: "(detached)", source: "origin/pr-1" } } as const;
+    const s = stateOf(INIT, taskThreadCreated("001", "rv-1", { threadType: "review", status: "done" }), docAdded);
+    const r = run(s, { cmd: "thread.cleanup", thread: "001" }, { role: "main" });
+    if (!r.ok) throw new Error(r.error);
+    expect(r.effects).toEqual([
+      { kind: "git.thread.cleanup", thread: "001", task: "rv-1", doc: true, dir: "/repo/.worktrees/rv-1", repos: [{ repo: "api", repoPath: "/repo/api", path: "/repo/.worktrees/rv-1/api" }] },
+    ]);
+  });
+
+  test("a doc thread's cleanup notice names the worktrees and any note", () => {
+    const docAdded = { type: "worktree.added", thread: "001", payload: { repo: "api", path: "/repo/.worktrees/rv-1/api", branch: "(detached)", source: "main" } } as const;
+    const main = [
+      { type: "session.created", payload: { session: MAIN_SESSION, role: "main", agent: "claude-code", name: "main" } },
+      { type: "session.attached", payload: { session: MAIN_SESSION, pane: "p0" } },
+    ] as const;
+    const s = stateOf(INIT, ...main, taskThreadCreated("001", "rv-1", { threadType: "review", status: "done" }), docAdded, { type: "thread.cleanup_requested", thread: "001", payload: {} });
+    const r = run(s, { cmd: "thread.cleanup_report", thread: "001", ok: true, repos: ["api"], notes: ["kept wip/rv-1 in api: it has commits of its own"] });
+    if (!r.ok) throw new Error(r.error);
+    expect(r.events[1]).toMatchObject({ type: "notice.queued", payload: { text: "Thread 001 is cleaned up: removed the worktrees of api. kept wip/rv-1 in api: it has commits of its own." } });
+  });
+
   test("a thread that is not done is rejected", () => {
     const s = stateOf(INIT, taskThreadCreated("001", "pay-1"), added("api"));
     expect(errorOf(run(s, { cmd: "thread.cleanup", thread: "001" }))).toBe("cleanup needs thread 001 to be done; the user says when it is merged");

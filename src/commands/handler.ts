@@ -21,7 +21,7 @@ export type Effect =
   /** A task worktree of one workspace repo, at `<dir>/<repo>` on a new `wip/<task>` from `source`. */
   | { kind: "git.worktree.add"; thread: string; repo: string; repoPath: string; path: string; branch: string; source: string; /** Doc threads: a detached checkout, no branch (`branch` is DETACHED). */ detach?: true; task?: string }
   /** Removes a done task thread's repo worktrees and wip/<task> branches, then its directory if only agt's files are left. */
-  | { kind: "git.thread.cleanup"; thread: string; task: string; /** The thread's squash branch (a thread from before types follow the prefix: feat/<task> is checked too). */ squashBranch: string; dir: string; repos: { repo: string; repoPath: string; path: string }[] }
+  | { kind: "git.thread.cleanup"; thread: string; task: string; /** A code thread's squash branch (a thread from before types follow the prefix: feat/<task> is checked too). */ squashBranch?: string; /** A doc (review, report) thread: no squash check, worktrees removed with --force. */ doc?: true; dir: string; repos: { repo: string; repoPath: string; path: string }[] }
   | { kind: "thread.dir.ensure"; thread: { id: string; title: string; slug: string; task: string; dir: string; type: ThreadType } }
   | { kind: "herdr.tab.ensure"; thread: string; label: string; cwd: string; env: Record<string, string>; tab?: string }
   /** `workers`: the thread is done, so its workers tabs close too (a tab closed only to be reopened keeps them). */
@@ -758,7 +758,12 @@ function cleanupThread(t: Thread, ctx: HandlerContext): Decision {
   if (t.cleanupRequested) reject(`cleanup of thread ${t.id} is already running`);
   const pending = Object.keys(t.worktreeRequests);
   if (pending.length) reject(`a worktree for ${pending.join(", ")} is still being created`);
-  if (!Object.keys(t.worktrees).length) reject(`thread ${t.id} has no worktrees to clean up`);
+  const doc = isDocType(t.type);
+  // A report that needed no checkout leaves nothing to clean up.
+  if (!Object.keys(t.worktrees).length) {
+    if (doc) return { events: [], result: { requested: false, repos: [] } };
+    reject(`thread ${t.id} has no worktrees to clean up`);
+  }
   const all = workspaceReposNoSpawn(ctx.root, ctx.config ?? DEFAULT_CONFIG);
   for (const [repo, w] of Object.entries(t.worktrees)) {
     if (!Object.hasOwn(all, repo)) reject(`repo ${repo} is no longer in the workspace config; remove its worktree ${w.path} by hand`);
@@ -769,7 +774,16 @@ function cleanupThread(t: Thread, ctx: HandlerContext): Decision {
     .map(([repo, entry]) => ({ repo, repoPath: resolve(ctx.root, entry.path), path: t.worktrees[repo]!.path }));
   return {
     events: [{ type: "thread.cleanup_requested", thread: t.id, payload: {} }],
-    effects: [{ kind: "git.thread.cleanup", thread: t.id, task: t.task, squashBranch: squashBranch(asCodeType(t.type), /* doc: Task 8 */ t.task, (ctx.config ?? DEFAULT_CONFIG).workflow.branch_prefix), dir: t.dir, repos }],
+    effects: [
+      {
+        kind: "git.thread.cleanup",
+        thread: t.id,
+        task: t.task,
+        ...(doc ? { doc: true as const } : { squashBranch: squashBranch(asCodeType(t.type), t.task, (ctx.config ?? DEFAULT_CONFIG).workflow.branch_prefix) }),
+        dir: t.dir,
+        repos,
+      },
+    ],
     result: { requested: true, repos: repos.map((r) => r.repo) },
   };
 }
@@ -784,7 +798,9 @@ function reportCleanup(state: State, t: Thread, cmd: Extract<Command, { cmd: "th
     return {
       events: [
         { type: "thread.cleaned", thread: t.id, payload: { repos } },
-        ...notice(`Thread ${t.id} is cleaned up: removed the worktrees and wip/${t.task ?? ""} of ${repos.join(", ")}.`),
+        ...notice(
+          `Thread ${t.id} is cleaned up: removed the worktrees${isDocType(t.type) ? "" : ` and wip/${t.task ?? ""}`} of ${repos.join(", ")}.${(cmd.notes ?? []).map((n) => ` ${n}.`).join("")}`,
+        ),
       ],
     };
   }
