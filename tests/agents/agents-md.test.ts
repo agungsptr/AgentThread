@@ -592,6 +592,57 @@ describe("branch-aware commit guard and no-push hook", () => {
     });
   });
 
+  describe("a review or report thread (doc-thread thread file)", () => {
+    const DOC_MSG = "AgentThread: a review/report thread never commits in a repo.";
+    const docWt = (branch: string) => {
+      const { root, wt } = taskWt(branch);
+      const d = join(root, ".agentthread", "threads", "th1-some-slug");
+      mkdirSync(join(d, "tickets"), { recursive: true });
+      writeFileSync(join(d, "tickets", "T1.files"), "f.txt\n");
+      writeFileSync(join(d, "stage8"), "done\n");
+      writeFileSync(join(d, "squash-branch"), "feat/t1\n");
+      writeFileSync(join(d, "doc-thread"), "review\n");
+      return { root, wt };
+    };
+    const CENV = (root: string) => ({ ...AGENT, AGT_ROOT: root, AGT_ROLE: "coordinator", AGT_TASK: "t1", AGT_THREAD: "th1" });
+
+    test("the guard refuses a worker commit, even with its files on wip/<task>", () => {
+      const { root, wt } = docWt("wip/t1");
+      const r = commit(wt, WENV(root));
+      expect(r.exitCode).not.toBe(0);
+      expect(err(r)).toContain(DOC_MSG);
+    });
+
+    test("the guard refuses a coordinator commit, even on the squash branch", () => {
+      const { root, wt } = docWt("feat/t1");
+      const r = commit(wt, CENV(root));
+      expect(r.exitCode).not.toBe(0);
+      expect(err(r)).toContain(DOC_MSG);
+    });
+
+    test("the user's own commit in a doc thread's worktree is not refused", () => {
+      const { root, wt } = docWt("wip/t1");
+      expect(commit(wt, { AGT_ROOT: root, AGT_ROLE: "coordinator", AGT_TASK: "t1", AGT_THREAD: "th1" }).exitCode).toBe(0);
+    });
+
+    test("writeAll gives a doc thread a doc-thread file and no squash-branch or stage8", () => {
+      const root = tempRepo();
+      const state = stateOf(INIT, taskThreadCreated("001", "t1", { threadType: "report" }));
+      state.threads.get("001")!.stages[8] = { state: "done", by: "coordinator", ts: "t" };
+      writeAll(root, state, undefined, () => undefined);
+      const d = join(root, ".agentthread", "threads", "001-thread-001");
+      expect(readFileSync(join(d, "doc-thread"), "utf8")).toBe("report\n");
+      expect(existsSync(join(d, "squash-branch"))).toBe(false);
+      expect(existsSync(join(d, "stage8"))).toBe(false);
+    });
+
+    test("writeAll gives a code thread no doc-thread file", () => {
+      const root = tempRepo();
+      writeAll(root, stateOf(INIT, taskThreadCreated("001", "t1")), undefined, () => undefined);
+      expect(existsSync(join(root, ".agentthread", "threads", "001-thread-001", "doc-thread"))).toBe(false);
+    });
+  });
+
   describe("the squash gate (stage 8)", () => {
     const CENV = (root: string) => ({ ...AGENT, AGT_ROOT: root, AGT_ROLE: "coordinator", AGT_TASK: "t1", AGT_THREAD: "th1" });
     const stage8 = (root: string, content: string | null) => {

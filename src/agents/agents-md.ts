@@ -277,6 +277,7 @@ function* excludeInWorktree(c: Ctx, root: string, repo: string, repoName: string
 
 const GUARD_MESSAGE = "AgentThread: workers do not commit; the coordinator commits.";
 const WORKER_BRANCH_MESSAGE = "AgentThread: workers commit only on wip/<task>.";
+export const DOC_THREAD_MESSAGE = "AgentThread: a review/report thread never commits in a repo.";
 const COORDINATOR_BRANCH_MESSAGE_PREFIX = "AgentThread: the coordinator commits only the squash on ";
 const STAGE8_PREFIX = "AgentThread: stage 8 (browser check) is not done; record it with agt stage ";
 const STAGE8_SUFFIX = " 8 done|na first.";
@@ -338,6 +339,8 @@ function hookStub(guardDir: string): string {
     "fi",
     'if [ "$N" = "pre-commit" ]; then',
     "  B=$(git symbolic-ref -q --short HEAD 2>/dev/null)",
+    "  # A review or report thread changes no code: no agent commits in its repo worktrees, on any branch.",
+    `  case "$AGENT" in worker|coordinator) [ -z "$(agt_thread_file doc-thread)" ] || { echo ${shq(DOC_THREAD_MESSAGE)} >&2; exit 1; } ;; esac`,
     '  case "$AGENT" in',
     "    worker)",
     '      case "$B" in',
