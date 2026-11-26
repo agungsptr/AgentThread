@@ -24,7 +24,7 @@ export const USAGE = `usage: agt <command>
   ticket accept <thread>/<ticket>                  the reviewed ticket is done; its worker ends
   ticket return <thread>/<ticket> <what to fix...>   back to its worker (or a fresh one) with the note
   ticket block <thread>/<ticket> --reason <text>
-  stage <thread> <1-10> done|skipped|na|approve [--reason <why>] [--by user]   record a task thread's stage (skipped and na need a reason; approve is stage 7, --by user)
+  stage <thread> <1-10> done|skipped|na|approve [--reason <why>] [--by user]   record a task thread's stage (skipped and na need a reason; approve is stage 7, --by user; a review or report thread has stages 1-4, no approve)
   stack start [--task <slug>|--main] [--only a,b] [--migrate]   start the workspace services (.local-run/); --task runs from .worktrees/<slug>/<repo> where it exists
   stack stop [--only a,b] [--force]     stop them (process group, then a workspace process still holding the port; --force also kills a foreign one)
   stack restart [--task <slug>|--main] [--only a,b] [--migrate]   in the background (agt stack wait blocks until it has finished); --migrate runs each service's migrate, otherwise only with migrate_on_start: true

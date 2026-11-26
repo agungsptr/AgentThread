@@ -2,7 +2,9 @@
 
 AgentThread is a local orchestrator that runs a team of coding agents inside the [Herdr](https://herdr.dev) terminal multiplexer. You talk
 to one **main manager**. For every feature, bug or chore it opens a **thread** with its own **coordinator**, which
-splits the work into tickets and starts **workers**, one per ticket, in git worktrees.
+splits the work into tickets and starts **workers**, one per ticket, in git worktrees. A **review** (of a PR, a branch or
+a finding) or a **report** (how some logic in the project works) runs as a thread too, and ends in one Markdown report
+you can share.
 
 ![AgentThread demo: the main manager opens a thread, its coordinator splits it into two tickets, two workers implement them in parallel, and the coordinator reviews and squashes](docs/assets/demo.gif)
 
@@ -21,6 +23,7 @@ Why use it:
 - **One session per ticket.** Small, focused agent sessions instead of one long conversation that rots.
 - **Guards.** Workers cannot commit outside their ticket, nobody pushes, banned words stay out of commits.
 - **A reviewable flow.** A ten-stage workflow (discussion, spec, tickets, review per commit, staged e2e, release notes) with you approving the decisions that matter.
+- **Reviews and reports that are safe to share.** A four-stage doc workflow ends in one Markdown report; agt refuses to finish while it mentions anything private.
 
 ```
         you
@@ -154,16 +157,20 @@ You decide, push and open PRs. Agents never push.
 
 ### Threads
 
-A thread has a type, which decides the branch prefix of its final squash branch:
+A thread has a type. `feature`, `bug` and `chore` are **code threads**: they run [the ten stages](#the-ten-stages) and
+the type decides the branch prefix of their final squash branch. `review` and `report` are **doc threads**: they change
+no code and run [the doc workflow](#review-and-report-threads).
 
-| Type | Squash branch |
-|---|---|
-| `feature` | `feat/<task>` |
-| `bug` | `fix/<task>` |
-| `chore` | `chore/<task>` |
+| Type | Kind | Squash branch |
+|---|---|---|
+| `feature` | code | `feat/<task>` |
+| `bug` | code | `fix/<task>` |
+| `chore` | code | `chore/<task>` |
+| `review` | doc | none |
+| `report` | doc | none |
 
-Override a prefix with `workflow.branch_prefix` (`wip` and `thread` are refused: guard branches use them). Main
-creates threads with `agt thread new <title...> --type feature|bug|chore`. It can also propose a complexity tier
+Override a code prefix with `workflow.branch_prefix` (`wip` and `thread` are refused: guard branches use them). Main
+creates threads with `agt thread new <title...> --type feature|bug|chore|review|report`. It can also propose a complexity tier
 (`--tier <name> --reason <why>`): the thread waits for your `agt thread choose <id> --tier <name>` (or
 `agt thread cancel <id>`), and when `agents.complexity.timeout` runs out the proposed tier is accepted automatically.
 `agt thread cancel <id> [--reason <text>]` also stops a running thread, whatever its status: its agents end, its tab
@@ -208,10 +215,37 @@ compresses them; a stage is skipped only when you say so.
 
 The workflow text lives in `src/workflow/feature-workflow.md` and is written into the project as a generated skill.
 
+### Review and report threads
+
+A `review` thread reviews a PR, a branch or a finding; a `report` thread explains logic in the project (how something
+works, with examples). Both end in **one Markdown report** that you share as a file. It is kept in the private `.docs/`,
+but its content must not point at anything private.
+
+| # | Stage | What happens |
+|---|---|---|
+| 1 | Scope | What is reviewed or explained, for whom, from which branch or PR; detached checkouts are created |
+| 2 | Investigation | The coordinator reads the code or the diff; a worker is spawned only to verify something (run tests, reproduce a finding) |
+| 3 | Draft | The report is written and recorded with `agt thread report <id> <path>` |
+| 4 | Approval | You approve it and agt's share check passes; the thread goes to review, main closes it and cleans up |
+
+- **The report.** `.docs/<repo or shared>/reviews/YYYY-MM-DD-<slug>.md` for a review,
+  `.docs/<repo or shared>/reports/YYYY-MM-DD-<slug>.md` for a report.
+- **The share check.** `agt thread report <id> --check` lists every line that mentions `.docs`, `.agentthread`,
+  `.worktrees`, the workspace path, the thread's id or a ticket (`thread 004`, `004/T2`, `ticket T3`) or a
+  `workflow.banned_words` entry (whole words). `agt stage <id> 4 done` runs the same check and refuses while a hit, a
+  missing file or an empty file remains. Stage 4 cannot be skipped.
+- **No code changes.** `agt worktree add` makes a detached checkout (no `wip/<task>`, no squash branch), the commit guard
+  refuses every agent commit in it, and tickets take `--repo` without `--file`. Workers may leave throwaway files
+  (a reproduction test); cleanup removes them.
+- **Finishing.** The coordinator tells main `"<id>: report approved: <path>"`; main marks the thread done and runs
+  `agt thread cleanup <id>`, which force-removes the worktrees without any merge check.
+
+The workflow text lives in `src/workflow/doc-workflow.md` and is generated as the `agt-doc-workflow` skill.
+
 ### Worktrees
 
 Tickets of one task share one worktree per repo: `.worktrees/<task>/<repo>`, on a branch `wip/<task>` created from the
-source branch. `agt worktree add <thread> <repo> [--from <branch>]` creates it in the background and the coordinator is
+source branch (a review or report thread's worktree is a detached checkout of the source instead, with no branch). `agt worktree add <thread> <repo> [--from <branch>]` creates it in the background and the coordinator is
 told when it is ready. `wip/<task>` keeps the per-ticket history and is never pushed; the squash branch is what you push.
 agt sets `extensions.worktreeConfig = true` in the repository config (needed for per-worktree excludes and the commit
 guard); the main checkout is otherwise untouched.
@@ -220,7 +254,7 @@ guard); the main checkout is otherwise untouched.
 
 - **Worker commit guard.** Each thread worktree gets its own `core.hooksPath` whose `pre-commit` refuses a commit from a
   worker, or one that stages files outside its ticket, then forwards to your own hooks. The coordinator reviews and
-  commits. The hooks apply only to processes launched by agt (`AGT_AGENT_PROCESS`).
+  commits. In a review or report thread it refuses every agent commit. The hooks apply only to processes launched by agt (`AGT_AGENT_PROCESS`).
 - **Never push.** Agent prompts forbid pushing, amending, rebasing, resetting and `git add -A`.
 - **Banned words.** `workflow.banned_words` are added to the commit-message rule given to every agent.
 - **Autonomy.** With `agents.autonomous: true` (default) agents run without approval prompts. Set it to `false` to keep
@@ -411,9 +445,10 @@ counts as unknown (0%). Claude Code asks once per config dir to trust a folder, 
 
 ### Generated files
 
-`agt init`, `agt setup` and `agt start` write three skills into the project root, and every thread directory and
+`agt init`, `agt setup` and `agt start` write four skills into the project root, and every thread directory and
 worktree gets them too, under both `.claude/skills/` and `.agents/skills/`: `agt` (how to use the CLI per role),
-`agt-feature-workflow` (the ten stages, ending with a section rendered from your config) and `manage-docs`. They are
+`agt-feature-workflow` (the ten stages, ending with a section rendered from your config), `agt-doc-workflow` (review and
+report threads, with the same config section) and `manage-docs`. They are
 regenerated, git-excluded, and never edited by hand. A skill of the same name that your project tracks is left alone.
 Set `agents.skill: false` to turn this off.
 
@@ -480,6 +515,9 @@ branch, releases the stack lock and tells main. Main then marks the thread done,
 and runs `agt thread cleanup <id>`, which removes the worktrees and `wip/<task>` branches (it stops on uncommitted
 changes). Do not remove worktrees or branches by hand.
 
+**After a report is approved.** A review or report thread has no PR: once you approve its report, the coordinator tells
+main, which marks the thread done and cleans up. The report stays in `.docs/`, ready to share.
+
 **The daemon.** `agt daemon start|stop|status`. `agt start` starts it when needed, and it keeps running if you close the
 main pane.
 
@@ -508,9 +546,9 @@ Run `agt help <command>` for exact flags.
 |---|---|
 | Project | `init [--name] [--no-setup]`, `setup`, `start [--no-manager]`, `config`, `config show [--json]`, `config apply <file\|-> [--dry-run] [--no-restart]` |
 | Daemon and logs | `daemon start\|stop\|status`, `logs [-f] [--all]`, `usage [--json]` |
-| Threads | `thread new`, `thread choose`, `thread cancel`, `thread status`, `thread waiting`, `thread cleanup` |
+| Threads | `thread new`, `thread choose`, `thread cancel`, `thread status`, `thread waiting`, `thread report <id> <path>\|--check`, `thread cleanup` |
 | Tickets | `ticket add`, `ticket files`, `ticket claim\|reopen\|done\|accept\|return\|block` |
-| Stages | `stage <thread> <1-10> done\|skipped\|na\|approve` |
+| Stages | `stage <thread> <1-10> done\|skipped\|na\|approve` (a review or report thread: `<1-4> done\|skipped\|na`) |
 | Workers and worktrees | `worker spawn <thread> --ticket <T> [--agent <kind>]`, `worktree add <thread> <repo> [--from]` |
 | Messages | `tell <thread\|main\|thread/ticket> <message>`, `question`, `answer`, `handoff`, `log`, `decide`, `note`, `progress` |
 | Stack | `stack start\|stop\|restart\|wait\|status\|logs`, `stack acquire\|release` |
