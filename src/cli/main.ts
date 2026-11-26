@@ -549,6 +549,12 @@ async function thread(sub: string | undefined, args: string[], root: string, env
     if (!args[0] || args.length > 1) throw new UsageError("thread browser-check needs <id>");
     return send(root, env, { cmd: "thread.browser_check", thread: args[0] });
   }
+  if (sub === "report") {
+    const { values, positionals } = parse(args, { check: { type: "boolean" } });
+    const [id, path] = positionals;
+    if (!id || positionals.length > 2 || (path === undefined) === !values.check) throw new UsageError("thread report needs <id> <path> or <id> --check");
+    return send(root, env, { cmd: "thread.report", thread: id, ...(values.check ? { check: true } : { path }) });
+  }
   if (sub === "waiting") {
     const [id, ...what] = args;
     if (!id || !what.length) throw new UsageError('thread waiting needs <id> "<what>"');

@@ -47,7 +47,7 @@ export function renderMain(state: State, config: Config = DEFAULT_CONFIG): strin
     const workers = live.filter((s) => s.role === "worker").length;
     const limit = t.maxWorkers ?? config.workers.max_workers;
     const c = currentStage(t);
-    return `| ${t.id} | ${cell(t.title)} | ${t.type} | ${t.status} | ${done}/${t.tickets.length} | ${t.dependsOn.join(", ") || "-"} | ${coordinator} | ${workers}/${limit} | ${t.legacy ? "-" : c ? `${c.n} ${c.name}` : "all done"}${t.waiting ? `; waiting: ${cell(capBytes(oneLine(t.waiting.what), 300))}` : ""} |`;
+    return `| ${t.id} | ${cell(t.title)} | ${t.type} | ${t.status} | ${done}/${t.tickets.length} | ${t.dependsOn.join(", ") || "-"} | ${coordinator} | ${workers}/${limit} | ${t.legacy ? "-" : c ? `${c.n} ${c.name}` : "all done"}${t.report ? `; report: ${cell(oneLine(t.report))}` : ""}${t.waiting ? `; waiting: ${cell(capBytes(oneLine(t.waiting.what), 300))}` : ""} |`;
   });
   const attention = threads.flatMap((t) =>
     t.status === "review" ? [`- ${t.id}: awaiting review`] : t.status === "blocked" ? [`- ${t.id}: blocked`] : [],
@@ -112,7 +112,7 @@ export function renderSub(t: Thread, sessions: Session[] = [], config: Config = 
     "---",
     "",
     ...(t.tier !== undefined ? [...tierLines(t, sessions, config), ""] : []),
-    ...(t.legacy ? [] : [...stageLine(t), ""]),
+    ...(t.legacy ? [] : [...stageLine(t), ...(t.report ? [`Report: ${oneLine(t.report)}`] : []), ""]),
     "## Goal",
     "",
     clampHeadings(t.goal.trim()) || "_Not set._",

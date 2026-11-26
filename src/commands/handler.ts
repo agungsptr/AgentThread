@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
 import { browserCheckMode, DEFAULT_CONFIG, type Config } from "../config/config.ts";
 import { canTransitionThread, canTransitionTicket, scopesOverlap, slugify, validateHandoff } from "../domain/rules.ts";
 import { asCodeType, squashBranch } from "../domain/branches.ts";
-import { ROLES, type Actor, type AgentKind, type EventBody, type Role, type ThreadStatus, type ThreadType, type TicketStatus } from "../domain/types.ts";
+import { shareCheckHits, type ShareHit } from "../domain/share-check.ts";
+import { isDocType, ROLES, type Actor, type AgentKind, type EventBody, type Role, type ThreadStatus, type ThreadType, type TicketStatus } from "../domain/types.ts";
 import { roleAgent, type RoleAgent } from "../agents/roles.ts";
 import { agentName, awaitsWorker, conflictingTicket, FILE_HOLDING, liveSessions, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure as tabEnsureFor, workerLimit } from "../orchestration/sessions.ts";
 import { stageNa } from "../workflow/project-config.ts";
@@ -76,6 +77,7 @@ const ALLOWED: Record<CommandName, readonly Role[]> = {
   "thread.cancel": ["user", "main"],
   "thread.waiting": ["coordinator"],
   "thread.browser_check": ["user", "main", "coordinator"],
+  "thread.report": ["user", "coordinator"],
   "thread.cleanup": ["user", "main"],
   "thread.cleanup_report": ["user"],
   "ticket.add": ["coordinator"],
@@ -350,6 +352,8 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
       if (t.legacy) reject("the browser check applies to task threads");
       if (t.status === "done") reject(`thread ${t.id} is done`);
       return { events: [{ type: "thread.browser_check", thread: t.id, payload: {} }] };
+    case "thread.report":
+      return threadReport(t, cmd, ctx);
     case "thread.waiting":
       if (t.legacy) reject("waiting applies to task threads");
       if (t.status === "done") reject(`thread ${t.id} is done`);
@@ -665,6 +669,42 @@ function reportWorktree(state: State, t: Thread, repo: string, failure: string |
   }
   const reason = failure.trim().replace(/\.$/, "") || "unknown error";
   return { events: [{ type: "worktree.failed", thread: t.id, payload: { repo, reason } }, ...notice(`Worktree for ${repo} failed: ${reason}.`)] };
+}
+
+/** A report path: workspace-root-relative, a .md file under .docs/, no `..` segment. */
+const REPORT_PATH_ERROR = "report path must be a .md file under .docs/ (workspace-root-relative)";
+function checkReportPath(path: string): void {
+  if (isAbsolute(path) || path.split(/[\\/]/).includes("..") || !path.startsWith(".docs/") || !path.endsWith(".md")) reject(REPORT_PATH_ERROR);
+}
+
+/** A doc thread's report file, read for the share check. */
+export function readReport(root: string, path: string): { ok: true; text: string } | { ok: false; error: string } {
+  const file = join(root, path);
+  if (!existsSync(file)) return { ok: false, error: `report ${path} is missing` };
+  const text = readFileSync(file, "utf8");
+  if (!text.trim()) return { ok: false, error: `report ${path} is empty` };
+  return { ok: true, text };
+}
+
+/** The share check of a doc thread's recorded report: the hits, or a rejection when there is no readable report. */
+export function checkReport(t: Thread, ctx: HandlerContext): { path: string; hits: ShareHit[] } {
+  const path = t.report ?? reject(`no report recorded: agt thread report ${t.id} <path>`);
+  const read = readReport(ctx.root, path);
+  if (!read.ok) reject(read.error);
+  return { path, hits: shareCheckHits(read.text, { root: ctx.root, thread: t.id, banned: (ctx.config ?? DEFAULT_CONFIG).workflow.banned_words ?? [] }) };
+}
+
+/** `agt thread report`: record a doc thread's report path, or check the recorded one. */
+function threadReport(t: Thread, cmd: Extract<Command, { cmd: "thread.report" }>, ctx: HandlerContext): Decision {
+  if (!isDocType(t.type)) reject(`thread ${t.id} is a ${t.type} thread; only review and report threads have a report`);
+  if (cmd.check) {
+    const { path, hits } = checkReport(t, ctx);
+    return { events: [], result: { path, ok: hits.length === 0, hits } };
+  }
+  if (cmd.path === undefined) reject("thread report needs <path> or --check");
+  if (t.status === "done") reject(`thread ${t.id} is done`);
+  checkReportPath(cmd.path);
+  return { events: [{ type: "thread.report_set", thread: t.id, payload: { path: cmd.path } }], result: { path: cmd.path } };
 }
 
 const cleanupRunning = (t: Thread) => `cleanup of thread ${t.id} is running`;

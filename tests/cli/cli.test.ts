@@ -267,3 +267,14 @@ test("agt worktree add: a coordinator is told it gets a notice; a user is pointe
     out: `requested worktree for ${name}; you will get a notice when it is ready`,
   });
 });
+
+test("agt thread report: usage errors, then records a doc thread's path and checks it", () => {
+  expect(agt(["thread", "report"])).toMatchObject({ code: 2 });
+  expect(agt(["thread", "report", "001", "a.md", "--check"]).err).toContain("thread report needs <id> <path> or <id> --check");
+  agt(["daemon", "start"]);
+  expect(agt(["thread", "new", "Explain", "auth", "--type", "report"]).code).toBe(0);
+  expect(agt(["thread", "report", "001", ".docs/shared/reports/auth.md"])).toMatchObject({ code: 0, out: JSON.stringify({ path: ".docs/shared/reports/auth.md" }) });
+  mkdirSync(join(root, ".docs", "shared", "reports"), { recursive: true });
+  writeFileSync(join(root, ".docs", "shared", "reports", "auth.md"), "# Auth\nClear.\n");
+  expect(JSON.parse(agt(["thread", "report", "001", "--check"]).out)).toEqual({ path: ".docs/shared/reports/auth.md", ok: true, hits: [] });
+});

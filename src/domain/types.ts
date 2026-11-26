@@ -116,6 +116,8 @@ export type EventBody =
   | { type: "ticket.accepted"; thread: string; payload: { ticket: string } }
   | { type: "ticket.returned"; thread: string; payload: { ticket: string; note: string } }
   | { type: "thread.waiting"; thread: string; payload: { what: string } }
+  /** A doc (review, report) thread's report path, workspace-root-relative under .docs/. */
+  | { type: "thread.report_set"; thread: string; payload: { path: string } }
   | { type: "thread.browser_check"; thread: string; payload: Record<string, never> }
   | { type: "thread.cleanup_requested"; thread: string; payload: Record<string, never> }
   | { type: "thread.cleaned"; thread: string; payload: { repos: string[] } }

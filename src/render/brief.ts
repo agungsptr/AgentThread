@@ -119,6 +119,7 @@ function build(t: Thread, trail: GitTrail | undefined, trails: Record<string, Gi
     "",
     `Status: ${t.status}`,
     ...stageLine(t),
+    ...(t.report ? [`Report: ${oneLine(t.report)}`] : []),
     ...(t.browserCheck ? ["Browser check: requested"] : []),
     ...(!t.legacy && !migrationConfigured(config) ? [MIGRATION_LINE] : []),
     ...tier,

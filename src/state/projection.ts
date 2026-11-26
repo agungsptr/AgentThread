@@ -176,6 +176,8 @@ export interface Thread {
   worktreeRequests: Record<string, { path: string; branch: string; source: string }>;
   /** A cleanup (`agt thread cleanup`) runs in the background: requested, not yet cleaned or failed. */
   cleanupRequested?: boolean;
+  /** Doc (review, report) threads: the report's path, workspace-root-relative under .docs/ (`agt thread report`). */
+  report?: string;
   /** True for a thread created before thread directories (its thread.created has a worktree and no dir). */
   legacy: boolean;
   maxWorkers?: number;
@@ -271,7 +273,7 @@ export function actorSession(state: State, actor: Actor): string | undefined {
 export const COMMAND_OUTPUT_TYPES: ReadonlySet<string> = new Set([
   "thread.status_changed", "ticket.created", "ticket.files_changed", "ticket.claimed", "ticket.completed", "ticket.blocked", "ticket.reopened",
   "ticket.reviewed", "ticket.accepted", "ticket.returned", "stage.recorded", "log.appended", "decision.recorded", "note.recorded", "progress.recorded", "question.recorded", "question.answered",
-  "worker.queued", "thread.waiting", "thread.browser_check", "thread.cleanup_requested",
+  "worker.queued", "thread.waiting", "thread.report_set", "thread.browser_check", "thread.cleanup_requested",
 ]);
 
 /**
@@ -557,6 +559,10 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       note(t, ev, "browser check requested");
       break;
     }
+    case "thread.report_set":
+      t.report = ev.payload.path;
+      note(t, ev, `report at ${ev.payload.path}`);
+      break;
     case "thread.waiting":
       // A repeat replaces the text and starts the wait over.
       t.waiting = { what: ev.payload.what, since: ev.ts, idleSeen: false, ...(ev.actor.session ? { session: ev.actor.session } : {}) };
