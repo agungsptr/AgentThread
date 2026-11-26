@@ -3,6 +3,7 @@ export const USAGE = `usage: agt <command>
   init [--name <name>] [--no-setup]   create the project; --no-setup skips the wizard (no prompts, safe from an agent shell; a no-op when already initialised)
   setup                      choose agent, model and effort per role, and complexity tiers
   start [--no-manager]       set up the Herdr layout and run the main manager (inside a Herdr pane)
+  stop                       shut agt down: thread and workers tabs, the logger, the workspace stack, the daemon and the main manager (thread state is kept; agt start resumes)
   daemon start|stop|status
   config                     print the effective config
   config show [--json]       the effective config and the files its layers came from

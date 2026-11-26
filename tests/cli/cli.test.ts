@@ -288,3 +288,29 @@ test("agt guide inside a review or report thread shows the doc rules", () => {
   expect(doc).toContain("- Never push; never commit in a repo; never bypass the commit guard.");
   expect(agt(["guide", "coordinator"]).out).not.toContain("never commit in a repo");
 });
+
+test("agt stop is refused in a coordinator or worker pane", () => {
+  for (const env of [COORD, WORKER]) {
+    const r = agt(["stop"], { env });
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("agt stop runs from your own shell or the main manager, not a coordinator or worker pane");
+  }
+});
+
+test("agt stop with a running daemon and no Herdr layout stops the daemon", () => {
+  agt(["daemon", "start"]);
+  const r = agt(["stop"]);
+  expect(r.code).toBe(0);
+  expect(r.out).toContain("daemon stopped");
+  expect(r.out).toContain("no Herdr layout: no tabs to close");
+  expect(r.out).toContain("main manager not running");
+  expect(agt(["daemon", "status"]).code).toBe(1);
+});
+
+test("agt stop without a daemon reads the state from disk and says the daemon was not running", () => {
+  agt(["daemon", "start"]);
+  agt(["daemon", "stop"]);
+  const r = agt(["stop"]);
+  expect(r.code).toBe(0);
+  expect(r.out).toContain("daemon not running");
+});

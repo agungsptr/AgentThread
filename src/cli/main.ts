@@ -1,4 +1,5 @@
 import { mainPidFile, runStop, stopMainManager } from "./stop.ts";
+import { EventStore } from "../store/event-store.ts";
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -218,6 +219,8 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
     }
     case "start":
       return start(findRoot(cwd, env), env, argv.slice(1));
+    case "stop":
+      return stop(findRoot(cwd, env), env, argv.slice(1));
     case "thread":
       return thread(sub, rest, findRoot(cwd, env), env);
     case "ticket":
@@ -797,6 +800,42 @@ async function start(root: string, env: Env, argv: string[]): Promise<number> {
   }
   await endMainSession(socket, session);
   return code;
+}
+
+/**
+ * `agt stop`: the daemon, every thread and workers tab, the logger, the workspace stack and the main manager. Thread
+ * state is kept; the next `agt start` recovers as after a reboot. Not from a coordinator's or worker's pane.
+ */
+async function stop(root: string, env: Env, argv: string[]): Promise<number> {
+  if (argv.length) throw new UsageError("stop takes no arguments");
+  if (env.AGT_ROLE === "coordinator" || env.AGT_ROLE === "worker") throw new Error("agt stop runs from your own shell or the main manager, not a coordinator or worker pane");
+  const socket = paths(root).socket;
+  const r = await runStop({
+    readState: async () => {
+      if (await isAlive(socket)) {
+        const res = await request(socket, { op: "events.since", seq: 0 });
+        if (!res.ok) throw new Error(res.error);
+        return project(res.result as StoredEvent[]);
+      }
+      // No daemon: the event log is free to read.
+      const store = new EventStore(paths(root).db);
+      try {
+        return project(store.all());
+      } finally {
+        store.close();
+      }
+    },
+    daemonAlive: () => isAlive(socket),
+    stopDaemon: () => stopDaemon(socket),
+    herdr: (layout) => new HerdrCli({ bin: layout.herdrBin, env: { ...env, ...(layout.herdrSocket ? { HERDR_SOCKET_PATH: layout.herdrSocket } : {}) } }),
+    stopStack: async () => {
+      if (!hasServices(loadConfig(root, env))) return [];
+      return (await stackServices(root, env, "stop", [])) === 0 ? ["stack stopped"] : ["stack: a service did not stop (see above)"];
+    },
+    stopMain: () => stopMainManager(root),
+    print: (line) => console.log(line),
+  });
+  return r.code;
 }
 
 const AGENT_NAMES: Record<AgentKind, string> = { "claude-code": "Claude Code", opencode: "OpenCode", codex: "Codex", omp: "omp", agy: "Antigravity" };

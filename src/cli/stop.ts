@@ -30,6 +30,8 @@ export interface StopDeps {
   stopStack(): Promise<string[]>;
   /** The main manager: a line when it was stopped, undefined when it was not running. */
   stopMain(): string | undefined;
+  /** Each line as it happens (the CLI prints them while the steps run). */
+  print?(line: string): void;
 }
 
 const why = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -40,7 +42,8 @@ const why = (e: unknown) => (e instanceof Error ? e.message : String(e));
  * Thread state is kept: the next `agt start` recovers as after a reboot.
  */
 export async function runStop(d: StopDeps): Promise<{ code: number; lines: string[] }> {
-  const lines: string[] = [];
+  const out: string[] = [];
+  const lines = { push: (...l: string[]) => l.forEach((x) => (out.push(x), d.print?.(x))) };
   let code = 0;
   const step = async (name: string, f: () => Promise<void> | void) => {
     try {
@@ -72,7 +75,7 @@ export async function runStop(d: StopDeps): Promise<{ code: number; lines: strin
     });
   await step("stack", async () => void lines.push(...(await d.stopStack())));
   await step("main manager", () => void lines.push(d.stopMain() ?? "main manager not running"));
-  return { code, lines };
+  return { code, lines: out };
 }
 
 /** `agt start` records the main agent's pid and binary here while it runs (one per line). */

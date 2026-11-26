@@ -520,11 +520,17 @@ changes). Do not remove worktrees or branches by hand.
 **After a report is approved.** A review or report thread has no PR: once you approve its report, the coordinator tells
 main, which marks the thread done and cleans up. The report stays in `.docs/`, ready to share.
 
+**Stopping everything.** `agt stop` shuts AgentThread down: it stops the daemon first (so nothing respawns), closes
+every thread and workers tab and the logger pane, stops the workspace services, and stops the main manager last, so
+the main pane drops back to its shell. Run it from your own shell, or ask main to run it; a coordinator or worker cannot.
+Thread state is kept: the next `agt start` reopens the tabs and recovers each thread's coordinator from its log, as after
+a reboot.
+
 **The daemon.** `agt daemon start|stop|status`. `agt start` starts it when needed, and it keeps running if you close the
-main pane.
+main pane. `agt daemon stop` stops only the daemon; `agt stop` stops everything.
 
 **Upgrading agt.** A running daemon and the agents it started keep the old code and prompts. After upgrading:
-`agt daemon stop`, close the running agents' panes, then `agt start`.
+`agt stop`, then `agt start`.
 
 **Trust dialogs.** Claude Code asks once per folder whether you trust it. When main is Claude Code, it asks in main's
 pane at `agt start` and the worktrees inherit the answer. If main is another agent but some role uses Claude Code,
@@ -546,7 +552,7 @@ Run `agt help <command>` for exact flags.
 
 | Area | Commands |
 |---|---|
-| Project | `init [--name] [--no-setup]`, `setup`, `start [--no-manager]`, `config`, `config show [--json]`, `config apply <file\|-> [--dry-run] [--no-restart]` |
+| Project | `init [--name] [--no-setup]`, `setup`, `start [--no-manager]`, `stop`, `config`, `config show [--json]`, `config apply <file\|-> [--dry-run] [--no-restart]` |
 | Daemon and logs | `daemon start\|stop\|status`, `logs [-f] [--all]`, `usage [--json]` |
 | Threads | `thread new`, `thread choose`, `thread cancel`, `thread status`, `thread waiting`, `thread report <id> <path>\|--check`, `thread cleanup` |
 | Tickets | `ticket add`, `ticket files`, `ticket claim\|reopen\|done\|accept\|return\|block` |
