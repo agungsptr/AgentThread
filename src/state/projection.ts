@@ -1,5 +1,5 @@
 import { isHandoffRequest } from "../agents/prompts.ts";
-import { STAGE_NAMES, type Actor, type AgentKind, type Layout, type Role, type SessionRole, type StageBy, type StageState, type StoredEvent, type ThreadStatus, type ThreadType, type TicketStatus } from "../domain/types.ts";
+import { stageNames, type Actor, type AgentKind, type Layout, type Role, type SessionRole, type StageBy, type StageState, type StoredEvent, type ThreadStatus, type ThreadType, type TicketStatus } from "../domain/types.ts";
 
 export type SessionStatus = "starting" | "active" | "idle" | "rotated" | "ended" | "failed" | "lost";
 
@@ -585,7 +585,7 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       const p = ev.payload;
       if (p.state === "approve") t.stage7Approved = true;
       else t.stages[p.stage] = { state: p.state, by: p.by, ...(p.reason ? { reason: p.reason } : {}), ts: ev.ts };
-      note(t, ev, `stage ${p.stage} (${STAGE_NAMES[p.stage - 1]}) ${p.state}${p.reason ? `: ${p.reason}` : ""}`);
+      note(t, ev, `stage ${p.stage} (${stageNames(t.type)[p.stage - 1]}) ${p.state}${p.reason ? `: ${p.reason}` : ""}`);
       break;
     }
     case "log.appended":
@@ -654,10 +654,11 @@ export function applyEvent(state: State, ev: StoredEvent): void {
   }
 }
 
-/** A task thread's current stage: the lowest not done, skipped or na; undefined for a legacy thread or when all ten are passed. */
+/** A task thread's current stage (of its kind's list): the lowest not done, skipped or na; undefined for a legacy thread or when all are passed. */
 export function currentStage(t: Thread): { n: number; name: string } | undefined {
   if (t.legacy) return undefined;
-  for (let n = 1; n <= 10; n++) if (!t.stages[n]) return { n, name: STAGE_NAMES[n - 1]! };
+  const names = stageNames(t.type);
+  for (let n = 1; n <= names.length; n++) if (!t.stages[n]) return { n, name: names[n - 1]! };
   return undefined;
 }
 

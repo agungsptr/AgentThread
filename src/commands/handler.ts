@@ -4,8 +4,8 @@ import { isAbsolute, join, resolve } from "node:path";
 import { browserCheckMode, DEFAULT_CONFIG, type Config } from "../config/config.ts";
 import { canTransitionThread, canTransitionTicket, scopesOverlap, slugify, validateHandoff } from "../domain/rules.ts";
 import { asCodeType, squashBranch } from "../domain/branches.ts";
-import { shareCheckHits, type ShareHit } from "../domain/share-check.ts";
-import { isDocType, ROLES, type Actor, type AgentKind, type EventBody, type Role, type ThreadStatus, type ThreadType, type TicketStatus } from "../domain/types.ts";
+import { formatHits, shareCheckHits, type ShareHit } from "../domain/share-check.ts";
+import { DOC_STAGE_NAMES, isDocType, ROLES, type Actor, type AgentKind, type EventBody, type Role, type ThreadStatus, type ThreadType, type TicketStatus } from "../domain/types.ts";
 import { roleAgent, type RoleAgent } from "../agents/roles.ts";
 import { agentName, awaitsWorker, conflictingTicket, FILE_HOLDING, liveSessions, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure as tabEnsureFor, workerLimit } from "../orchestration/sessions.ts";
 import { stageNa } from "../workflow/project-config.ts";
@@ -335,6 +335,7 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
   switch (cmd.cmd) {
     case "thread.status":
       if (cmd.status === "done" && actor.role === "coordinator" && !t.legacy) {
+        if (isDocType(t.type)) reject(`only main or the user close a thread: agt tell main "${t.id}: report approved: <report path>"`);
         reject(`only main or the user close a thread: agt tell main "${t.id}: merged into <source> in <repos> (verified)"`);
       }
       return threadStatus(state, t, cmd.status, cmd.reason, ctx);
@@ -350,6 +351,7 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
     }
     case "thread.browser_check":
       if (t.legacy) reject("the browser check applies to task threads");
+      if (isDocType(t.type)) reject("the browser check applies to code threads");
       if (t.status === "done") reject(`thread ${t.id} is done`);
       return { events: [{ type: "thread.browser_check", thread: t.id, payload: {} }] };
     case "thread.report":
@@ -385,6 +387,7 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
     }
     case "stage": {
       if (t.legacy) reject("stages apply to task threads");
+      if (isDocType(t.type)) return docStage(state, t, cmd, ctx);
       const recordedNa = t.stages[cmd.stage];
       if (recordedNa?.state === "na" && recordedNa.by === "agt" && (cmd.state === "done" || cmd.state === "approve") && cmd.by !== "user" && actor.role !== "user") {
         reject(`stage ${cmd.stage} is na: ${recordedNa.reason ?? "ruled out by the config"}; only the user can change it (add --by user)`);
@@ -404,6 +407,7 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
       const { holder, queue } = state.stack;
       // Task threads only: stages do not exist on a legacy thread, which cannot be approved. Checked first, so neither
       // the holder nor a queued thread gets the e2e4 purpose without the approval.
+      if (cmd.for === "e2e4" && isDocType(t.type)) reject("e2e stage 4 applies to code threads");
       if (cmd.for === "e2e4" && !t.legacy && !t.stage7Approved) reject(`stage 4 e2e needs the user's approval: agt stage ${t.id} 7 approve --by user`);
       const payload = { thread: t.id, ...(cmd.for ? { purpose: cmd.for } : {}) };
       // The holder keeps the lock; a new purpose is recorded (status and main.thread.md show it).
@@ -611,10 +615,10 @@ function newThread(state: State, cmd: Extract<Command, { cmd: "thread.new" }>, c
         },
       },
       // The stages the config rules out are na from the start (stage.recorded needs the thread, so after thread.created).
-      ...stageNa(ctx.config ?? DEFAULT_CONFIG).map(({ stage, reason }): EventBody => ({ type: "stage.recorded", thread: id, payload: { stage, state: "na", by: "agt", reason } })),
+      ...(isDocType(cmd.type) ? [] : stageNa(ctx.config ?? DEFAULT_CONFIG)).map(({ stage, reason }): EventBody => ({ type: "stage.recorded", thread: id, payload: { stage, state: "na", by: "agt", reason } })),
       // Stage 8 only on request: agt records it skipped itself, so the squash guard opens and nobody is asked. The coordinator
       // records it done if the user asks for a browser check later.
-      ...(!cmd.browserCheck && browserCheckMode(ctx.config ?? DEFAULT_CONFIG) === "on_request" && !stageNa(ctx.config ?? DEFAULT_CONFIG).some((x) => x.stage === 8)
+      ...(!isDocType(cmd.type) && !cmd.browserCheck && browserCheckMode(ctx.config ?? DEFAULT_CONFIG) === "on_request" && !stageNa(ctx.config ?? DEFAULT_CONFIG).some((x) => x.stage === 8)
         ? [{ type: "stage.recorded", thread: id, payload: { stage: 8, state: "skipped", by: "agt", reason: "not requested" } } as EventBody]
         : []),
       ...tierEvents(state, id, cmd),
@@ -669,6 +673,27 @@ function reportWorktree(state: State, t: Thread, repo: string, failure: string |
   }
   const reason = failure.trim().replace(/\.$/, "") || "unknown error";
   return { events: [{ type: "worktree.failed", thread: t.id, payload: { repo, reason } }, ...notice(`Worktree for ${repo} failed: ${reason}.`)] };
+}
+
+/**
+ * `agt stage` on a doc (review, report) thread: stages 1-4, no approve, and the last stage (approval) is the share
+ * check: it cannot be skipped or na, and done needs the recorded report to pass. Done moves the thread to review.
+ */
+function docStage(state: State, t: Thread, cmd: Extract<Command, { cmd: "stage" }>, ctx: HandlerContext): Decision {
+  const last = DOC_STAGE_NAMES.length;
+  if (cmd.stage > last) reject(`a ${t.type} thread has stages 1-${last}`);
+  if (cmd.state === "approve") reject("only stage 7 (e2e) of a code thread is approved");
+  if (cmd.by === "user" && cmd.state !== "skipped") reject("--by user is only for skipped");
+  if (cmd.stage === last && (cmd.state === "skipped" || cmd.state === "na")) reject(`stage ${last} (approval) cannot be skipped or na: it runs the share check`);
+  if (cmd.state === "skipped" && cmd.by !== "user") reject("only the user skips a stage; record it with --by user");
+  if ((cmd.state === "skipped" || cmd.state === "na") && !cmd.reason) reject(`stage ${cmd.stage} ${cmd.state} needs --reason <why>`);
+  if (cmd.stage === last && cmd.state === "done") {
+    const { path, hits } = checkReport(t, ctx);
+    if (hits.length) reject(formatHits(path, hits));
+  }
+  const recorded: EventBody = { type: "stage.recorded", thread: t.id, payload: { stage: cmd.stage, state: cmd.state, by: cmd.by ?? "coordinator", ...(cmd.reason ? { reason: cmd.reason } : {}) } };
+  const toReview = cmd.stage === last && cmd.state === "done" && t.status === "in_progress" ? threadStatus(state, t, "review", `stage ${last} done`, ctx).events : [];
+  return { events: [recorded, ...toReview] };
 }
 
 /** A report path: workspace-root-relative, a .md file under .docs/, no `..` segment. */
