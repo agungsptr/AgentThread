@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { browserCheckMode, DEFAULT_CONFIG, type Config } from "../config/config.ts";
@@ -337,6 +338,10 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
       if (cmd.status === "done" && actor.role === "coordinator" && !t.legacy) {
         if (isDocType(t.type)) reject(`only main or the user close a thread: agt tell main "${t.id}: report approved: <report path>"`);
         reject(`only main or the user close a thread: agt tell main "${t.id}: merged into <source> in <repos> (verified)"`);
+      }
+      // A doc thread's review means its report passed the share check: only stage 4 done gets it there.
+      if (cmd.status === "review" && isDocType(t.type) && t.stages[DOC_STAGE_NAMES.length]?.state !== "done") {
+        reject(`a ${t.type} thread goes to review when its report is approved: agt stage ${t.id} ${DOC_STAGE_NAMES.length} done`);
       }
       return threadStatus(state, t, cmd.status, cmd.reason, ctx);
     case "thread.choose": {
@@ -729,7 +734,7 @@ export function checkReport(t: Thread, ctx: HandlerContext): { path: string; hit
   const path = t.report ?? reject(`no report recorded: agt thread report ${t.id} <path>`);
   const read = readReport(ctx.root, path);
   if (!read.ok) reject(read.error);
-  return { path, hits: shareCheckHits(read.text, { root: ctx.root, thread: t.id, banned: (ctx.config ?? DEFAULT_CONFIG).workflow.banned_words ?? [] }) };
+  return { path, hits: shareCheckHits(read.text, { root: ctx.root, thread: t.id, banned: (ctx.config ?? DEFAULT_CONFIG).workflow.banned_words ?? [], home: homedir() }) };
 }
 
 /** `agt thread report`: record a doc thread's report path, or check the recorded one. */
@@ -741,6 +746,7 @@ function threadReport(t: Thread, cmd: Extract<Command, { cmd: "thread.report" }>
   }
   if (cmd.path === undefined) reject("thread report needs <path> or --check");
   if (t.status === "done") reject(`thread ${t.id} is done`);
+  if (t.stages[DOC_STAGE_NAMES.length]?.state === "done") reject(`the report of thread ${t.id} is approved (stage ${DOC_STAGE_NAMES.length} done); its path cannot change`);
   checkReportPath(cmd.path);
   return { events: [{ type: "thread.report_set", thread: t.id, payload: { path: cmd.path } }], result: { path: cmd.path } };
 }

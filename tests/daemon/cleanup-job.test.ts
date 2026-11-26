@@ -24,6 +24,22 @@ function docThread(): { root: string; api: string; path: string; effect: Cleanup
 }
 
 describe("cleanup of a doc thread", () => {
+  test("stops when the detached HEAD has commits made after the checkout (a user's own)", async () => {
+    const t = docThread();
+    git(t.path, "commit", "-q", "--allow-empty", "-m", "mine");
+    const out = await cleanupThread(t.effect);
+    expect(out).toMatchObject({ ok: false, repo: "api" });
+    expect(out.ok ? "" : out.error).toBe(`${t.path} has commits made after its checkout; keep them on a branch (git -C ${t.path} switch -c <name>), then run cleanup again`);
+    expect(existsSync(t.path)).toBe(true);
+  });
+
+  test("a detached HEAD whose new commits are on a branch is removed", async () => {
+    const t = docThread();
+    git(t.path, "commit", "-q", "--allow-empty", "-m", "mine");
+    git(t.path, "branch", "keep-mine");
+    expect(await cleanupThread(t.effect)).toEqual({ ok: true, repos: ["api"] });
+  });
+
   test("removes a worktree with uncommitted throwaway files", async () => {
     const t = docThread();
     writeFileSync(join(t.path, "repro.test.ts"), "throwaway\n");

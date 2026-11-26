@@ -3,7 +3,7 @@ import { adapterFor } from "../agents/adapters.ts";
 import { roleAgent } from "../agents/roles.ts";
 import type { Effect } from "../commands/handler.ts";
 import { type Config, durationMs } from "../config/config.ts";
-import { STAGE_NAMES, type EventBody, type StoredEvent } from "../domain/types.ts";
+import { stageNames, type EventBody, type StoredEvent } from "../domain/types.ts";
 import { isLive, type Session, type State, type Thread } from "../state/projection.ts";
 import { generateHandoff } from "./handoff.ts";
 import { awaitsRespawn, awaitsWorker, conflictingTicket, exitedBeforeStart, liveSessions, rotateCoordinator, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure, workerCwd, workerLimit } from "./sessions.ts";
@@ -58,7 +58,7 @@ const reviewNotice = (thread: string, ticket: string, summary: string | undefine
 function skippedStages(t: Thread): string {
   const parts = Object.entries(t.stages)
     .filter(([, v]) => v && (v.state === "skipped" || v.state === "na"))
-    .map(([n, v]) => `${n} ${STAGE_NAMES[Number(n) - 1]} (${v!.state === "na" ? "n/a" : "skipped"}${v!.reason ? `: ${v!.reason.length > 80 ? `${v!.reason.slice(0, 77)}...` : v!.reason}` : ""})`);
+    .map(([n, v]) => `${n} ${stageNames(t.type)[Number(n) - 1]} (${v!.state === "na" ? "n/a" : "skipped"}${v!.reason ? `: ${v!.reason.length > 80 ? `${v!.reason.slice(0, 77)}...` : v!.reason}` : ""})`);
   return parts.length ? ` Not run: ${parts.join("; ")}.` : "";
 }
 

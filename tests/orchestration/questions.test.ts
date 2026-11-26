@@ -312,3 +312,12 @@ test("a wait asked again before the user answered, by the same or a rotated coor
   const next = react(s, at("2026-10-11T10:10:00.000Z", COORD2, { type: "thread.waiting", thread: "001", payload: { what: "merged?" } }), ctx());
   expect(notices(next.events)).toEqual([{ session: M, text: "Thread 001 (Thread 001) is waiting for the user: merged?", wait: true }]);
 });
+
+test("a doc thread's ready-for-review notice names its own stages", () => {
+  const s = base();
+  s.threads.get("001")!.type = "review";
+  const at = stamped(s);
+  at("2026-10-11T10:00:00.000Z", USER, { type: "stage.recorded", thread: "001", payload: { stage: 2, state: "skipped", by: "user", reason: "no checks needed" } });
+  const r = react(s, at("2026-10-11T10:00:30.000Z", COORD, { type: "thread.status_changed", thread: "001", payload: { from: "in_progress", to: "review" } }), ctx());
+  expect(notices(r.events)).toEqual([{ session: M, text: "Thread 001 (Thread 001) is ready for review. Not run: 2 investigation (skipped: no checks needed)." }]);
+});

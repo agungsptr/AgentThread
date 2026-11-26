@@ -32,8 +32,15 @@ export async function cleanupThread(e: CleanupEffect, stopping: () => boolean = 
     if (stopping()) return stop(r.repo, "the daemon is stopping");
     // Without the squash branch the squash may never have happened: wip/<task> commits no other branch has would be lost.
     // (A thread made before the branch followed its type squashed onto feat/<task>.)
-    // A doc thread commits nothing: no squash to check, and its worktrees hold only throwaway files.
-    if (e.doc) continue;
+    // A doc thread commits nothing: no squash to check, and its worktrees hold only throwaway files. A commit the user
+    // made on the detached HEAD (only an agent is refused) would be lost by the forced remove: stop for it.
+    if (e.doc) {
+      if (!existsSync(r.path)) continue;
+      const lost = await commitsAfterCheckout(r.path);
+      if (lost === undefined) return stop(r.repo, `cannot read the history of ${r.path}`);
+      if (lost) return stop(r.repo, `${r.path} has commits made after its checkout; keep them on a branch (git -C ${r.path} switch -c <name>), then run cleanup again`);
+      continue;
+    }
     const squashed = (e.squashBranch !== undefined && (await hasBranch(r.repoPath, e.squashBranch))) || (await hasBranch(r.repoPath, `feat/${e.task}`));
     if (!squashed && (await hasBranch(r.repoPath, branch))) {
       const own = await git(r.repoPath, ["rev-list", `refs/heads/${branch}`, "--not", `--exclude=${branch}`, "--branches"]);
@@ -72,6 +79,21 @@ export async function cleanupThread(e: CleanupEffect, stopping: () => boolean = 
   }
   if (await onlyGenerated(e.dir)) await rm(e.dir, { recursive: true, force: true });
   return { ok: true, repos: removed, ...(notes.length ? { notes } : {}) };
+}
+
+/**
+ * Whether a doc thread's detached worktree has commits made after its checkout that no branch or remote holds: its
+ * oldest HEAD reflog entry is the checkout. Undefined when git cannot tell.
+ */
+async function commitsAfterCheckout(path: string): Promise<boolean | undefined> {
+  const env = { ...process.env, GIT_CEILING_DIRECTORIES: dirname(path) };
+  const log = await spawnAsync("git", ["-C", path, "reflog", "show", "--format=%H", "HEAD"], env, GIT_TIMEOUT_MS);
+  if (log.exitCode !== 0 || log.timedOut) return undefined;
+  const first = log.stdout.trim().split("\n").filter(Boolean).pop();
+  if (!first) return false;
+  const own = await spawnAsync("git", ["-C", path, "rev-list", "HEAD", `^${first}`, "--not", "--branches", "--remotes"], env, GIT_TIMEOUT_MS);
+  if (own.exitCode !== 0 || own.timedOut) return undefined;
+  return own.stdout.trim() !== "";
 }
 
 /** Whether git lists a worktree at `path` (it may be stale: its folder gone). */

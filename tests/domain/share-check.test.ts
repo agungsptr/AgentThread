@@ -38,3 +38,13 @@ test("formatHits names the path and each hit", () => {
     'report .docs/r.md mentions private things: line 3 ".docs", line 9 "thread 004"',
   );
 });
+
+test("the root written from the home directory (~/...) is a hit", () => {
+  const h = { root: "/Users/me/work/acme", thread: "004", banned: [], home: "/Users/me" };
+  expect(shareCheckHits("see ~/work/acme/src/a.ts", h)).toEqual([{ line: 1, match: "~/work/acme" }]);
+  expect(shareCheckHits("see ~/other/a.ts", h)).toEqual([]);
+});
+
+test("thread and ticket ids are hits whatever the spacing, a # or a colon", () => {
+  expect(shareCheckHits("Thread #004, thread  004, Ticket: T4, ticket #T5", o).map((h) => h.match)).toEqual(["Thread #004", "thread  004", "Ticket: T4", "ticket #T5"]);
+});

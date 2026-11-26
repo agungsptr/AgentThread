@@ -79,6 +79,17 @@ describe("doc thread stages", () => {
     expect(s.threads.get("001")!.status).toBe("review");
   });
 
+  test("a doc thread reaches review only through stage 4", () => {
+    expect(errorOf(run(doc(), { cmd: "thread.status", thread: "001", status: "review" }))).toBe("a review thread goes to review when its report is approved: agt stage 001 4 done");
+    expect(errorOf(run(doc(), { cmd: "thread.status", thread: "001", status: "review" }, USER))).toBe("a review thread goes to review when its report is approved: agt stage 001 4 done");
+  });
+
+  test("the report path cannot change after stage 4 passed", () => {
+    const s = withReport("# Review\nAll clear.\n");
+    exec(s, stage(4, "done"));
+    expect(errorOf(run(s, { cmd: "thread.report", thread: "001", path: ".docs/shared/reviews/other.md" }))).toBe("the report of thread 001 is approved (stage 4 done); its path cannot change");
+  });
+
   test("browser-check and e2e4 are code-thread only", () => {
     expect(errorOf(run(doc(), { cmd: "thread.browser_check", thread: "001" }))).toBe("the browser check applies to code threads");
     expect(errorOf(run(doc(), { cmd: "stack.acquire", thread: "001", for: "e2e4" }))).toBe("e2e stage 4 applies to code threads");
