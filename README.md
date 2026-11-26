@@ -233,12 +233,14 @@ but its content must not point at anything private.
 - **The share check.** `agt thread report <id> --check` lists every line that mentions `.docs`, `.agentthread`,
   `.worktrees`, the workspace path, the thread's id or a ticket (`thread 004`, `004/T2`, `ticket T3`) or a
   `workflow.banned_words` entry (whole words). `agt stage <id> 4 done` runs the same check and refuses while a hit, a
-  missing file or an empty file remains. Stage 4 cannot be skipped.
+  missing file or an empty file remains. Stage 4 cannot be skipped, the thread reaches review only through it, and the
+  report path cannot change once it is done.
 - **No code changes.** `agt worktree add` makes a detached checkout (no `wip/<task>`, no squash branch), the commit guard
   refuses every agent commit in it, and tickets take `--repo` without `--file`. Workers may leave throwaway files
   (a reproduction test); cleanup removes them.
 - **Finishing.** The coordinator tells main `"<id>: report approved: <path>"`; main marks the thread done and runs
-  `agt thread cleanup <id>`, which force-removes the worktrees without any merge check.
+  `agt thread cleanup <id>`, which force-removes the worktrees without any merge check (it stops if you committed on a
+  detached checkout yourself, so nothing of yours is lost).
 
 The workflow text lives in `src/workflow/doc-workflow.md` and is generated as the `agt-doc-workflow` skill.
 
