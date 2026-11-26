@@ -57,6 +57,16 @@ describe("worktree.add in the handler", () => {
       { type: "session.attached", thread: "001", payload: { session: "c1", pane: "p1" } },
     );
 
+  test("a doc thread's worktree is requested detached, at the given source", () => {
+    const s = stateOf(INIT, taskThreadCreated("001", "rv-1", { threadType: "review" }));
+    const r = run(s, { cmd: "worktree.add", thread: "001", repo: "api", from: "origin/pr-12" }, COORD);
+    if (!r.ok) throw new Error(r.error);
+    expect(r.effects).toEqual([
+      { kind: "git.worktree.add", thread: "001", repo: "api", repoPath: "/repo/api", path: "/repo/.worktrees/rv-1/api", branch: "(detached)", source: "origin/pr-12", task: "rv-1", detach: true },
+    ]);
+    expect(r.events).toEqual([{ type: "worktree.requested", thread: "001", payload: { repo: "api", path: "/repo/.worktrees/rv-1/api", branch: "(detached)", source: "origin/pr-12" } }]);
+  });
+
   test("records the request (a command-decided event) and asks for a background git.worktree.add", () => {
     const r = run(base(), { cmd: "worktree.add", thread: "001", repo: "api", from: "main" }, COORD);
     if (!r.ok) throw new Error(r.error);

@@ -15,11 +15,8 @@ export async function addWorktreeAsync(root: string, branch: string, path: strin
   if (r.exitCode !== 0 || r.timedOut) throw new Error(`git worktree add failed: ${r.timedOut ? "timed out" : r.stderr.trim()}`);
 }
 
-/**
- * `git -C <repoDir> worktree add -b <branch> <path> <source>` without blocking. A `<remote>/<branch>` source that is
- * not yet present locally is fetched from that remote first.
- */
-export async function addWorktreeFromAsync(repoDir: string, branch: string, path: string, source: string): Promise<void> {
+/** A `<remote>/<branch>` source that is not yet present locally is fetched from that remote first. */
+async function fetchSourceIfRemote(repoDir: string, source: string): Promise<void> {
   const git = (args: string[], timeoutMs = 30_000) => spawnAsync("git", ["-C", repoDir, ...args], process.env, timeoutMs);
   const slash = source.indexOf("/");
   if (slash > 0 && (await git(["rev-parse", "--verify", "--quiet", `${source}^{commit}`])).exitCode !== 0) {
@@ -31,6 +28,21 @@ export async function addWorktreeFromAsync(repoDir: string, branch: string, path
       if (f.exitCode !== 0 || f.timedOut) throw new Error(`git fetch ${remote} ${b} failed: ${f.timedOut ? "timed out" : f.stderr.trim()}`);
     }
   }
-  const r = await git(["worktree", "add", "-b", branch, path, source]);
+}
+
+/**
+ * `git -C <repoDir> worktree add -b <branch> <path> <source>` without blocking. A `<remote>/<branch>` source that is
+ * not yet present locally is fetched from that remote first.
+ */
+export async function addWorktreeFromAsync(repoDir: string, branch: string, path: string, source: string): Promise<void> {
+  await fetchSourceIfRemote(repoDir, source);
+  const r = await spawnAsync("git", ["-C", repoDir, "worktree", "add", "-b", branch, path, source], process.env, 30_000);
+  if (r.exitCode !== 0 || r.timedOut) throw new Error(`git worktree add failed: ${r.timedOut ? "timed out" : r.stderr.trim()}`);
+}
+
+/** A doc thread's worktree: `git worktree add --detach <path> <source>`, no branch; a remote source is fetched first. */
+export async function addDetachedWorktreeAsync(repoDir: string, path: string, source: string): Promise<void> {
+  await fetchSourceIfRemote(repoDir, source);
+  const r = await spawnAsync("git", ["-C", repoDir, "worktree", "add", "--detach", path, source], process.env, 30_000);
   if (r.exitCode !== 0 || r.timedOut) throw new Error(`git worktree add failed: ${r.timedOut ? "timed out" : r.stderr.trim()}`);
 }

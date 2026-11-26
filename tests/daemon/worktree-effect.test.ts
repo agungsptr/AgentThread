@@ -75,6 +75,37 @@ describe("git.worktree.add (repo form)", () => {
     expect(git(s.path, "status", "--porcelain").out).toBe("");
   });
 
+  test("detach without a setup command: a detached HEAD at the source, no wip branch", async () => {
+    const s = setup(ConfigSchema.parse({}));
+    const head = git(s.api, "rev-parse", "main").out;
+    expect(await s.run({ ...s.effect, branch: "(detached)", task: "pay-1", detach: true })).toEqual({ cmd: "worktree.report", thread: "001", repo: "api", ok: true });
+    expect(git(s.path, "rev-parse", "--abbrev-ref", "HEAD").out).toBe("HEAD");
+    expect(git(s.path, "rev-parse", "HEAD").out).toBe(head);
+    expect(git(s.api, "rev-parse", "--verify", "--quiet", "refs/heads/wip/pay-1").ok).toBe(false);
+    expect(existsSync(join(s.path, "AGENTS.md"))).toBe(true);
+  });
+
+  test("detach with a setup command: the setup runs, then HEAD is detached and its fresh wip/<task> is deleted", async () => {
+    const s = setup(withSetup("git -C {root}/{repo} worktree add -q -b wip/{task} {path} {src}"));
+    expect(await s.run({ ...s.effect, branch: "(detached)", task: "pay-1", detach: true })).toEqual({ cmd: "worktree.report", thread: "001", repo: "api", ok: true });
+    expect(git(s.path, "rev-parse", "--abbrev-ref", "HEAD").out).toBe("HEAD");
+    expect(git(s.api, "rev-parse", "--verify", "--quiet", "refs/heads/wip/pay-1").ok).toBe(false);
+  });
+
+  test("detach with a setup command keeps a wip/<task> that existed before", async () => {
+    const s = setup(withSetup("git -C {root}/{repo} worktree add -q {path} wip/{task}"));
+    git(s.api, "branch", "wip/pay-1", "main");
+    expect(await s.run({ ...s.effect, branch: "(detached)", task: "pay-1", detach: true })).toEqual({ cmd: "worktree.report", thread: "001", repo: "api", ok: true });
+    expect(git(s.path, "rev-parse", "--abbrev-ref", "HEAD").out).toBe("HEAD");
+    expect(git(s.api, "rev-parse", "--verify", "--quiet", "refs/heads/wip/pay-1").ok).toBe(true);
+  });
+
+  test("detach: a nonexistent source leaves nothing behind", async () => {
+    const s = setup(ConfigSchema.parse({}));
+    expect((await s.run({ ...s.effect, branch: "(detached)", task: "pay-1", detach: true, source: "nope" })).ok).toBe(false);
+    s.nothingLeft();
+  });
+
   test("a setup command is used instead of git, with the placeholders filled in", async () => {
     const s = setup(withSetup("echo {root}/{task}/{repo}/{src}/{path} > {root}/setup.log && git -C {root}/{repo} worktree add -q -b wip/{task} {path} {src}"));
     expect(await s.run(s.effect)).toEqual({ cmd: "worktree.report", thread: "001", repo: "api", ok: true });

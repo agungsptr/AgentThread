@@ -14,7 +14,7 @@ import type { Command } from "../commands/schema.ts";
 import { durationMs, type Config } from "../config/config.ts";
 import type { EventBody, Layout, ThreadType } from "../domain/types.ts";
 import { HerdrCli, HerdrError, spawnAsync } from "../herdr/bridge.ts";
-import { addWorktreeAsync, addWorktreeFromAsync } from "../project/git.ts";
+import { addDetachedWorktreeAsync, addWorktreeAsync, addWorktreeFromAsync } from "../project/git.ts";
 import { installCommand } from "../project/prefill.ts";
 import { anchoredExclude, copyIntoWorktree, guardLinkedInstall, linkIntoWorktree, lockfilesDiffer, redactSecrets } from "../project/worktree-copy.ts";
 import { paths } from "../project/paths.ts";
@@ -441,9 +441,13 @@ async function addRepoWorktree(e: RepoWorktreeEffect, root: string, config: Conf
   const onBranch = async () => {
     if (!existsSync(e.path)) return false;
     const head = await spawnAsync("git", ["-C", e.path, "rev-parse", "--abbrev-ref", "HEAD"], { ...process.env, GIT_CEILING_DIRECTORIES: dirname(e.path) }, 10_000);
-    return head.exitCode === 0 && !head.timedOut && head.stdout.trim() === e.branch;
+    // A doc thread's worktree is detached: `rev-parse --abbrev-ref HEAD` prints HEAD.
+    return head.exitCode === 0 && !head.timedOut && head.stdout.trim() === (e.detach ? "HEAD" : e.branch);
   };
-  const branchExists = async () => (await git(["rev-parse", "--verify", "--quiet", `refs/heads/${e.branch}`])).exitCode === 0;
+  // The wip branch this run may create: the task branch itself, or (detached) one a worktree_setup made anyway.
+  const task = e.task ?? e.branch.replace(/^wip\//, "");
+  const wip = e.detach ? `wip/${task}` : e.branch;
+  const branchExists = async () => (await git(["rev-parse", "--verify", "--quiet", `refs/heads/${wip}`])).exitCode === 0;
   const registered = async () => {
     const r = await git(["worktree", "list", "--porcelain"]);
     const want = canonical(e.path);
@@ -510,12 +514,13 @@ async function addRepoWorktree(e: RepoWorktreeEffect, root: string, config: Conf
       return;
     }
     if (setup === undefined) {
-      await addWorktreeFromAsync(e.repoPath, e.branch, e.path, e.source);
+      if (e.detach) await addDetachedWorktreeAsync(e.repoPath, e.path, e.source);
+      else await addWorktreeFromAsync(e.repoPath, e.branch, e.path, e.source);
       await builtin();
       await markReady();
       return;
     }
-    const values: Record<string, string> = { root, task: e.branch.replace(/^wip\//, ""), repo: e.repo, src: e.source, path: e.path };
+    const values: Record<string, string> = { root, task, repo: e.repo, src: e.source, path: e.path };
     const command = setup.replace(/\{(root|task|repo|src|path)\}/g, (_, k: string) => shq(values[k]!));
     // One setup at a time in the workspace: setups often share caches, ports or a package store.
     const ran = bg.setupChain.then(() => (bg.stopped ? undefined : runShellGroup(`cd ${shq(root)} || exit 1\n${command}`, setupTimeoutMs, bg.groups)));
@@ -525,6 +530,11 @@ async function addRepoWorktree(e: RepoWorktreeEffect, root: string, config: Conf
     if (r.exitCode !== 0 || r.timedOut) {
       const why = bg.stopped ? "the daemon stopped" : r.timedOut ? `timed out after ${Math.round(setupTimeoutMs / 1000)}s` : `exit ${r.exitCode}${r.stderr.trim() ? `: ${r.stderr.trim()}` : ""}`;
       throw new Error(`worktree setup for ${e.repo} failed (${why})`);
+    }
+    // A doc thread's worktree is detached after the setup, and a wip branch the setup made for it goes.
+    if (e.detach && (await registered()) && existsSync(e.path)) {
+      await spawnAsync("git", ["-C", e.path, "switch", "--detach", "--quiet"], { ...process.env, GIT_CEILING_DIRECTORIES: dirname(e.path) }, 10_000);
+      if (!hadBranch && (await branchExists())) await git(["branch", "-D", wip]);
     }
     if (!(await registered()) || !(await onBranch())) {
       // Whatever the setup left running must not act after the cleanup below.
@@ -542,7 +552,7 @@ async function addRepoWorktree(e: RepoWorktreeEffect, root: string, config: Conf
     } else if (!hadPath && existsSync(e.path)) {
       await rm(e.path, { recursive: true, force: true });
     }
-    if (!hadBranch && (await branchExists())) await git(["branch", "-D", e.branch]);
+    if (!hadBranch && (await branchExists())) await git(["branch", "-D", wip]);
     throw err;
   }
 }

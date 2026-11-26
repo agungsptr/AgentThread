@@ -19,7 +19,7 @@ export type Effect =
   /** Legacy form (old threads only): the thread's own worktree of the root repo. */
   | { kind: "git.worktree.add"; branch: string; path: string; thread: { id: string; title: string; slug: string } }
   /** A task worktree of one workspace repo, at `<dir>/<repo>` on a new `wip/<task>` from `source`. */
-  | { kind: "git.worktree.add"; thread: string; repo: string; repoPath: string; path: string; branch: string; source: string }
+  | { kind: "git.worktree.add"; thread: string; repo: string; repoPath: string; path: string; branch: string; source: string; /** Doc threads: a detached checkout, no branch (`branch` is DETACHED). */ detach?: true; task?: string }
   /** Removes a done task thread's repo worktrees and wip/<task> branches, then its directory if only agt's files are left. */
   | { kind: "git.thread.cleanup"; thread: string; task: string; /** The thread's squash branch (a thread from before types follow the prefix: feat/<task> is checked too). */ squashBranch: string; dir: string; repos: { repo: string; repoPath: string; path: string }[] }
   | { kind: "thread.dir.ensure"; thread: { id: string; title: string; slug: string; task: string; dir: string; type: ThreadType } }
@@ -632,6 +632,9 @@ function newThread(state: State, cmd: Extract<Command, { cmd: "thread.new" }>, c
   };
 }
 
+/** The branch a doc thread's detached worktree is recorded with. */
+export const DETACHED = "(detached)";
+
 /**
  * A task worktree for one repo of the workspace: `<dir>/<repo>` on a new `wip/<task>` from `--from`, else the repo's
  * source_branch. The command records the request and returns at once; the effect creates the worktree in the
@@ -649,10 +652,11 @@ function addWorktree(t: Thread, repo: string, from: string | undefined, ctx: Han
   const source = from ?? entry.source_branch ?? reject(`no source branch for ${repo}; pass --from <branch>`);
   if (source.startsWith("-")) reject(`invalid source branch ${source}`);
   const path = join(t.dir, repo);
-  const branch = `wip/${t.task}`;
+  const doc = isDocType(t.type);
+  const branch = doc ? DETACHED : `wip/${t.task}`;
   return {
     events: [{ type: "worktree.requested", thread: t.id, payload: { repo, path, branch, source } }],
-    effects: [{ kind: "git.worktree.add", thread: t.id, repo, repoPath: resolve(ctx.root, entry.path), path, branch, source }],
+    effects: [{ kind: "git.worktree.add", thread: t.id, repo, repoPath: resolve(ctx.root, entry.path), path, branch, source, ...(doc ? { task: t.task, detach: true as const } : {}) }],
     result: { repo, path, branch, source, requested: true },
   };
 }
