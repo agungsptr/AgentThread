@@ -1,3 +1,4 @@
+import { mainPidFile, runStop, stopMainManager } from "./stop.ts";
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -785,8 +786,12 @@ async function start(root: string, env: Env, argv: string[]): Promise<number> {
       cwd: root,
       env: { ...env, ...launched.env, ...agentEnv({ root, role: "main", agent: run.agent, session }), ...launched.processEnv },
     });
+    // agt stop finds the main manager here (its pid and binary); removed when it exits.
+    writeFileSync(mainPidFile(root), `${proc.pid}\n${bin}\n`);
     code = await proc.exited;
+    rmSync(mainPidFile(root), { force: true });
   } catch (e) {
+    rmSync(mainPidFile(root), { force: true });
     await endMainSession(socket, session);
     throw new Error(`cannot start ${AGENT_NAMES[run.agent]} (${bin}): ${e instanceof Error ? e.message : String(e)}`);
   }

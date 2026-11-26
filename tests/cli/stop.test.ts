@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Layout } from "../../src/domain/types.ts";
-import { runStop, stopTargets, type StopDeps } from "../../src/cli/stop.ts";
+import { mainPidFile, runStop, stopMainManager, stopTargets, type StopDeps } from "../../src/cli/stop.ts";
 import { INIT, stateOf, taskThreadCreated } from "../helpers.ts";
 import type { State } from "../../src/state/projection.ts";
 
@@ -101,5 +101,47 @@ describe("runStop", () => {
     const r = await runStop(deps);
     expect(calls).not.toContain("closePane w1:p2");
     expect(r.lines).toContain("main manager not running");
+  });
+});
+
+describe("stopMainManager", () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, existsSync, realpathSync } = require("node:fs") as typeof import("node:fs");
+  const { join } = require("node:path") as typeof import("node:path");
+  const { tmpdir } = require("node:os") as typeof import("node:os");
+  const project = () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "agt-stop-")));
+    mkdirSync(join(root, ".agentthread"), { recursive: true });
+    return root;
+  };
+
+  test("signals the recorded main agent with SIGTERM and removes the file", async () => {
+    const root = project();
+    const child = Bun.spawn(["sleep", "30"]);
+    writeFileSync(mainPidFile(root), `${child.pid}\nsleep\n`);
+    expect(stopMainManager(root)).toBe("main manager stopped");
+    expect(await child.exited).not.toBe(0);
+    expect(child.signalCode).toBe("SIGTERM");
+    expect(existsSync(mainPidFile(root))).toBe(false);
+  });
+
+  test("a pid whose process is not the recorded agent is never signalled", () => {
+    const root = project();
+    const child = Bun.spawn(["sleep", "30"]);
+    writeFileSync(mainPidFile(root), `${child.pid}\nclaude\n`);
+    const sent: number[] = [];
+    expect(stopMainManager(root, (pid) => void sent.push(pid))).toBeUndefined();
+    expect(sent).toEqual([]);
+    expect(existsSync(mainPidFile(root))).toBe(false);
+    child.kill();
+  });
+
+  test("a dead pid or no file: nothing signalled", () => {
+    const root = project();
+    const sent: number[] = [];
+    expect(stopMainManager(root, (pid) => void sent.push(pid))).toBeUndefined();
+    writeFileSync(mainPidFile(root), "999999\nclaude\n");
+    expect(stopMainManager(root, (pid) => void sent.push(pid))).toBeUndefined();
+    expect(sent).toEqual([]);
+    expect(existsSync(mainPidFile(root))).toBe(false);
   });
 });

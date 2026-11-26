@@ -1,6 +1,6 @@
 import { DEFAULT_CONFIG } from "../../src/config/config.ts";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { systemPrompt } from "../../src/agents/prompts.ts";
 import { shellQuote } from "../../src/herdr/bridge.ts";
@@ -297,4 +297,17 @@ test("the main manager is launched with agents.env in its process env", () => {
   const r = agt(["start"], { AGT_CLAUDE_BIN: bin, HOME: "/home/u" });
   expect(r.code).toBe(0);
   expect(readFileSync(dump, "utf8")).toBe("/home/u/acct\nm\n");
+});
+
+test("agt start records the main agent's pid and binary in main.pid while it runs, and removes it after", () => {
+  const dump = join(root, "pid-dump.txt");
+  const bin = join(root, "fake-claude.sh");
+  const pidFile = join(root, ".agentthread", "main.pid");
+  writeFileSync(bin, `#!/bin/sh\necho "$$" > ${shellQuote(dump)}\ncat ${shellQuote(pidFile)} >> ${shellQuote(dump)}\n`, { mode: 0o755 });
+  const r = agt(["start"], { AGT_CLAUDE_BIN: bin });
+  expect(r.code).toBe(0);
+  const [self, recorded, recordedBin] = readFileSync(dump, "utf8").trim().split("\n");
+  expect(recorded).toBe(self);
+  expect(recordedBin).toBe(bin);
+  expect(existsSync(pidFile)).toBe(false);
 });

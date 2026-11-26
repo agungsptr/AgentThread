@@ -1,3 +1,7 @@
+import { spawnSync } from "node:child_process";
+import { readFileSync, rmSync } from "node:fs";
+import { basename, join } from "node:path";
+import { paths } from "../project/paths.ts";
 import { workersTabOrder } from "../agents/spawn-job.ts";
 import type { Layout } from "../domain/types.ts";
 import type { State } from "../state/projection.ts";
@@ -69,4 +73,39 @@ export async function runStop(d: StopDeps): Promise<{ code: number; lines: strin
   await step("stack", async () => void lines.push(...(await d.stopStack())));
   await step("main manager", () => void lines.push(d.stopMain() ?? "main manager not running"));
   return { code, lines };
+}
+
+/** `agt start` records the main agent's pid and binary here while it runs (one per line). */
+export const mainPidFile = (root: string): string => join(paths(root).dir, "main.pid");
+
+const alive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
+};
+
+/**
+ * Stops the main manager `agt start` launched: SIGTERM to the recorded pid, only while that process is alive and its
+ * command line names the recorded binary (a recycled pid belongs to someone else). The file is removed whenever it was
+ * read. Returns the line to print, or undefined when no main manager was running.
+ */
+export function stopMainManager(root: string, kill: (pid: number, signal: NodeJS.Signals) => void = (pid, s) => process.kill(pid, s)): string | undefined {
+  const file = mainPidFile(root);
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch {
+    return undefined;
+  }
+  rmSync(file, { force: true });
+  const [pidText, bin] = text.split("\n").map((l) => l.trim());
+  const pid = Number(pidText);
+  if (!Number.isInteger(pid) || pid <= 0 || !bin || !alive(pid)) return undefined;
+  const ps = spawnSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8" });
+  if (ps.status !== 0 || !ps.stdout.includes(basename(bin))) return undefined;
+  kill(pid, "SIGTERM");
+  return "main manager stopped";
 }
