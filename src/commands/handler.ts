@@ -373,6 +373,14 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
         if (!cmd.scope.length) reject("ticket add needs at least one --scope <path>");
         return { events: [{ type: "ticket.created", thread: t.id, payload: { ticket, title: cmd.title, scope: cmd.scope } }], result: { ticket } };
       }
+      if (isDocType(t.type)) {
+        // A doc thread's worker only verifies (runs tests, reproduces a finding) and never commits: no file list.
+        if (!cmd.repo) reject(`a ${t.type} thread's ticket needs --repo <repo>`);
+        if (cmd.files?.length) reject(`a ${t.type} thread's ticket takes no --file: its worker never commits`);
+        if (!Object.hasOwn(workspaceReposNoSpawn(ctx.root, ctx.config ?? DEFAULT_CONFIG), cmd.repo)) reject(`unknown repo ${cmd.repo}`);
+        if (cmd.doc !== undefined) checkTicketDoc(cmd.doc);
+        return { events: [{ type: "ticket.created", thread: t.id, payload: { ticket, title: cmd.title, scope: [], repo: cmd.repo, ...(cmd.doc ? { doc: cmd.doc } : {}) } }], result: { ticket } };
+      }
       if (!cmd.repo || !cmd.files?.length) reject("a task thread's ticket needs --repo <repo> and at least one --file <path>");
       if (!Object.hasOwn(workspaceReposNoSpawn(ctx.root, ctx.config ?? DEFAULT_CONFIG), cmd.repo)) reject(`unknown repo ${cmd.repo}`);
       const files = [...new Set(cmd.files.map(repoRelative))];
@@ -427,6 +435,7 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
       if (!cmd.add?.length && !cmd.remove?.length) return { events: [], result: { files: k.files ?? [] } };
       if (actor.role === "worker") reject("only the coordinator (or the user) may change a ticket's files");
       if (t.legacy) reject("--add and --remove apply to task threads; a legacy thread's ticket has a scope, not a file list");
+      if (isDocType(t.type)) reject(`a ${t.type} thread's tickets have no files`);
       if (k.status === "done") reject(`ticket ${k.id} is done; its files cannot change`);
       const current = k.files ?? [];
       const added = [...new Set((cmd.add ?? []).map(repoRelative))];
