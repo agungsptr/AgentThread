@@ -1,6 +1,6 @@
 import { isAbsolute, join } from "node:path";
 import type { Config } from "../config/config.ts";
-import { squashBranch } from "../domain/branches.ts";
+import { asCodeType, squashBranch } from "../domain/branches.ts";
 import type { SessionRole, ThreadType } from "../domain/types.ts";
 import { tierList } from "../orchestration/tiers.ts";
 import { hasServices } from "../stack/target.ts";
@@ -24,7 +24,7 @@ interface PromptInput {
 }
 
 /** The thread's squash branch (its type picks the prefix, the config may override it). */
-const sb = (o: PromptInput) => squashBranch(o.thread!.type, o.thread!.task!, o.config?.workflow.branch_prefix);
+const sb = (o: PromptInput) => squashBranch(asCodeType(o.thread!.type), /* doc: Task 9 */ o.thread!.task!, o.config?.workflow.branch_prefix);
 
 const threadDir = (o: PromptInput) => paths(o.root).threadDir(o.thread!);
 

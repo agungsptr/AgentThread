@@ -9,8 +9,24 @@ export type SessionRole = "main" | "coordinator" | "worker";
 export const SESSION_SIGNALS = ["started", "active", "idle", "compacting", "ended", "blocked"] as const;
 export type SessionSignal = (typeof SESSION_SIGNALS)[number];
 
-export const THREAD_TYPES = ["feature", "bug", "chore"] as const;
+export const THREAD_TYPES = ["feature", "bug", "chore", "review", "report"] as const;
 export type ThreadType = (typeof THREAD_TYPES)[number];
+
+/** The types that change code: ten stages, worker commits on wip/<task>, a squash branch. */
+export const CODE_THREAD_TYPES = ["feature", "bug", "chore"] as const;
+export type CodeThreadType = (typeof CODE_THREAD_TYPES)[number];
+
+/** The types that change no code: four stages ending in one shareable report, no branch, no repo commit. */
+export const DOC_THREAD_TYPES = ["review", "report"] as const;
+
+export type WorkflowKind = "code" | "doc";
+
+/** A thread's workflow kind; a thread without a type (an old one) is a code thread. */
+export function workflowKind(type: ThreadType | undefined): WorkflowKind {
+  return type !== undefined && (DOC_THREAD_TYPES as readonly string[]).includes(type) ? "doc" : "code";
+}
+
+export const isDocType = (type: ThreadType | undefined): boolean => workflowKind(type) === "doc";
 
 export const THREAD_STATUSES = ["open", "in_progress", "blocked", "review", "done"] as const;
 export type ThreadStatus = (typeof THREAD_STATUSES)[number];
@@ -35,6 +51,13 @@ export interface Actor {
 export const STAGE_NAMES = [
   "discussion", "spec", "tickets", "delegation", "review", "unit and type check", "e2e", "browser check", "shared docs", "release and squash",
 ] as const;
+/** The four workflow stages of a doc (review, report) thread, by number 1-4. */
+export const DOC_STAGE_NAMES = ["scope", "investigation", "draft", "approval"] as const;
+
+/** The stage names a thread of `type` runs through. */
+export function stageNames(type: ThreadType | undefined): readonly string[] {
+  return isDocType(type) ? DOC_STAGE_NAMES : STAGE_NAMES;
+}
 export const STAGE_STATES = ["done", "skipped", "na", "approve"] as const;
 export type StageState = (typeof STAGE_STATES)[number];
 /** Who recorded a stage. Plan 12 adds "agt". */

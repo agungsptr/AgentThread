@@ -3,7 +3,7 @@ import { existsSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { browserCheckMode, DEFAULT_CONFIG, type Config } from "../config/config.ts";
 import { canTransitionThread, canTransitionTicket, scopesOverlap, slugify, validateHandoff } from "../domain/rules.ts";
-import { squashBranch } from "../domain/branches.ts";
+import { asCodeType, squashBranch } from "../domain/branches.ts";
 import { ROLES, type Actor, type AgentKind, type EventBody, type Role, type ThreadStatus, type ThreadType, type TicketStatus } from "../domain/types.ts";
 import { roleAgent, type RoleAgent } from "../agents/roles.ts";
 import { agentName, awaitsWorker, conflictingTicket, FILE_HOLDING, liveSessions, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure as tabEnsureFor, workerLimit } from "../orchestration/sessions.ts";
@@ -691,7 +691,7 @@ function cleanupThread(t: Thread, ctx: HandlerContext): Decision {
     .map(([repo, entry]) => ({ repo, repoPath: resolve(ctx.root, entry.path), path: t.worktrees[repo]!.path }));
   return {
     events: [{ type: "thread.cleanup_requested", thread: t.id, payload: {} }],
-    effects: [{ kind: "git.thread.cleanup", thread: t.id, task: t.task, squashBranch: squashBranch(t.type, t.task, (ctx.config ?? DEFAULT_CONFIG).workflow.branch_prefix), dir: t.dir, repos }],
+    effects: [{ kind: "git.thread.cleanup", thread: t.id, task: t.task, squashBranch: squashBranch(asCodeType(t.type), /* doc: Task 8 */ t.task, (ctx.config ?? DEFAULT_CONFIG).workflow.branch_prefix), dir: t.dir, repos }],
     result: { requested: true, repos: repos.map((r) => r.repo) },
   };
 }
