@@ -27,8 +27,13 @@ Workspace repos: {{REPOS}}. Documentation has exactly two homes, with opposite a
 | Work touching two or more repos | `.docs/shared/…`, never duplicated into both repo folders |
 | ADR | `.docs/<repo>/adr/NNNN-<slug>.md` |
 | Reference, finding, runbook, deferred TODO | `.docs/<repo>/notes/` or `.docs/shared/notes/` |
+| Review report (shareable) | `.docs/<repo or shared>/reviews/YYYY-MM-DD-<slug>.md` |
+| Logic report (shareable) | `.docs/<repo or shared>/reports/YYYY-MM-DD-<slug>.md` |
 | Conventions for agents in one repo | `.docs/<repo>/agents/conventions.md` |
 | Superseded material | `.docs/shared/archive/` |
+
+A shareable report never points at anything in `.docs/` (no paths, ticket or thread ids, private notes): it is sent to
+people outside the workspace as a file.
 
 When you move or rename a document, rewrite every reference to it, so links inside `.docs/` keep resolving.
 

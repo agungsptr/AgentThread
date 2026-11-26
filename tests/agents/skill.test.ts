@@ -3,8 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameS
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DEFAULT_CONFIG, type Config } from "../../src/config/config.ts";
-import { featureWorkflowText, GENERATED_RELS, manageDocsText, MARKER, refreshRootSkill, skillText, writeSkills } from "../../src/agents/skill.ts";
-import { FEATURE_WORKFLOW, MANAGE_DOCS, TEMPLATES } from "../../src/workflow/index.ts";
+import { docWorkflowText, featureWorkflowText, GENERATED_RELS, manageDocsText, MARKER, refreshRootSkill, skillText, writeSkills } from "../../src/agents/skill.ts";
+import { DOC_WORKFLOW, FEATURE_WORKFLOW, MANAGE_DOCS, TEMPLATES } from "../../src/workflow/index.ts";
 import { projectConfigSection } from "../../src/workflow/project-config.ts";
 import { parse } from "yaml";
 import { type Runner, spawnRunner } from "../../src/herdr/bridge.ts";
@@ -97,7 +97,7 @@ describe("writeSkills", () => {
   test("agents.skill false: nothing written, no log", () => {
     const dir = dirOf();
     const logs: string[] = [];
-    expect(writeSkills(dir, opts((m) => logs.push(m), [], off))).toEqual({ agt: "off", "agt-feature-workflow": "off", "manage-docs": "off" });
+    expect(writeSkills(dir, opts((m) => logs.push(m), [], off))).toEqual({ agt: "off", "agt-feature-workflow": "off", "agt-doc-workflow": "off", "manage-docs": "off" });
     for (const rel of GENERATED_RELS) expect(existsSync(join(dir, rel))).toBe(false);
     expect(logs).toEqual([]);
   });
@@ -106,7 +106,7 @@ describe("writeSkills", () => {
 describe("generated skills", () => {
   const opts = (log: (m: string) => void = () => {}, config: Config = DEFAULT_CONFIG, tracked: string[] = []) => ({ root: "/repo", config, tracked: new Set(tracked), log });
   const ROOTS = [".claude/skills", ".agents/skills"];
-  const FILES = ["agt/SKILL.md", "agt-feature-workflow/SKILL.md", "agt-feature-workflow/templates/spec.md", "agt-feature-workflow/templates/ticket.md", "agt-feature-workflow/templates/release.md", "manage-docs/SKILL.md"];
+  const FILES = ["agt/SKILL.md", "agt-feature-workflow/SKILL.md", "agt-feature-workflow/templates/spec.md", "agt-feature-workflow/templates/ticket.md", "agt-feature-workflow/templates/release.md", "agt-doc-workflow/SKILL.md", "manage-docs/SKILL.md"];
   const withMarker = (md: string) => {
     const end = md.indexOf("\n---\n", 4) + "\n---\n".length;
     return `${md.slice(0, end)}${MARKER}\n${md.slice(end)}`;
@@ -122,10 +122,26 @@ describe("generated skills", () => {
         `${withMarker(FEATURE_WORKFLOW)}\n\n${projectConfigSection(DEFAULT_CONFIG, [])}`,
       );
       expect(readFileSync(join(dir, r, "manage-docs/SKILL.md"), "utf8")).toBe(manageDocsText({ root: "/repo", config: DEFAULT_CONFIG }));
+      expect(readFileSync(join(dir, r, "agt-doc-workflow/SKILL.md"), "utf8")).toBe(docWorkflowText({ root: "/repo", config: DEFAULT_CONFIG }));
       for (const t of ["spec", "ticket", "release"] as const) {
         expect(readFileSync(join(dir, r, `agt-feature-workflow/templates/${t}.md`), "utf8")).toBe(`${MARKER}\n${TEMPLATES[t]}`);
       }
     }
+  });
+
+  test("the doc-workflow skill: the shipped text with the marker, then the project config section", () => {
+    const text = docWorkflowText({ root: "/repo", config: DEFAULT_CONFIG });
+    expect(text).toBe(`${withMarker(DOC_WORKFLOW)}\n\n${projectConfigSection(DEFAULT_CONFIG, [])}`);
+    expect(text).toContain("name: agt-doc-workflow");
+    for (const s of ["scope", "investigation", "draft", "approval", "agt thread report", "--check", "detached", "/reviews/YYYY-MM-DD-<slug>.md", "/reports/YYYY-MM-DD-<slug>.md"]) expect(text).toContain(s);
+    expect(DOC_WORKFLOW.split("\n").length).toBeLessThanOrEqual(80);
+  });
+
+  test("manage-docs names the review and report paths and the share rule", () => {
+    const text = manageDocsText({ root: "/repo", config: DEFAULT_CONFIG });
+    expect(text).toContain("| Review report (shareable) | `.docs/<repo or shared>/reviews/YYYY-MM-DD-<slug>.md` |");
+    expect(text).toContain("| Logic report (shareable) | `.docs/<repo or shared>/reports/YYYY-MM-DD-<slug>.md` |");
+    expect(text).toContain("A shareable report never points at anything in `.docs/`");
   });
 
   test("the project config section reflects the config and the workspace repos", () => {
@@ -144,7 +160,7 @@ describe("generated skills", () => {
     writeFileSync(join(dir, own), "our own doc rules\n");
     const logs: string[] = [];
     const r = writeSkills(dir, opts((m) => logs.push(m)));
-    expect(r).toEqual({ agt: "written", "agt-feature-workflow": "written", "manage-docs": "kept" });
+    expect(r).toEqual({ agt: "written", "agt-feature-workflow": "written", "agt-doc-workflow": "written", "manage-docs": "kept" });
     expect(readFileSync(join(dir, own), "utf8")).toBe("our own doc rules\n");
     expect(existsSync(join(dir, ".agents/skills/manage-docs/SKILL.md"))).toBe(false);
     expect(logs).toEqual([kept(dir, "manage-docs", own)]);

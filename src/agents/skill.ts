@@ -3,7 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { type Config, loadConfig } from "../config/config.ts";
 import { spawnRunner } from "../herdr/bridge.ts";
 import { workspaceReposNoSpawn } from "../project/workspace.ts";
-import { FEATURE_WORKFLOW, MANAGE_DOCS, TEMPLATES } from "../workflow/index.ts";
+import { DOC_WORKFLOW, FEATURE_WORKFLOW, MANAGE_DOCS, TEMPLATES } from "../workflow/index.ts";
 import { projectConfigSection } from "../workflow/project-config.ts";
 import { guide } from "./guide.ts";
 
@@ -40,6 +40,12 @@ export function featureWorkflowText(o: Opts): string {
   return `${withMarker(FEATURE_WORKFLOW)}\n\n${projectConfigSection(o.config, repos, o.task)}`;
 }
 
+/** The doc-workflow skill (review and report threads): the shipped content, then the same project config section. */
+export function docWorkflowText(o: Opts): string {
+  const repos = Object.entries(workspaceReposNoSpawn(o.root, o.config)).map(([name, r]) => ({ name, path: r.path }));
+  return `${withMarker(DOC_WORKFLOW)}\n\n${projectConfigSection(o.config, repos, o.task)}`;
+}
+
 const NOT_CONFIGURED = "not configured";
 const COMMIT_POLICY = " — the coordinator commits its own .docs changes, one commit per logical change, and never pushes";
 
@@ -66,6 +72,7 @@ const SKILLS: { name: string; files: { rel: string; text: (o: Opts) => string }[
       ...(["spec", "ticket", "release"] as const).map((t) => ({ rel: `templates/${t}.md`, text: () => `${MARKER}\n${TEMPLATES[t]}` })),
     ],
   },
+  { name: "agt-doc-workflow", files: [{ rel: "SKILL.md", text: docWorkflowText }] },
   { name: "manage-docs", files: [{ rel: "SKILL.md", text: manageDocsText }] },
 ];
 
