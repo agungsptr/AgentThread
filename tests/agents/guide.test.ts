@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { guide } from "../../src/agents/guide.ts";
 import { rulesOf } from "../../src/agents/agents-md.ts";
-import { LANGUAGE_RULE_START, MAIN_CLEANUP_RULE, MAIN_DRAFT_RULES, systemPrompt } from "../../src/agents/prompts.ts";
+import { LANGUAGE_RULE_START, MAIN_CLEANUP_RULE, MAIN_DOC_FINISH_RULE, MAIN_DRAFT_RULES, systemPrompt } from "../../src/agents/prompts.ts";
 import { DEFAULT_CONFIG } from "../../src/config/config.ts";
 import { USAGE } from "../../src/cli/usage.ts";
 
@@ -48,7 +48,7 @@ describe("guide", () => {
     for (const role of ["main", "coordinator", "worker"] as const) {
       const g = guide({ role, ...base, thread: T });
       // T is a legacy thread: main's cleanup and language rules (task threads only) are left out of its guide.
-      const rules = rulesOf(systemPrompt({ root: "/repo", role, thread: T, ticket: "<ticket>", config: DEFAULT_CONFIG })).filter((l) => l && !l.includes("When unsure how to do something with agt") && l !== MAIN_CLEANUP_RULE && !MAIN_DRAFT_RULES.includes(l) && !l.startsWith(LANGUAGE_RULE_START));
+      const rules = rulesOf(systemPrompt({ root: "/repo", role, thread: T, ticket: "<ticket>", config: DEFAULT_CONFIG })).filter((l) => l && !l.includes("When unsure how to do something with agt") && l !== MAIN_CLEANUP_RULE && !MAIN_DRAFT_RULES.includes(l) && l !== MAIN_DOC_FINISH_RULE && !l.startsWith(LANGUAGE_RULE_START)).map((l) => l.replace("|review|report", ""));
       for (const r of rules) expect(g).toContain(r);
       expect(g).not.toContain("When unsure how to do something with agt");
       expect(g).not.toContain("You are the coordinator of AgentThread");

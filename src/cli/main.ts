@@ -27,7 +27,7 @@ import { statuslineLine } from "./statusline.ts";
 import { formatUsage, usageRows } from "./profile-usage.ts";
 import { claudeProfiles, switching } from "../agents/profiles.ts";
 import { runLogs } from "./logs.ts";
-import { guide, isLegacyThread } from "../agents/guide.ts";
+import { guide, isLegacyThread, threadTypeOf } from "../agents/guide.ts";
 import { formatStatus, restartStack, stackLogs, stackStatus, startStack, stopStack } from "../stack/runner.ts";
 import { RESTART_CHILD_ENV, RESTART_OK, RESTART_REQUESTED, restartLog, restartPidFile, waitRestart } from "../stack/restart-wait.ts";
 import { writeStackMakefiles } from "../stack/makefile.ts";
@@ -323,7 +323,8 @@ async function run(argv: string[], env: Env, cwd: string): Promise<number> {
         }
       }
       const legacy = inProject && env.AGT_THREAD ? isLegacyThread(root, env.AGT_THREAD) : false;
-      console.log(guide({ role: role as SessionRole | "all", root, config, ...(legacy ? { legacy } : {}) }));
+      const type = inProject && env.AGT_THREAD && !legacy ? threadTypeOf(root, env.AGT_THREAD) : undefined;
+      console.log(guide({ role: role as SessionRole | "all", root, config, ...(legacy ? { legacy } : {}), ...(type ? { type } : {}) }));
       return 0;
     }
     case "tell": {

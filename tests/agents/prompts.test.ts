@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { agentsMd } from "../../src/agents/agents-md.ts";
 import { guide } from "../../src/agents/guide.ts";
-import { bootstrapPrompt, systemPrompt } from "../../src/agents/prompts.ts";
+import { bootstrapPrompt, MAIN_DOC_FINISH_RULE, systemPrompt } from "../../src/agents/prompts.ts";
 import { type Config, DEFAULT_CONFIG } from "../../src/config/config.ts";
 
 const TASK = { id: "007", title: "PAY reject", slug: "pay-reject", dir: "/ws/.worktrees/pay-reject", task: "pay-reject" };
@@ -219,7 +219,7 @@ describe("main drafting restraint and the task-thread guide", () => {
   test("main keeps criteria to what the user said, asks at most one question, maps words to --type", () => {
     expect(main).toContain("- When you create a thread, keep the goal and criteria to what the user said: at most 3 short criteria, no invented detail; the coordinator refines them in stage 1.");
     expect(main).toContain("- Ask at most one clarifying question, and only when the thread's type or its repos are unclear.");
-    expect(main).toContain("- Map the user's words to --type: bug, fix or hotfix is bug; feature or feat is feature; chore, refactor or docs is chore.");
+    expect(main).toContain("- Map the user's words to --type: bug, fix or hotfix is bug; feature or feat is feature; chore, refactor or docs is chore; reviewing a PR, a branch or a finding is review; explaining how something in the project works is report.");
   });
 
   test("a task thread's main guide lists the post-merge commands; a legacy one has none of the new rules", () => {
@@ -237,5 +237,72 @@ describe("browser check only on request", () => {
     const main = systemPrompt({ root: "/repo", role: "main", config: DEFAULT_CONFIG });
     expect(main).toContain("add --browser-check to agt thread new");
     expect(systemPrompt({ root: "/repo", role: "coordinator", thread: LEGACY })).not.toContain("browser check");
+  });
+});
+
+describe("doc (review, report) threads", () => {
+  const DOC = { ...TASK, type: "review" as const };
+  const docCoord = (config: Config = DEFAULT_CONFIG) => systemPrompt({ root: "/ws", role: "coordinator", thread: DOC, config });
+  const docWorker = (config: Config = DEFAULT_CONFIG) => systemPrompt({ root: "/ws", role: "worker", thread: DOC, ticket: "T2", config, ticketDoc: ".docs/shared/reviews/t2.md" });
+  const main = (config: Config = DEFAULT_CONFIG) => systemPrompt({ root: "/ws", role: "main", config });
+
+  test("main creates any of the five types and maps the user's words to them", () => {
+    expect(main()).toContain('agt thread new "<title>" --type feature|bug|chore|review|report');
+    expect(main()).toContain(
+      "- Map the user's words to --type: bug, fix or hotfix is bug; feature or feat is feature; chore, refactor or docs is chore; reviewing a PR, a branch or a finding is review; explaining how something in the project works is report.",
+    );
+  });
+
+  test("main closes and cleans up a doc thread on its coordinator's report-approved notice", () => {
+    expect(main()).toContain(MAIN_DOC_FINISH_RULE);
+    expect(MAIN_DOC_FINISH_RULE).toBe(
+      '- When a coordinator tells you a review or report thread\'s report is approved, run agt thread status <id> done --reason "report approved", then agt thread cleanup <id>, then tell the user the report path in one line.',
+    );
+  });
+
+  test("the doc coordinator runs four stages, a detached checkout, the report and its share check", () => {
+    const p = docCoord();
+    for (const line of [
+      "- Record each stage with agt stage 007 <n> done: 1 scope, 2 investigation, 3 draft, 4 approval. Only the user skips a stage (--by user --reason \"<why>\"); stage 4 is never skipped.",
+      "agt worktree add 007 <repo> --from <branch>",
+      "the PR's branch for a review, the source branch for a report",
+      ".docs/<repo|shared>/reviews/YYYY-MM-DD-<slug>.md",
+      ".docs/<repo|shared>/reports/YYYY-MM-DD-<slug>.md",
+      "agt thread report 007 <path>",
+      "- The report is shared as a file: never mention .docs, .agentthread, .worktrees, local paths, thread or ticket ids, or private notes in it.",
+      "agt thread report 007 --check",
+      'agt tell main "007: report approved: <path>"',
+      'agt ticket add 007 "<title>" --repo <r> [--doc <path>]',
+      "- Never edit or commit a repo file: this thread changes no code, and its workers commit nothing either.",
+      "- Commit your own .docs changes in /ws/.docs (git -C /ws/.docs), one commit per logical change; never push.",
+    ]) expect(p).toContain(line);
+    for (const bad of ["wip/", "squash", "--file", "stage 8", "e2e4", "merged into"]) expect(p).not.toContain(bad);
+  });
+
+  test("the doc worker verifies, may leave throwaway files and never commits", () => {
+    const p = docWorker();
+    expect(p).toContain("Never commit: this thread changes no code.");
+    expect(p).toContain("throwaway");
+    expect(p).toContain("## Comments");
+    expect(p).toContain("agt ticket done 007/T2 --summary");
+    for (const bad of ["wip/", "squash", "git add", "Commit only"]) expect(p).not.toContain(bad);
+  });
+
+  test("a doc thread's AGENTS.md carries the doc rules for both roles", () => {
+    const md = agentsMd({ root: "/ws", thread: DOC, config: DEFAULT_CONFIG });
+    expect(md).toContain("agt thread report 007 --check");
+    expect(md).toContain("Never commit: this thread changes no code.");
+    expect(md).not.toContain("wip/");
+  });
+
+  test("the guide inside a doc thread shows the doc rules and commands", () => {
+    const g = guide({ role: "coordinator", root: "/ws", config: DEFAULT_CONFIG, type: "report" });
+    expect(g).toContain("agt thread report <id> <path> | <id> --check");
+    expect(g).toContain("- Never push; never commit in a repo; never bypass the commit guard.");
+    expect(g).not.toContain("agt thread browser-check");
+    expect(g).not.toContain("wip/<task>");
+    const w = guide({ role: "worker", root: "/ws", config: DEFAULT_CONFIG, type: "report" });
+    expect(w).toContain("- Never push; never commit in a repo; never bypass the commit guard.");
+    expect(w).toContain("- A return notice arrives: check again, then run agt ticket done again.");
   });
 });

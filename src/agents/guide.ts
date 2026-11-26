@@ -2,11 +2,11 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
 import type { Config } from "../config/config.ts";
-import type { SessionRole } from "../domain/types.ts";
+import { isDocType, type SessionRole, type ThreadType } from "../domain/types.ts";
 import { usageLines } from "../cli/usage.ts";
 import { paths } from "../project/paths.ts";
 import { rulesOf } from "./agents-md.ts";
-import { LANGUAGE_RULE_START, MAIN_CLEANUP_RULE, MAIN_DRAFT_RULES, systemPrompt, type PromptThread } from "./prompts.ts";
+import { LANGUAGE_RULE_START, MAIN_CLEANUP_RULE, MAIN_DOC_FINISH_RULE, MAIN_DRAFT_RULES, systemPrompt, type PromptThread } from "./prompts.ts";
 
 type ThreadRef = PromptThread;
 
@@ -17,10 +17,25 @@ interface GuideInput {
   thread?: ThreadRef;
   /** The current thread ($AGT_THREAD) is a legacy one: the rules name its worktree, not a thread directory. */
   legacy?: boolean;
+  /** The current thread's type: a review or report thread's coordinator and worker get the doc rules. */
+  type?: ThreadType;
 }
 
 const PLACEHOLDER: ThreadRef = { id: "<thread>", title: "<title>", slug: "<slug>", dir: "<root>/.worktrees/<task>", task: "<task>" };
 const LEGACY_PLACEHOLDER: ThreadRef = { id: "<thread>", title: "<title>", slug: "<slug>", worktree: "<worktree>" };
+
+/** Thread `id`'s type, from its sub.thread.md frontmatter; undefined when it cannot tell. Synchronous: CLI paths only. */
+export function threadTypeOf(root: string, id: string): ThreadType | undefined {
+  try {
+    const name = readdirSync(paths(root).threadsDir).find((n) => n.startsWith(`${id}-`));
+    if (!name) return undefined;
+    const fm = readFileSync(join(paths(root).threadsDir, name, "sub.thread.md"), "utf8").split("---\n")[1] ?? "";
+    const type = ((parse(fm) ?? {}) as Record<string, unknown>).type;
+    return typeof type === "string" ? (type as ThreadType) : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * True when thread `id` of the project at `root` is a legacy thread (its sub.thread.md names a worktree and no
@@ -43,6 +58,28 @@ const COMMANDS: Record<SessionRole, string[]> = {
   main: ["thread new", "thread choose", "thread cancel", "tell"],
   coordinator: ["thread status", "ticket add", "ticket claim|reopen", "ticket accept", "ticket return", "worker spawn", "worktree add", "decide", "note", "progress", "question", "answer", "handoff", "tell"],
   worker: ["ticket claim|reopen", "ticket done", "ticket block", "note", "progress", "question"],
+};
+
+/** Doc (review, report) threads: the coordinator's task commands, without file lists and the browser check. */
+const COMMANDS_DOC: Partial<Record<SessionRole, string[]>> = {
+  coordinator: ["stage", "thread report", "stack acquire", "stack release", "thread waiting", "tell <thread>/<ticket>"],
+};
+
+/** Doc threads: the coordinator's command lines that differ from the code-thread ones. */
+const COMMAND_OVERRIDES_DOC: Partial<Record<SessionRole, Record<string, string>>> = {
+  coordinator: {
+    "ticket add": "ticket add <thread> <title...> --repo <repo> [--doc <path>]   (a review or report thread: a verification ticket, no files)",
+    "worktree add": "worktree add <thread> <repo> [--from <branch>]   a detached checkout .worktrees/<task>/<repo>, no branch (a review or report thread)",
+    stage: "stage <thread> <1-4> done|skipped|na [--reason <why>] [--by user]   record a review or report thread's stage (stage 4 needs a clean report; never skipped)",
+    "stack acquire": "stack acquire <thread>   take the workspace stack lock, or queue for it",
+  },
+};
+
+/** Doc threads: nobody commits in a repo, and a return asks for another check, not a commit. */
+const NEVER_DOC = "- Never push; never commit in a repo; never bypass the commit guard.";
+const WRONG_DOC: Partial<Record<SessionRole, string[]>> = {
+  coordinator: ["- A ticket is in review with no notice: read its findings, then accept or return it."],
+  worker: ["- A return notice arrives: check again, then run agt ticket done again."],
 };
 
 /** Task threads only: the stage, stack-lock and waiting commands their coordinator runs (§13), and main's cleanup. */
@@ -99,10 +136,14 @@ const NEVER_TASK: Partial<Record<SessionRole, string>> = {
 const TITLES: Record<SessionRole, string> = { main: "Main", coordinator: "Coordinator", worker: "Worker" };
 
 function roleGuide(role: SessionRole, o: GuideInput, level: "#" | "##"): string {
-  const t = o.thread ?? (o.legacy ? LEGACY_PLACEHOLDER : PLACEHOLDER);
-  const rules = rulesOf(systemPrompt({ root: o.root, role, thread: t, ticket: "<ticket>", config: o.config })).filter(
-    (l) => l !== "" && !l.includes("When unsure how to do something with agt, run: agt guide") && (![MAIN_CLEANUP_RULE, ...MAIN_DRAFT_RULES].includes(l) || t.dir !== undefined) && (!l.startsWith(LANGUAGE_RULE_START) || t.dir !== undefined),
-  );
+  const t = o.thread ?? (o.legacy ? LEGACY_PLACEHOLDER : o.type ? { ...PLACEHOLDER, type: o.type } : PLACEHOLDER);
+  const doc = t.dir !== undefined && isDocType(t.type);
+  const rules = rulesOf(systemPrompt({ root: o.root, role, thread: t, ticket: "<ticket>", config: o.config }))
+    .filter(
+      (l) => l !== "" && !l.includes("When unsure how to do something with agt, run: agt guide") && (![MAIN_CLEANUP_RULE, MAIN_DOC_FINISH_RULE, ...MAIN_DRAFT_RULES].includes(l) || t.dir !== undefined) && (!l.startsWith(LANGUAGE_RULE_START) || t.dir !== undefined),
+    )
+    // A legacy layout cannot run review or report threads: its guide keeps the three code types.
+    .map((l) => (t.dir === undefined ? l.replace("|review|report", "") : l));
   const dir = paths(o.root).threadDir(t);
   const h = level === "#" ? "##" : "###";
   const state =
@@ -119,12 +160,19 @@ function roleGuide(role: SessionRole, o: GuideInput, level: "#" | "##"): string 
     `${h} Commands`,
     "",
     "```",
-    ...[...COMMANDS[role], ...(t.dir !== undefined ? (COMMANDS_TASK[role] ?? []) : [])].flatMap((c) => (COMMAND_OVERRIDES[role]?.[c] ? [COMMAND_OVERRIDES[role][c]!] : usageLines(c)).map((l) => (t.dir === undefined ? l.replace(" [--browser-check]", "").replace("|review|report", "").replace(/^(thread cancel <id>) .*$/, "$1") : l)).map((l, i) => (i === 0 ? `agt ${l}` : `    ${l}`))),
+    ...[...COMMANDS[role], ...(t.dir !== undefined ? ((doc ? COMMANDS_DOC[role] : undefined) ?? COMMANDS_TASK[role] ?? []) : [])].flatMap((c) => {
+      const over = (doc ? COMMAND_OVERRIDES_DOC[role]?.[c] : undefined) ?? COMMAND_OVERRIDES[role]?.[c];
+      return (over ? [over] : usageLines(c))
+        .map((l) => (t.dir === undefined ? l.replace(" [--browser-check]", "").replace("|review|report", "").replace(/^(thread cancel <id>) .*$/, "$1") : l))
+        .map((l, i) => (i === 0 ? `agt ${l}` : `    ${l}`));
+    }),
     "```",
     "",
     `${h} When things go wrong`,
     "",
-    ...WRONG[role].flatMap((l) => (l === NEVER_LEGACY && t.dir !== undefined ? [...(WRONG_TASK[role] ?? []), NEVER_TASK[role] ?? l] : l === MAIN_CANCEL && t.dir === undefined ? [] : [l])),
+    ...WRONG[role].flatMap((l) =>
+      l === NEVER_LEGACY && doc ? [...(WRONG_DOC[role] ?? []), NEVER_DOC] : l === NEVER_LEGACY && t.dir !== undefined ? [...(WRONG_TASK[role] ?? []), NEVER_TASK[role] ?? l] : l === MAIN_CANCEL && t.dir === undefined ? [] : [l],
+    ),
     "",
     `${h} Where state lives`,
     "",

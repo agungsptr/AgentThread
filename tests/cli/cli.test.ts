@@ -278,3 +278,13 @@ test("agt thread report: usage errors, then records a doc thread's path and chec
   writeFileSync(join(root, ".docs", "shared", "reports", "auth.md"), "# Auth\nClear.\n");
   expect(JSON.parse(agt(["thread", "report", "001", "--check"]).out)).toEqual({ path: ".docs/shared/reports/auth.md", ok: true, hits: [] });
 });
+
+test("agt guide inside a review or report thread shows the doc rules", () => {
+  const threads = join(root, ".agentthread", "threads");
+  mkdirSync(join(threads, "011-explain"), { recursive: true });
+  writeFileSync(join(threads, "011-explain", "sub.thread.md"), "---\nid: \"011\"\ntype: report\ntask: explain\ndir: /repo/.worktrees/explain\n---\n");
+  const doc = agt(["guide", "coordinator"], { env: { AGT_THREAD: "011" } }).out;
+  expect(doc).toContain("agt thread report <id> <path> | <id> --check");
+  expect(doc).toContain("- Never push; never commit in a repo; never bypass the commit guard.");
+  expect(agt(["guide", "coordinator"]).out).not.toContain("never commit in a repo");
+});

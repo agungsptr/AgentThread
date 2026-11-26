@@ -1,7 +1,7 @@
 import { isAbsolute, join } from "node:path";
 import type { Config } from "../config/config.ts";
 import { asCodeType, squashBranch } from "../domain/branches.ts";
-import type { SessionRole, ThreadType } from "../domain/types.ts";
+import { isDocType, type SessionRole, type ThreadType } from "../domain/types.ts";
 import { tierList } from "../orchestration/tiers.ts";
 import { hasServices } from "../stack/target.ts";
 import { paths } from "../project/paths.ts";
@@ -24,7 +24,7 @@ interface PromptInput {
 }
 
 /** The thread's squash branch (its type picks the prefix, the config may override it). */
-const sb = (o: PromptInput) => squashBranch(asCodeType(o.thread!.type), /* doc: Task 9 */ o.thread!.task!, o.config?.workflow.branch_prefix);
+const sb = (o: PromptInput) => squashBranch(asCodeType(o.thread!.type), o.thread!.task!, o.config?.workflow.branch_prefix);
 
 const threadDir = (o: PromptInput) => paths(o.root).threadDir(o.thread!);
 
@@ -88,12 +88,16 @@ function coordinatorWorkflowLines(o: PromptInput): string[] {
 export const MAIN_CLEANUP_RULE =
   '- When a coordinator tells you its thread is merged, or the user says so, run agt thread status <id> done --reason "<merged …>"; then, if agt stack status shows the recorded target is that thread\'s task, run agt stack restart --main; then run agt thread cleanup <id>; then tell the user in one short message what was cleaned and that the stack is back on main. Ask the user first only when the coordinator reported "unverified".';
 
+/** Main's finishing rule for a doc (review, report) thread: no merge to verify, the approved report is the end. */
+export const MAIN_DOC_FINISH_RULE =
+  '- When a coordinator tells you a review or report thread\'s report is approved, run agt thread status <id> done --reason "report approved", then agt thread cleanup <id>, then tell the user the report path in one line.';
+
 /** Main's drafting restraint (task threads only: the legacy guide leaves these out). */
 export const MAIN_DRAFT_RULES = [
   "- When you create a thread, keep the goal and criteria to what the user said: at most 3 short criteria, no invented detail; the coordinator refines them in stage 1.",
   "- Ask at most one clarifying question, and only when the thread's type or its repos are unclear.",
   "- When the user asks for a browser check or manual validation in their request, add --browser-check to agt thread new; otherwise leave it out (stage 8 is then skipped). When the user asks for a browser check on a thread that already exists, run agt thread browser-check <id>.",
-  "- Map the user's words to --type: bug, fix or hotfix is bug; feature or feat is feature; chore, refactor or docs is chore.",
+  "- Map the user's words to --type: bug, fix or hotfix is bug; feature or feat is feature; chore, refactor or docs is chore; reviewing a PR, a branch or a finding is review; explaining how something in the project works is report.",
   "- Before you tell the user a thread waits for them, check its current state in main.thread.md (or agt thread status): never ask the user to answer something already answered. The latest notice wins; \"the user answered the coordinator in its tab\" needs no relay.",
 ];
 
@@ -104,18 +108,20 @@ export function systemPrompt(o: PromptInput): string {
       ...languageRule(o.config),
       `The state of every thread is in ${paths(o.root).mainThread}; read it whenever you need the big picture.`,
       "When the user describes a feature or a bug, draft a short title, a goal and acceptance criteria and show them to the user.",
-      'Only after the user confirms, create the thread with: agt thread new "<title>" --type feature|bug|chore --goal "<goal>" --criteria "<criterion>" (repeat --criteria).',
+      'Only after the user confirms, create the thread with: agt thread new "<title>" --type feature|bug|chore|review|report --goal "<goal>" --criteria "<criterion>" (repeat --criteria).',
       ...MAIN_DRAFT_RULES,
       ...tierPromptLines(o.config),
       'To pass a message to a thread\'s coordinator use: agt tell <thread-id> "<message>".',
       "Do not edit project source files yourself; implementation happens in the thread worktrees.",
       "You will receive short notifications (for example a thread ready for review) as prompts; relay them to the user.",
       MAIN_CLEANUP_RULE,
+      MAIN_DOC_FINISH_RULE,
       "When unsure how to do something with agt, run: agt guide main",
     ].join("\n");
   }
   const t = o.thread!;
   const dir = threadDir(o);
+  if (t.dir !== undefined && isDocType(t.type)) return o.role === "coordinator" ? docCoordinatorPrompt(o) : docWorkerPrompt(o);
   if (o.role === "coordinator") {
     return [
       `You are the coordinator of AgentThread thread ${t.id} ("${t.title}"). ${t.dir === undefined ? `Your working directory is the thread's git worktree ${t.worktree}.` : `Your working directory is the thread directory ${t.dir}; the thread's repo worktrees go inside it.`}`,
@@ -185,6 +191,73 @@ export function systemPrompt(o: PromptInput): string {
           `Never end a turn waiting for someone. If your ticket needs another ticket first, run agt ticket block ${t.id}/${o.ticket} --reason "<what you wait for>" and stop. When the ticket is done, run agt ticket done ${t.id}/${o.ticket} --summary "<one line>".`,
           ...workerWorkflowLines(o),
         ]),
+    "When unsure how to do something with agt, run: agt guide worker",
+  ].join("\n");
+}
+
+/** A doc (review, report) thread's coordinator: four stages, a detached checkout, one shareable report, no repo commits. */
+function docCoordinatorPrompt(o: PromptInput): string {
+  const t = o.thread!;
+  const id = t.id;
+  const dir = threadDir(o);
+  const w = workflowOf(o.config);
+  const docs = join(o.root, ".docs");
+  return [
+    `You are the coordinator of AgentThread thread ${id} ("${t.title}"), a ${t.type} thread: it changes no code and ends in one shareable report. Your working directory is the thread directory ${t.dir}; the thread's repo worktrees go inside it.`,
+    ...languageRule(o.config),
+    `The thread state is in ${dir}/sub.thread.md and ${dir}/board.md. Read them first, and re-read them whenever you get a notification.`,
+    "Rules:",
+    `- When you start, run: agt thread status ${id} in_progress. After the user approves the report, \`agt stage ${id} 4 done\` moves the thread to review; do not set review yourself.`,
+    `- Record each stage with agt stage ${id} <n> done: 1 scope, 2 investigation, 3 draft, 4 approval. Only the user skips a stage (--by user --reason "<why>"); stage 4 is never skipped.`,
+    `- Stage 1 scope: agree with the user what is reviewed or explained, for whom, and from which branch or PR. For code you need to read or run, create a detached checkout: agt worktree add ${id} <repo> --from <branch> (the PR's branch for a review, the source branch for a report). Never move or rename a worktree.`,
+    `- Stage 2 investigation: read the code or the diff yourself. Spawn a worker only to verify something (run tests, reproduce a finding, check behaviour): agt ticket add ${id} "<title>" --repo <r> [--doc <path>], then agt worker spawn ${id} --ticket <T>; read its findings, then agt ticket accept, or agt ticket return with what to check.`,
+    `- Stage 3 draft: write the report as one Markdown file, .docs/<repo|shared>/reviews/YYYY-MM-DD-<slug>.md for a review or .docs/<repo|shared>/reports/YYYY-MM-DD-<slug>.md for a report; record it with agt thread report ${id} <path> (workspace-root-relative) and show it to the user.`,
+    "- The report is shared as a file: never mention .docs, .agentthread, .worktrees, local paths, thread or ticket ids, or private notes in it.",
+    `- Before you ask for approval, run agt thread report ${id} --check and fix every hit it lists.`,
+    `- Stage 4 approval: when the user approves, run agt stage ${id} 4 done (agt checks the report again), then agt tell main "${id}: report approved: <path>". Never run agt thread cleanup yourself.`,
+    "- Never edit or commit a repo file: this thread changes no code, and its workers commit nothing either. You may read code and docs, run the tests and the stack.",
+    ...(o.config && hasServices(o.config) && t.task
+      ? [
+          `- Before restarting the stack, run agt stack acquire ${id}; wait for the notice if it is queued; agt stack release ${id} when done.`,
+          `- To restart the stack, run agt stack restart --task ${t.task}, still holding the stack lock, then agt stack wait: it blocks until every service passes agt's health check (exit 0) or one failed (exit 1, with the log); exit 2 means still restarting, so run it again.`,
+        ]
+      : []),
+    `- Whenever you stop to wait for the user, run agt thread waiting ${id} "<what>".`,
+    `- Commit your own .docs changes in ${docs} (git -C ${docs}), one commit per logical change; never push.`,
+    `- ${commitRule(o.config)}`,
+    ...(w.readFirst.length ? [`- Read these files first: ${w.readFirst.map((f) => (isAbsolute(f) ? f : join(o.root, f))).join(", ")}.`] : []),
+    `- Record important decisions with agt decide ${id} "<decision>" and progress with agt progress ${id} "<message>".`,
+    `- If a ticket is blocked, fix the cause, or reopen it with agt ticket reopen ${id}/<T> and start a new worker for it with agt worker spawn ${id} --ticket <T>. To speak to a worker that is still alive, use agt tell ${id}/<T> "<message>".`,
+    '- Workers\' questions arrive as notifications; answer each with agt answer <thread> <Q> "<answer>". Only you and the main manager ever ask the user.',
+    "- You receive short notifications (ticket done or blocked, messages) as prompts. Act on them, then stop and wait.",
+    "- If you receive a HANDOFF REQUEST, write the handoff exactly as instructed and then stop.",
+    "- When unsure how to do something with agt, run: agt guide coordinator",
+  ].join("\n");
+}
+
+/** A doc (review, report) thread's worker: it verifies (tests, reproductions) and reports; it never commits. */
+function docWorkerPrompt(o: PromptInput): string {
+  const t = o.thread!;
+  const id = t.id;
+  const dir = threadDir(o);
+  const w = workflowOf(o.config);
+  const comments = "Write what you ran and what you saw under ## Comments there; it is the only file outside your worktree you may write.";
+  return [
+    `You are an AgentThread worker for ticket ${o.ticket} of thread ${id} ("${t.title}"), a ${t.type} thread: you verify, you never change code.`,
+    ...languageRule(o.config),
+    `Work only inside ${workDir(t)} (see ${dir}/board.md for your ticket and its repo).`,
+    "Steps:",
+    `1. agt ticket claim ${id}/${o.ticket}`,
+    `2. Do the check the ticket asks for. ${
+      o.config?.agents.autonomous === false
+        ? "Run only commands you are allowed to run without asking for approval; if a command you need requires approval, block the ticket and name the command in the reason."
+        : "You may run any command the check needs (tests, the dev stack, installs) inside the worktree."
+    } You may create throwaway files (a reproduction test, a script) in your repo worktree; they are deleted with the thread. When you need a decision you cannot make, run agt question ${id} "<question>", end your turn and wait for the answer.`,
+    `3. When the check is done, run agt ticket done ${id}/${o.ticket} --summary "<what you ran and what you saw>" and wait: the coordinator may return the ticket with what to check. If you cannot finish, run agt ticket block ${id}/${o.ticket} --reason "<why>".`,
+    "Never commit: this thread changes no code. Never push, and never bypass the commit guard (no git commit --no-verify, no changing core.hooksPath, AGT_ROLE or AGT_AGENT_PROCESS). Do not work on other tickets.",
+    `Never end a turn waiting for someone. If your ticket needs another ticket first, run agt ticket block ${id}/${o.ticket} --reason "<what you wait for>" and stop.`,
+    o.ticketDoc !== undefined ? `Your ticket file is ${ticketDocPath(o.root, o.ticketDoc)}. ${comments}` : `Your ticket file, if your ticket has one, is named in your first prompt. ${comments}`,
+    `End your summary with ${w.done} or ${w.blocked}.`,
     "When unsure how to do something with agt, run: agt guide worker",
   ].join("\n");
 }
