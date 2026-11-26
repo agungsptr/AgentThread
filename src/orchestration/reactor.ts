@@ -3,7 +3,7 @@ import { adapterFor } from "../agents/adapters.ts";
 import { roleAgent } from "../agents/roles.ts";
 import type { Effect } from "../commands/handler.ts";
 import { type Config, durationMs } from "../config/config.ts";
-import { stageNames, type EventBody, type StoredEvent } from "../domain/types.ts";
+import { isDocType, stageNames, type EventBody, type StoredEvent } from "../domain/types.ts";
 import { isLive, type Session, type State, type Thread } from "../state/projection.ts";
 import { generateHandoff } from "./handoff.ts";
 import { awaitsRespawn, awaitsWorker, conflictingTicket, exitedBeforeStart, liveSessions, rotateCoordinator, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure, workerCwd, workerLimit } from "./sessions.ts";
@@ -51,8 +51,11 @@ const earlyNotice = (ticket: string, started: boolean, failure?: string) => `${e
 const earlyGiveUpNotice = (thread: string, ticket: string, exits: number, failure?: string) =>
   `${exitedEarly(ticket, failure)}, ${exits} times; check its pane or spawn it again with agt worker spawn ${thread} --ticket ${ticket}.`;
 const doneNotice = (ticket: string, summary: string | undefined) => `Ticket ${ticket} is done${summary ? `: ${summary}` : ""}.`;
-const reviewNotice = (thread: string, ticket: string, summary: string | undefined) =>
-  `Ticket ${ticket} is ready for review: ${summary ?? ""}. Review its commits, then agt ticket accept ${thread}/${ticket} or agt ticket return ${thread}/${ticket} "<what to fix>".`;
+/** `doc`: a review or report thread's ticket has findings, not commits. */
+export const reviewNotice = (thread: string, ticket: string, summary: string | undefined, doc = false) =>
+  doc
+    ? `Ticket ${ticket} is ready for review: ${summary ?? ""}. Read its findings, then agt ticket accept ${thread}/${ticket} or agt ticket return ${thread}/${ticket} "<what to check>".`
+    : `Ticket ${ticket} is ready for review: ${summary ?? ""}. Review its commits, then agt ticket accept ${thread}/${ticket} or agt ticket return ${thread}/${ticket} "<what to fix>".`;
 
 /** ` Not run: 7 e2e (n/a: reason); 8 browser check (skipped: reason).` for a task thread's stages that were not done, else nothing. */
 function skippedStages(t: Thread): string {
@@ -216,7 +219,7 @@ export function react(state: State, events: StoredEvent[], ctx: ReactorContext):
     const session = "session" in ev.payload && typeof ev.payload.session === "string" ? state.sessions.get(ev.payload.session) : undefined;
     const t = state.threads.get(ev.thread ?? session?.thread ?? "");
     const k = t?.tickets.find((x) => x.reviewNoticeSeq === ev.seq);
-    if (t && k) notify(coordinatorToNotify(t.id), reviewNotice(t.id, k.id, k.summary));
+    if (t && k) notify(coordinatorToNotify(t.id), reviewNotice(t.id, k.id, k.summary, isDocType(t.type)));
   };
   /** Rotates a coordinator at most once per call; `first` is emitted just before the rotation. Returns whether it rotated. */
   const rotate = (s: Session, reason: string, first?: EventBody): boolean => {

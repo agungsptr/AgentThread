@@ -48,3 +48,14 @@ test("the root written from the home directory (~/...) is a hit", () => {
 test("thread and ticket ids are hits whatever the spacing, a # or a colon", () => {
   expect(shareCheckHits("Thread #004, thread  004, Ticket: T4, ticket #T5", o).map((h) => h.match)).toEqual(["Thread #004", "thread  004", "Ticket: T4", "ticket #T5"]);
 });
+
+test("the root's other spellings (its realpath) are hits too", () => {
+  const h = { root: "/tmp/ws", thread: "004", banned: [], rootAliases: ["/private/tmp/ws"] };
+  expect(shareCheckHits("at /private/tmp/ws/api", h).map((x) => x.match)).toEqual(["/private/tmp/ws"]);
+});
+
+test("a short root matches only as a whole path, not inside a URL or a longer name", () => {
+  const h = { root: "/app", thread: "004", banned: [] };
+  expect(shareCheckHits("see https://www.app.io/apple and /apple/x", h)).toEqual([]);
+  expect(shareCheckHits("see /app/src/a.ts and /app.", h).map((x) => x.match)).toEqual(["/app", "/app"]);
+});

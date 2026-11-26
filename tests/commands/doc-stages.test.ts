@@ -90,6 +90,16 @@ describe("doc thread stages", () => {
     expect(errorOf(run(s, { cmd: "thread.report", thread: "001", path: ".docs/shared/reviews/other.md" }))).toBe("the report of thread 001 is approved (stage 4 done); its path cannot change");
   });
 
+  test("--browser-check on a new doc thread is rejected", () => {
+    expect(errorOf(run(stateOf(INIT), { cmd: "thread.new", title: "Review PR", type: "review", browserCheck: true }, USER))).toBe("--browser-check applies to code threads (feature, bug, chore)");
+  });
+
+  test("a stage beyond 10 on a code thread is named, not a schema error", () => {
+    const s = stateOf(INIT, taskThreadCreated("001", "f-1", { status: "in_progress" }));
+    expect(errorOf(run(s, stage(11, "done")))).toBe("a feature thread has stages 1-10");
+    expect(errorOf(run(doc(), stage(11, "done")))).toBe("a review thread has stages 1-4");
+  });
+
   test("browser-check and e2e4 are code-thread only", () => {
     expect(errorOf(run(doc(), { cmd: "thread.browser_check", thread: "001" }))).toBe("the browser check applies to code threads");
     expect(errorOf(run(doc(), { cmd: "stack.acquire", thread: "001", for: "e2e4" }))).toBe("e2e stage 4 applies to code threads");

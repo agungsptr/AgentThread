@@ -230,7 +230,7 @@ but its content must not point at anything private.
 
 - **The report.** `.docs/<repo or shared>/reviews/YYYY-MM-DD-<slug>.md` for a review,
   `.docs/<repo or shared>/reports/YYYY-MM-DD-<slug>.md` for a report.
-- **The share check.** `agt thread report <id> --check` lists every line that mentions `.docs`, `.agentthread`,
+- **The share check.** `agt thread report <id> --check` (exit 1 while it finds anything) lists every line that mentions `.docs`, `.agentthread`,
   `.worktrees`, the workspace path, the thread's id or a ticket (`thread 004`, `004/T2`, `ticket T3`) or a
   `workflow.banned_words` entry (whole words). `agt stage <id> 4 done` runs the same check and refuses while a hit, a
   missing file or an empty file remains. Stage 4 cannot be skipped, the thread reaches review only through it, and the

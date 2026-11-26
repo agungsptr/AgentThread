@@ -314,3 +314,16 @@ test("agt stop without a daemon reads the state from disk and says the daemon wa
   expect(r.code).toBe(0);
   expect(r.out).toContain("daemon not running");
 });
+
+test("agt thread report --check exits 1 when the report has hits, 0 when it is clean", () => {
+  agt(["daemon", "start"]);
+  agt(["thread", "new", "Explain", "auth", "--type", "report"]);
+  agt(["thread", "report", "001", ".docs/shared/reports/auth.md"]);
+  mkdirSync(join(root, ".docs", "shared", "reports"), { recursive: true });
+  writeFileSync(join(root, ".docs", "shared", "reports", "auth.md"), "# Auth\nsee .docs/notes\n");
+  const dirty = agt(["thread", "report", "001", "--check"]);
+  expect(dirty.code).toBe(1);
+  expect(JSON.parse(dirty.out)).toMatchObject({ ok: false, hits: [{ line: 2, match: ".docs" }] });
+  writeFileSync(join(root, ".docs", "shared", "reports", "auth.md"), "# Auth\nClear.\n");
+  expect(agt(["thread", "report", "001", "--check"]).code).toBe(0);
+});

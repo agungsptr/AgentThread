@@ -24,6 +24,7 @@ describe("tickets on a doc thread", () => {
     expect(errorOf(run(s, { cmd: "ticket.add", thread: "001", title: "Run auth tests" }))).toBe("a review thread's ticket needs --repo <repo>");
     expect(errorOf(run(s, { cmd: "ticket.add", thread: "001", title: "X", repo: "api", files: ["a.ts"] }))).toBe("a review thread's ticket takes no --file: its worker never commits");
     expect(errorOf(run(s, { cmd: "ticket.add", thread: "001", title: "X", repo: "nope" }))).toBe("unknown repo nope");
+    expect(errorOf(run(s, { cmd: "ticket.add", thread: "001", title: "X", repo: "api", scope: ["src"] }))).toBe("a review thread's ticket takes no --scope: its worker never commits");
     expect(exec(s, { cmd: "ticket.add", thread: "001", title: "Run auth tests", repo: "api", doc: ".docs/shared/reviews/t1.md" })).toMatchObject({ ok: true, result: { ticket: "T1" } });
     const k = s.threads.get("001")!.tickets[0]!;
     expect(k).toMatchObject({ id: "T1", repo: "api", scope: [], doc: ".docs/shared/reviews/t1.md" });

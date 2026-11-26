@@ -1,5 +1,5 @@
 import { isHandoffRequest } from "../agents/prompts.ts";
-import { stageNames, type Actor, type AgentKind, type Layout, type Role, type SessionRole, type StageBy, type StageState, type StoredEvent, type ThreadStatus, type ThreadType, type TicketStatus } from "../domain/types.ts";
+import { isDocType, stageNames, type Actor, type AgentKind, type Layout, type Role, type SessionRole, type StageBy, type StageState, type StoredEvent, type ThreadStatus, type ThreadType, type TicketStatus } from "../domain/types.ts";
 
 export type SessionStatus = "starting" | "active" | "idle" | "rotated" | "ended" | "failed" | "lost";
 
@@ -413,7 +413,7 @@ export function applyEvent(state: State, ev: StoredEvent): void {
       // The worktrees are gone: nothing may run in them or read their git trail any more.
       delete t.cleanupRequested;
       for (const repo of ev.payload.repos) delete t.worktrees[repo];
-      note(t, ev, `cleaned up: removed the worktrees and wip/${t.task ?? ""} of ${ev.payload.repos.join(", ")}`);
+      note(t, ev, `cleaned up: removed the worktrees${isDocType(t.type) ? "" : ` and wip/${t.task ?? ""}`} of ${ev.payload.repos.join(", ")}`);
       break;
     case "thread.cleanup_failed":
       delete t.cleanupRequested;

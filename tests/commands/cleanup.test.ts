@@ -66,9 +66,14 @@ describe("thread.cleanup in the handler", () => {
     ]);
   });
 
-  test("a done doc thread without worktrees cleans up to nothing", () => {
+  test("a done doc thread without worktrees: cleanup removes only its thread directory", () => {
     const s = stateOf(INIT, taskThreadCreated("001", "rv-1", { threadType: "report", status: "done" }));
-    expect(run(s, { cmd: "thread.cleanup", thread: "001" }, { role: "main" })).toMatchObject({ ok: true, events: [], effects: [], result: { requested: false, repos: [] } });
+    expect(run(s, { cmd: "thread.cleanup", thread: "001" }, { role: "main" })).toMatchObject({
+      ok: true,
+      events: [{ type: "thread.cleanup_requested", thread: "001", payload: {} }],
+      effects: [{ kind: "git.thread.cleanup", thread: "001", task: "rv-1", doc: true, dir: "/repo/.worktrees/rv-1", repos: [] }],
+      result: { requested: true, repos: [] },
+    });
   });
 
   test("a done doc thread's cleanup effect is doc, without a squash branch", () => {
@@ -91,6 +96,12 @@ describe("thread.cleanup in the handler", () => {
     const r = run(s, { cmd: "thread.cleanup_report", thread: "001", ok: true, repos: ["api"], notes: ["kept wip/rv-1 in api: it has commits of its own"] });
     if (!r.ok) throw new Error(r.error);
     expect(r.events[1]).toMatchObject({ type: "notice.queued", payload: { text: "Thread 001 is cleaned up: removed the worktrees of api. kept wip/rv-1 in api: it has commits of its own." } });
+  });
+
+  test("a doc thread's log notes the removed worktrees without a wip branch", () => {
+    const docAdded = { type: "worktree.added", thread: "001", payload: { repo: "api", path: "/repo/.worktrees/rv-1/api", branch: "(detached)", source: "main" } } as const;
+    const s = stateOf(INIT, taskThreadCreated("001", "rv-1", { threadType: "review", status: "done" }), docAdded, { type: "thread.cleanup_requested", thread: "001", payload: {} }, { type: "thread.cleaned", thread: "001", payload: { repos: ["api"] } });
+    expect(s.threads.get("001")!.log.at(-1)!.message).toBe("cleaned up: removed the worktrees of api");
   });
 
   test("a thread that is not done is rejected", () => {

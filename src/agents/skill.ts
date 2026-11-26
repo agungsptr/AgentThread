@@ -43,7 +43,7 @@ export function featureWorkflowText(o: Opts): string {
 /** The doc-workflow skill (review and report threads): the shipped content, then the same project config section. */
 export function docWorkflowText(o: Opts): string {
   const repos = Object.entries(workspaceReposNoSpawn(o.root, o.config)).map(([name, r]) => ({ name, path: r.path }));
-  return `${withMarker(DOC_WORKFLOW)}\n\n${projectConfigSection(o.config, repos, o.task)}`;
+  return `${withMarker(DOC_WORKFLOW)}\n\n${projectConfigSection(o.config, repos, o.task, "doc")}`;
 }
 
 const NOT_CONFIGURED = "not configured";

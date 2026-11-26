@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { ConfigSchema } from "../../src/config/config.ts";
+import { ConfigSchema, DEFAULT_CONFIG } from "../../src/config/config.ts";
 import { migrationConfigured, projectConfigSection, stageNa } from "../../src/workflow/project-config.ts";
 
 const full = ConfigSchema.parse({
@@ -83,4 +83,10 @@ test("services are listed and stack commands default to agt stack", () => {
   expect(md).toContain("- Stack restart: `agt stack restart --task t1`");
   expect(md).toContain("- Stack status: `agt stack status`");
   expect(stageNa(c).some((n) => n.stage === 8)).toBe(false);
+});
+
+test("the doc variant leaves out the code-only sections", () => {
+  const text = projectConfigSection(DEFAULT_CONFIG, [], undefined, "doc");
+  for (const h of ["### Squash branch", "E2E stage", "### Migrations", "### Browser", "### Stages that are na"]) expect(text).not.toContain(h);
+  for (const h of ["### Languages", "### Repos", "### Commands", "### Rules", "### Report words"]) expect(text).toContain(h);
 });

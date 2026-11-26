@@ -65,6 +65,22 @@ describe("agt thread report", () => {
     expect(errorOf(run(s, { cmd: "thread.report", thread: "001", check: true }))).toBe("report .docs/shared/reports/none.md is missing");
   });
 
+  test("--check on a directory or an oversized file is rejected without reading it", () => {
+    const s = doc();
+    exec(s, { cmd: "thread.report", thread: "001", path: ".docs/shared/reports/dir.md" });
+    mkdirSync(join(root, ".docs", "shared", "reports", "dir.md"), { recursive: true });
+    expect(errorOf(run(s, { cmd: "thread.report", thread: "001", check: true }))).toBe("report .docs/shared/reports/dir.md is not a regular file");
+    const big = doc();
+    exec(big, { cmd: "thread.report", thread: "001", path: ".docs/shared/reports/big.md" });
+    writeFileSync(join(root, ".docs", "shared", "reports", "big.md"), "x".repeat(1024 * 1024 + 1));
+    expect(errorOf(run(big, { cmd: "thread.report", thread: "001", check: true }))).toBe("report .docs/shared/reports/big.md is too large to check (over 1 MB)");
+  });
+
+  test("an old thread without a type is named a code thread", () => {
+    const s = stateOf(INIT, taskThreadCreated("001", "o-1", { threadType: undefined as unknown as "feature" }));
+    expect(errorOf(run(s, { cmd: "thread.report", thread: "001", path: PATH }))).toBe("thread 001 is a code thread; only review and report threads have a report");
+  });
+
   test("neither a path nor --check is rejected", () => {
     expect(errorOf(run(doc(), { cmd: "thread.report", thread: "001" }))).toBe("thread report needs <path> or --check");
   });

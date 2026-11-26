@@ -89,7 +89,7 @@ describe("agt stage", () => {
 
   test("rejects a stage outside 1-10", () => {
     expect(() => CommandSchema.parse(stage(0, "done"))).toThrow();
-    expect(() => CommandSchema.parse(stage(11, "done"))).toThrow();
+    expect(errorOf(run(base(), stage(11, "done")))).toBe("a feature thread has stages 1-10");
   });
 
   test("only the thread's coordinator and the user may record", () => {

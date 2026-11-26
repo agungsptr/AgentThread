@@ -71,7 +71,8 @@ export const CommandSchema = z.discriminatedUnion("cmd", [
   z.object({
     cmd: z.literal("stage"),
     thread: threadId,
-    stage: z.number().int().min(1).max(10),
+    /** Each thread's kind has its own range (code 1-10, doc 1-4); the handler names it. */
+    stage: z.number().int().min(1).max(99),
     state: z.enum(STAGE_STATES),
     reason: z.string().trim().optional(),
     by: z.literal("user").optional(),

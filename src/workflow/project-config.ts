@@ -1,5 +1,6 @@
 import { DEFAULT_BRANCH_PREFIX } from "../domain/branches.ts";
 import { effectiveStack, type Config } from "../config/config.ts";
+import type { WorkflowKind } from "../domain/types.ts";
 
 const NA_E2E = "no e2e commands configured";
 const NA_BROWSER = "no browser URL or stack restart configured";
@@ -25,7 +26,8 @@ const list = (v: string[] | undefined): string => (v?.length ? v.map((x) => `\`$
 const cell = (s: string): string => s.replace(/\|/g, "\\|");
 
 /** The Markdown "Project config" section appended to the generated feature-workflow skill. */
-export function projectConfigSection(config: Config, repos: { name: string; path: string }[], task?: string): string {
+export function projectConfigSection(config: Config, repos: { name: string; path: string }[], task?: string, kind: WorkflowKind = "code"): string {
+  const doc = kind === "doc";
   const w = config.workflow;
   // a task thread's copy has `{task}` filled in (task names are shell-safe: ^[a-z0-9][a-z0-9._-]*$); the root copy keeps it
   const code = (v: string | number | undefined): string => codeOf(typeof v === "string" && task !== undefined ? v.replaceAll("{task}", task) : v);
@@ -34,7 +36,7 @@ export function projectConfigSection(config: Config, repos: { name: string; path
   const lines: string[] = ["## Project config (from .agentthread/config.yaml)", ""];
 
   lines.push("### Languages", "", `- Chat language: ${val(w.chat_language)}`, `- File language: ${val(w.file_language)}`, "");
-  lines.push(
+  if (!doc) lines.push(
     "### Squash branch",
     "",
     `- Feature: \`${w.branch_prefix?.feature ?? DEFAULT_BRANCH_PREFIX.feature}/<task>\``,
@@ -66,10 +68,9 @@ export function projectConfigSection(config: Config, repos: { name: string; path
     ...(task === undefined && stack.restart?.includes("{task}")
       ? ["- In the restart command, replace `{task}` with the thread's task name (the folder under `.worktrees/`) before running it; never run it with the placeholder or an empty value."]
       : []),
-    `- E2E stage 2: ${code(w.e2e?.stage2)}`,
-    `- E2E stage 3: ${code(w.e2e?.stage3)}`,
-    `- E2E stage 4: ${code(w.e2e?.stage4)}`,
-    `- E2E baseline: ${code(w.e2e?.baseline)}`,
+    ...(doc
+      ? []
+      : [`- E2E stage 2: ${code(w.e2e?.stage2)}`, `- E2E stage 3: ${code(w.e2e?.stage3)}`, `- E2E stage 4: ${code(w.e2e?.stage4)}`, `- E2E baseline: ${code(w.e2e?.baseline)}`]),
     `- Read-only prod query: ${code(w.prod_read)}`,
     "",
   );
@@ -85,7 +86,7 @@ export function projectConfigSection(config: Config, repos: { name: string; path
   }
 
   const m = w.migration;
-  lines.push(
+  if (!doc) lines.push(
     "### Migrations",
     "",
     `- Tool: ${val(m?.tool)}`,
@@ -94,7 +95,7 @@ export function projectConfigSection(config: Config, repos: { name: string; path
     "",
   );
 
-  lines.push("### Browser", "", `- URLs: ${list(w.browser?.urls)}`, `- Login note: ${code(w.browser?.login_note)}`, `- Check: \`${w.browser?.check ?? "on_request"}\``, "");
+  if (!doc) lines.push("### Browser", "", `- URLs: ${list(w.browser?.urls)}`, `- Login note: ${code(w.browser?.login_note)}`, `- Check: \`${w.browser?.check ?? "on_request"}\``, "");
 
   lines.push(
     "### Rules",
@@ -107,7 +108,7 @@ export function projectConfigSection(config: Config, repos: { name: string; path
 
   lines.push("### Report words", "", `- Done: ${val(w.report_words.done)}`, `- Blocked: ${val(w.report_words.blocked)}`, "");
 
-  const na = stageNa(config);
+  const na = doc ? [] : stageNa(config);
   if (na.length) {
     lines.push("### Stages that are na", "");
     for (const n of na) lines.push(`- Stage ${n.stage}: na (${n.reason})`);

@@ -24,6 +24,15 @@ function docThread(): { root: string; api: string; path: string; effect: Cleanup
 }
 
 describe("cleanup of a doc thread", () => {
+  test("with no worktrees, its thread directory of agt's files goes", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "agt-clean-")));
+    const dir = join(root, ".worktrees", "rv-1");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "AGENTS.md"), "# AgentThread\n");
+    expect(await cleanupThread({ kind: "git.thread.cleanup", thread: "001", task: "rv-1", doc: true, dir, repos: [] })).toEqual({ ok: true, repos: [] });
+    expect(existsSync(dir)).toBe(false);
+  });
+
   test("stops when the detached HEAD has commits made after the checkout (a user's own)", async () => {
     const t = docThread();
     git(t.path, "commit", "-q", "--allow-empty", "-m", "mine");

@@ -14,7 +14,7 @@ export const USAGE = `usage: agt <command>
   thread cancel <id> [--reason <text>]   stop a thread: its agents end, its tab closes, it is done (its worktrees stay)
   thread status <id> <status> [--reason <text>]
   thread browser-check <id>   the user asked for a browser check: stage 8 is required again (undoes agt's "not requested" skip)
-  thread report <id> <path> | <id> --check   a review or report thread: record its report (a .md under .docs/), or run the share check on it (no .docs, local paths, thread or ticket ids, banned words)
+  thread report <id> <path> | <id> --check   a review or report thread: record its report (a .md under .docs/), or run the share check on it (no .docs, local paths, thread or ticket ids, banned words; exit 1 on a hit)
   thread waiting <id> "<what>"   say the coordinator waits for the user; main is told, and it ends when the user answers
   thread cleanup <id>   a merged (done) task thread: remove its worktrees and wip/<task> branches, in the background (stops on uncommitted changes)
   ticket add <thread> <title...> --scope <path> [--scope <path>]...            (a legacy thread)

@@ -131,7 +131,7 @@ describe("generated skills", () => {
 
   test("the doc-workflow skill: the shipped text with the marker, then the project config section", () => {
     const text = docWorkflowText({ root: "/repo", config: DEFAULT_CONFIG });
-    expect(text).toBe(`${withMarker(DOC_WORKFLOW)}\n\n${projectConfigSection(DEFAULT_CONFIG, [])}`);
+    expect(text).toBe(`${withMarker(DOC_WORKFLOW)}\n\n${projectConfigSection(DEFAULT_CONFIG, [], undefined, "doc")}`);
     expect(text).toContain("name: agt-doc-workflow");
     for (const s of ["scope", "investigation", "draft", "approval", "agt thread report", "--check", "detached", "/reviews/YYYY-MM-DD-<slug>.md", "/reports/YYYY-MM-DD-<slug>.md"]) expect(text).toContain(s);
     expect(DOC_WORKFLOW.split("\n").length).toBeLessThanOrEqual(80);

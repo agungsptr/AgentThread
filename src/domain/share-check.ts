@@ -6,7 +6,18 @@ export type ShareHit = { line: number; match: string };
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-type Opts = { root: string; thread: string; banned: string[]; /** The user's home: the root written as ~/… is a hit too. */ home?: string };
+type Opts = {
+  root: string;
+  thread: string;
+  banned: string[];
+  /** The user's home: the root written as ~/… is a hit too. */
+  home?: string;
+  /** Other spellings of the root (its realpath, a symlinked path). */
+  rootAliases?: string[];
+};
+
+/** A path matched as a whole: not inside a longer name, a URL host or another path. */
+const wholePath = (p: string) => new RegExp(`(?<![\\w.~/-])${escape(p.replace(/\/+$/, ""))}(?=$|/|[^\\w.-]|\\.(?![\\w-]))`, "gi");
 
 function patterns(o: Opts): RegExp[] {
   const id = escape(o.thread);
@@ -17,8 +28,8 @@ function patterns(o: Opts): RegExp[] {
     /\.docs\b/gi,
     /\.agentthread\b/gi,
     /\.worktrees\b/gi,
-    ...(o.root ? [new RegExp(escape(o.root), "gi")] : []),
-    ...(tilde ? [new RegExp(escape(tilde), "gi")] : []),
+    ...[o.root, ...(o.rootAliases ?? [])].filter((r, i, all) => r && all.indexOf(r) === i).map(wholePath),
+    ...(tilde ? [wholePath(tilde)] : []),
     new RegExp(`\\bthread\\s*[#:]?\\s*${id}\\b`, "gi"),
     new RegExp(`\\b${id}/T\\d+\\b`, "gi"),
     /\bticket\s*[#:]?\s*T\d+\b/gi,

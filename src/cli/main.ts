@@ -558,7 +558,12 @@ async function thread(sub: string | undefined, args: string[], root: string, env
     const { values, positionals } = parse(args, { check: { type: "boolean" } });
     const [id, path] = positionals;
     if (!id || positionals.length > 2 || (path === undefined) === !values.check) throw new UsageError("thread report needs <id> <path> or <id> --check");
-    return send(root, env, { cmd: "thread.report", thread: id, ...(values.check ? { check: true } : { path }) });
+    if (!values.check) return send(root, env, { cmd: "thread.report", thread: id, path });
+    // The check prints its result and fails (exit 1) while the report has hits, so a script can gate on it.
+    const res = await request(paths(root).socket, { op: "command", command: { cmd: "thread.report", thread: id, check: true }, actor: actorFromEnv(env) });
+    if (!res.ok) throw new Error(res.error);
+    console.log(JSON.stringify(res.result));
+    return (res.result as { ok: boolean }).ok ? 0 : 1;
   }
   if (sub === "waiting") {
     const [id, ...what] = args;

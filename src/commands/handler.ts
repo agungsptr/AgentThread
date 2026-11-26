@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { browserCheckMode, DEFAULT_CONFIG, type Config } from "../config/config.ts";
 import { canTransitionThread, canTransitionTicket, scopesOverlap, slugify, validateHandoff } from "../domain/rules.ts";
 import { asCodeType, squashBranch } from "../domain/branches.ts";
 import { formatHits, shareCheckHits, type ShareHit } from "../domain/share-check.ts";
-import { DOC_STAGE_NAMES, isDocType, ROLES, type Actor, type AgentKind, type EventBody, type Role, type ThreadStatus, type ThreadType, type TicketStatus } from "../domain/types.ts";
+import { DOC_STAGE_NAMES, isDocType, ROLES, STAGE_NAMES, type Actor, type AgentKind, type EventBody, type Role, type ThreadStatus, type ThreadType, type TicketStatus } from "../domain/types.ts";
 import { roleAgent, type RoleAgent } from "../agents/roles.ts";
 import { agentName, awaitsWorker, conflictingTicket, FILE_HOLDING, liveSessions, spawnCoordinator, spawnReplacement, spawnWorker, tabEnsure as tabEnsureFor, workerLimit } from "../orchestration/sessions.ts";
 import { stageNa } from "../workflow/project-config.ts";
@@ -382,6 +382,7 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
         // A doc thread's worker only verifies (runs tests, reproduces a finding) and never commits: no file list.
         if (!cmd.repo) reject(`a ${t.type} thread's ticket needs --repo <repo>`);
         if (cmd.files?.length) reject(`a ${t.type} thread's ticket takes no --file: its worker never commits`);
+        if (cmd.scope.length) reject(`a ${t.type} thread's ticket takes no --scope: its worker never commits`);
         if (!Object.hasOwn(workspaceReposNoSpawn(ctx.root, ctx.config ?? DEFAULT_CONFIG), cmd.repo)) reject(`unknown repo ${cmd.repo}`);
         if (cmd.doc !== undefined) checkTicketDoc(cmd.doc);
         return { events: [{ type: "ticket.created", thread: t.id, payload: { ticket, title: cmd.title, scope: [], repo: cmd.repo, ...(cmd.doc ? { doc: cmd.doc } : {}) } }], result: { ticket } };
@@ -401,6 +402,7 @@ function decide(state: State, cmd: Command, actor: Actor, ctx: HandlerContext): 
     case "stage": {
       if (t.legacy) reject("stages apply to task threads");
       if (isDocType(t.type)) return docStage(state, t, cmd, ctx);
+      if (cmd.stage > STAGE_NAMES.length) reject(`a ${t.type ?? "code"} thread has stages 1-${STAGE_NAMES.length}`);
       const recordedNa = t.stages[cmd.stage];
       if (recordedNa?.state === "na" && recordedNa.by === "agt" && (cmd.state === "done" || cmd.state === "approve") && cmd.by !== "user" && actor.role !== "user") {
         reject(`stage ${cmd.stage} is na: ${recordedNa.reason ?? "ruled out by the config"}; only the user can change it (add --by user)`);
@@ -585,6 +587,7 @@ function newThread(state: State, cmd: Extract<Command, { cmd: "thread.new" }>, c
   for (const dep of cmd.dependsOn) if (!state.threads.has(dep)) reject(`unknown dependency ${dep}`);
   if (cmd.tier !== undefined) checkTier(cmd.tier, ctx);
   else if (cmd.now) reject("--now needs --tier");
+  if (cmd.browserCheck && isDocType(cmd.type)) reject("--browser-check applies to code threads (feature, bug, chore)");
   const next = Math.max(0, ...[...state.threads.keys()].map(Number)) + 1;
   const id = String(next).padStart(3, "0");
   const slug = slugify(cmd.title);
@@ -720,10 +723,26 @@ function checkReportPath(path: string): void {
   if (isAbsolute(path) || path.split(/[\\/]/).includes("..") || !path.startsWith(".docs/") || !path.endsWith(".md")) reject(REPORT_PATH_ERROR);
 }
 
+const REPORT_MAX_BYTES = 1024 * 1024;
+
+/** The workspace root as the report may spell it: also its realpath (macOS /tmp is /private/tmp). */
+function rootAliases(root: string): string[] {
+  try {
+    const real = realpathSync(root);
+    return real === root ? [] : [real];
+  } catch {
+    return [];
+  }
+}
+
 /** A doc thread's report file, read for the share check. */
 export function readReport(root: string, path: string): { ok: true; text: string } | { ok: false; error: string } {
   const file = join(root, path);
   if (!existsSync(file)) return { ok: false, error: `report ${path} is missing` };
+  // The daemon reads it synchronously: never a FIFO, a device or a huge file.
+  const st = statSync(file);
+  if (!st.isFile()) return { ok: false, error: `report ${path} is not a regular file` };
+  if (st.size > REPORT_MAX_BYTES) return { ok: false, error: `report ${path} is too large to check (over 1 MB)` };
   const text = readFileSync(file, "utf8");
   if (!text.trim()) return { ok: false, error: `report ${path} is empty` };
   return { ok: true, text };
@@ -734,12 +753,12 @@ export function checkReport(t: Thread, ctx: HandlerContext): { path: string; hit
   const path = t.report ?? reject(`no report recorded: agt thread report ${t.id} <path>`);
   const read = readReport(ctx.root, path);
   if (!read.ok) reject(read.error);
-  return { path, hits: shareCheckHits(read.text, { root: ctx.root, thread: t.id, banned: (ctx.config ?? DEFAULT_CONFIG).workflow.banned_words ?? [], home: homedir() }) };
+  return { path, hits: shareCheckHits(read.text, { root: ctx.root, thread: t.id, banned: (ctx.config ?? DEFAULT_CONFIG).workflow.banned_words ?? [], home: homedir(), rootAliases: rootAliases(ctx.root) }) };
 }
 
 /** `agt thread report`: record a doc thread's report path, or check the recorded one. */
 function threadReport(t: Thread, cmd: Extract<Command, { cmd: "thread.report" }>, ctx: HandlerContext): Decision {
-  if (!isDocType(t.type)) reject(`thread ${t.id} is a ${t.type} thread; only review and report threads have a report`);
+  if (!isDocType(t.type)) reject(`thread ${t.id} is a ${t.type ?? "code"} thread; only review and report threads have a report`);
   if (cmd.check) {
     const { path, hits } = checkReport(t, ctx);
     return { events: [], result: { path, ok: hits.length === 0, hits } };
@@ -765,11 +784,8 @@ function cleanupThread(t: Thread, ctx: HandlerContext): Decision {
   const pending = Object.keys(t.worktreeRequests);
   if (pending.length) reject(`a worktree for ${pending.join(", ")} is still being created`);
   const doc = isDocType(t.type);
-  // A report that needed no checkout leaves nothing to clean up.
-  if (!Object.keys(t.worktrees).length) {
-    if (doc) return { events: [], result: { requested: false, repos: [] } };
-    reject(`thread ${t.id} has no worktrees to clean up`);
-  }
+  // A report that needed no checkout still leaves its thread directory: the job removes only that.
+  if (!Object.keys(t.worktrees).length && !doc) reject(`thread ${t.id} has no worktrees to clean up`);
   const all = workspaceReposNoSpawn(ctx.root, ctx.config ?? DEFAULT_CONFIG);
   for (const [repo, w] of Object.entries(t.worktrees)) {
     if (!Object.hasOwn(all, repo)) reject(`repo ${repo} is no longer in the workspace config; remove its worktree ${w.path} by hand`);
@@ -805,7 +821,7 @@ function reportCleanup(state: State, t: Thread, cmd: Extract<Command, { cmd: "th
       events: [
         { type: "thread.cleaned", thread: t.id, payload: { repos } },
         ...notice(
-          `Thread ${t.id} is cleaned up: removed the worktrees${isDocType(t.type) ? "" : ` and wip/${t.task ?? ""}`} of ${repos.join(", ")}.${(cmd.notes ?? []).map((n) => ` ${n}.`).join("")}`,
+          `Thread ${t.id} is cleaned up: ${repos.length ? `removed the worktrees${isDocType(t.type) ? "" : ` and wip/${t.task ?? ""}`} of ${repos.join(", ")}` : "removed its thread directory"}.${(cmd.notes ?? []).map((n) => ` ${n}.`).join("")}`,
         ),
       ],
     };
